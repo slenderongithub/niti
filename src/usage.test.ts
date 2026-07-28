@@ -1,0 +1,35 @@
+import { test, expect } from "bun:test";
+import { UsageTracker } from "./usage.ts";
+import { parseRateLimit } from "./providers/provider.ts";
+
+test("UsageTracker accumulates per-agent and totals", () => {
+  const u = new UsageTracker();
+  u.record("a", 100, 20);
+  u.record("a", 50, 10);
+  u.record("b", 200, 40);
+
+  const snap = Object.fromEntries(u.snapshot().map((s) => [s.agentId, s.usage]));
+  expect(snap.a).toEqual({ inputTokens: 150, outputTokens: 30, calls: 2, lastInput: 50 });
+  expect(snap.b).toEqual({ inputTokens: 200, outputTokens: 40, calls: 1, lastInput: 200 });
+  expect(u.totals()).toEqual({ inputTokens: 350, outputTokens: 70, calls: 3 });
+});
+
+test("UsageTracker keeps the latest rate limit per provider", () => {
+  const u = new UsageTracker();
+  u.recordRateLimit("anthropic", { remainingTokens: 9000, remainingRequests: 5 });
+  u.recordRateLimit("anthropic", { remainingTokens: 8000, remainingRequests: 4 }); // overwrites
+  expect(u.rateLimits_()).toEqual([{ provider: "anthropic", remainingTokens: 8000, remainingRequests: 4 }]);
+});
+
+test("parseRateLimit reads the right headers per provider", () => {
+  const anth = new Headers({
+    "anthropic-ratelimit-tokens-remaining": "12000",
+    "anthropic-ratelimit-requests-remaining": "45",
+  });
+  expect(parseRateLimit(anth, "anthropic")).toMatchObject({ remainingTokens: 12000, remainingRequests: 45 });
+
+  const oai = new Headers({ "x-ratelimit-remaining-tokens": "500", "x-ratelimit-remaining-requests": "2" });
+  expect(parseRateLimit(oai, "openai")).toMatchObject({ remainingTokens: 500, remainingRequests: 2 });
+
+  expect(parseRateLimit(new Headers(), "openai")).toEqual({ remainingTokens: undefined, remainingRequests: undefined, resetAt: undefined });
+});

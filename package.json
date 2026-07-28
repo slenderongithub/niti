@@ -1,0 +1,39 @@
+{
+  "name": "amux",
+  "version": "0.0.1",
+  "private": true,
+  "description": "A terminal CLI that runs multiple AI coding agents from different LLM providers concurrently on one project.",
+  "type": "module",
+  "bin": {
+    "amux": "./src/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "build": "bun build --compile ./src/cli.ts --outfile amux",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "gen:catalog": "bun run scripts/gen-catalog.ts"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
+    "@google/genai": "^2.13.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@napi-rs/keyring": "^1.3.0",
+    "ink": "^7.1.1",
+    "ink-text-input": "^6.0.0",
+    "openai": "^7.0.0",
+    "react": "^19.2.8",
+    "react-devtools-core": "^7.0.1",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/react": "^19.2.17",
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^7.0.2"
+  }
+}

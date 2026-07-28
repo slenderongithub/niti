@@ -1,0 +1,7 @@
+node_modules/
+amux
+*.log
+.DS_Store
+.amux/session.json
+.env
+.env.*

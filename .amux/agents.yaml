@@ -1,0 +1,30 @@
+# amux agents — one entry per role. Keys match the AgentConfig type (camelCase).
+# API keys are NOT here — they come from your OS keychain (`amux keys set <provider>`) or env vars.
+agents:
+  - id: architect
+    provider: google
+    model: gemini-2.0-flash
+    role: Architect
+    lead: true # decomposes the initial prompt into tasks
+    systemPrompt: >
+      You are a software architect. Decompose work into clear, independent
+      subtasks and keep responses concise.
+    allowedTools: [read_file, write_file]
+
+  - id: engineer
+    provider: zai
+    model: glm-4.6
+    role: Backend Engineer
+    systemPrompt: >
+      You are a backend engineer. Implement the assigned task directly and
+      keep responses concise.
+    allowedTools: [read_file, write_file, shell]
+
+# MCP servers — their tools appear to agents as mcp__<name>__<tool> and route through the tool loop.
+# mcpServers:
+#   - name: filesystem
+#     command: npx
+#     args: [-y, "@modelcontextprotocol/server-filesystem", "."]
+
+# Skills — drop folders in .amux/skills/<name>/SKILL.md (YAML frontmatter: name, description).
+# Their descriptions are injected into every agent's system prompt; agents read the full file on demand.
