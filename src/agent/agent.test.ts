@@ -143,6 +143,60 @@ test("reconfigure swaps provider and updates config", async () => {
   expect(await agent.ask("hi")).toBe("second"); // now uses the swapped provider
 });
 
+test("busy is true while run() has a model call in flight, and false once it settles", async () => {
+  const bus = new Bus();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const provider: Provider = {
+    async send() {
+      await gate;
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const agent = new Agent(cfg, provider, bus);
+  expect(agent.busy).toBe(false);
+  const running = agent.run("task");
+  await Promise.resolve(); // let run() start and enter provider.send()
+  expect(agent.busy).toBe(true);
+  release();
+  await running;
+  expect(agent.busy).toBe(false);
+});
+
+test("busy stays true if run() and respond() overlap — one finishing must not clear it for the other", async () => {
+  const bus = new Bus();
+  let releaseRun!: () => void;
+  let releaseRespond!: () => void;
+  const runGate = new Promise<void>((r) => (releaseRun = r));
+  const respondGate = new Promise<void>((r) => (releaseRespond = r));
+  let call = 0;
+  const provider: Provider = {
+    async send() {
+      call++;
+      if (call === 1) {
+        await runGate;
+        return { text: "run done", toolCalls: [] };
+      }
+      await respondGate;
+      return { text: "respond done", toolCalls: [] };
+    },
+  };
+  const agent = new Agent(cfg, provider, bus);
+  const running = agent.run("task");
+  await Promise.resolve();
+  const responding = agent.respond("question?", 0);
+  await Promise.resolve();
+  expect(agent.busy).toBe(true);
+
+  releaseRespond(); // respond() finishes first — busy must stay true, run() is still in flight
+  await responding;
+  expect(agent.busy).toBe(true);
+
+  releaseRun();
+  await running;
+  expect(agent.busy).toBe(false);
+});
+
 test("a denied gated tool is not executed and 'denied by user' is fed back", async () => {
   const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
   let n = 0;

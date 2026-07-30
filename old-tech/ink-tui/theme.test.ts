@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { theme, colorsEnabled, agentColor, agentAvatar } from "./theme.ts";
-import type { AgentConfig } from "../agent/agent.ts";
+import type { AgentConfig } from "../../src/agent/agent.ts";
 
 test("theme exposes the full semantic palette", () => {
   const keys: (keyof typeof theme)[] = [

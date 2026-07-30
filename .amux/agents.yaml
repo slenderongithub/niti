@@ -3,7 +3,7 @@
 agents:
   - id: architect
     provider: google
-    model: gemini-2.0-flash
+    model: gemini-flash-latest
     role: Architect
     lead: true # decomposes the initial prompt into tasks
     systemPrompt: >

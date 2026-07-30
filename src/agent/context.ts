@@ -14,8 +14,15 @@ function describeTurn(t: Turn): string {
 
 export async function compactTurns(turns: Turn[], provider: Provider, keepRecent = KEEP_RECENT): Promise<Turn[]> {
   if (turns.length <= keepRecent) return turns;
-  const old = turns.slice(0, -keepRecent);
-  const recent = turns.slice(-keepRecent);
+  let cut = turns.length - keepRecent;
+  // Never start the kept "recent" window on a tool-result turn: it references tool_call/tool_use
+  // ids from the assistant turn immediately before it, and every provider rejects a payload where
+  // that assistant turn is missing (dangling id / broken role alternation). A fixed-size tail slice
+  // can land here whenever an odd number of turns precede it — e.g. agent.ts's injectInbox() adds
+  // an extra user turn some rounds and not others, shifting the parity round to round.
+  while (cut > 0 && turns[cut]!.role === "tool") cut--;
+  const old = turns.slice(0, cut);
+  const recent = turns.slice(cut);
   const transcript = old.map(describeTurn).join("\n");
   const { text } = await provider.send(
     "Summarize this conversation excerpt in 2-4 sentences: what was asked, what was done, what's still pending. Be concise.",

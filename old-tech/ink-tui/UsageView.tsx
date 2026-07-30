@@ -1,8 +1,8 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { AgentConfig } from "../agent/agent.ts";
-import type { UsageTracker } from "../usage.ts";
-import { contextWindow } from "../providers/catalog.ts";
+import type { AgentConfig } from "../../src/agent/agent.ts";
+import type { UsageTracker } from "../../src/usage.ts";
+import { contextWindow } from "../../src/providers/catalog.ts";
 import { theme, agentColor, agentAvatar } from "./theme.ts";
 
 const fmt = (n: number) => n.toLocaleString("en-US");

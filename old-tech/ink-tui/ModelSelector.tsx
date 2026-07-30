@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { CATALOG, providersByCategory, contextWindow, type Category } from "../providers/catalog.ts";
-import type { AgentConfig } from "../agent/agent.ts";
+import { CATALOG, providersByCategory, contextWindow, type Category } from "../../src/providers/catalog.ts";
+import type { AgentConfig } from "../../src/agent/agent.ts";
 import { theme, compactNumber } from "./theme.ts";
 
 // Minimal arrow-key list (↑/↓/Enter/Esc). ~20 lines beats a dependency for this.

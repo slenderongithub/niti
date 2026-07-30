@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>amux — live agents</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand"><span class="dot"></span> amux</div>
+      <div class="goal" id="goal">waiting for a task…</div>
+      <div class="progress"><div class="bar" id="bar"></div><span id="pct">0%</span></div>
+      <div class="conn" id="conn">connecting…</div>
+    </header>
+
+    <main>
+      <section class="graph">
+        <canvas id="canvas"></canvas>
+        <div class="legend" id="legend"></div>
+      </section>
+
+      <aside class="panel">
+        <nav class="tabs">
+          <button data-tab="tasks" class="active">Tasks</button>
+          <button data-tab="messages">Messages</button>
+          <button data-tab="usage">Usage</button>
+        </nav>
+        <div class="tab" id="tab-tasks"></div>
+        <div class="tab hidden" id="tab-messages"></div>
+        <div class="tab hidden" id="tab-usage"></div>
+      </aside>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

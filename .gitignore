@@ -1,5 +1,6 @@
 node_modules/
 amux
+amux-core
 *.log
 .DS_Store
 .amux/session.json

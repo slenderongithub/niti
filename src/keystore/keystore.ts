@@ -27,3 +27,13 @@ export function getKey(provider: string): string | undefined {
 export function setKey(provider: string, key: string): void {
   new Entry(SERVICE, provider).setPassword(key);
 }
+
+// Remove a stored key so logout/rotation actually revokes it. Best effort — a missing entry or an
+// unavailable keychain is not an error (there's nothing to revoke there).
+export function deleteKey(provider: string): void {
+  try {
+    new Entry(SERVICE, provider).deletePassword();
+  } catch {
+    // no entry / keychain unavailable — nothing to remove
+  }
+}

@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import type { AgentConfig } from "../agent/agent.ts";
+import type { AgentConfig } from "../../src/agent/agent.ts";
 
 export interface Theme {
   primary: string;

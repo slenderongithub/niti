@@ -2,11 +2,11 @@ import { test, expect } from "bun:test";
 import React from "react";
 import { render } from "ink-testing-library";
 import { App } from "./App.tsx";
-import { Bus } from "../events/bus.ts";
-import { Orchestrator } from "../orchestrator/orchestrator.ts";
-import { ApprovalQueue } from "../approval.ts";
-import { UsageTracker } from "../usage.ts";
-import type { AgentConfig } from "../agent/agent.ts";
+import { Bus } from "../../src/events/bus.ts";
+import { Orchestrator } from "../../src/orchestrator/orchestrator.ts";
+import { ApprovalQueue } from "../../src/approval.ts";
+import { UsageTracker } from "../../src/usage.ts";
+import type { AgentConfig } from "../../src/agent/agent.ts";
 
 // Ink styles the input cursor by reverse-videoing one character (e.g. the placeholder's first
 // letter), which injects an ANSI escape between it and the rest of the string in the raw frame —

@@ -1,9 +1,13 @@
 import type { Agent } from "../agent/agent.ts";
 import type { Bus } from "../events/bus.ts";
 import type { Orchestrator } from "./orchestrator.ts";
-import { summarizeError } from "../providers/provider.ts";
+import type { MessageBus } from "../messaging/message-bus.ts";
+import type { OrchestrationEvent } from "./scheduler.ts";
+import { makePlan, type RoleInfo } from "./planner.ts";
+import { schedule } from "./scheduler.ts";
 
 // Extract the first JSON array of strings from a model response. Tolerant of prose around the JSON.
+// (Kept for the legacy flat path / tests; the DAG planner lives in planner.ts.)
 export function parseTaskList(raw: string): string[] {
   const m = raw.match(/\[[\s\S]*\]/);
   if (!m) return [];
@@ -15,20 +19,11 @@ export function parseTaskList(raw: string): string[] {
   }
 }
 
-async function decompose(lead: Agent, prompt: string): Promise<string[]> {
-  const raw = await lead.ask(
-    `Break this project request into a short list of independent subtasks (2-5), each doable by one engineer. ` +
-      `Return ONLY a JSON array of strings, nothing else.\n\nRequest: ${prompt}`,
-  );
-  const tasks = parseTaskList(raw);
-  return tasks.length ? tasks : [prompt]; // fallback: whole prompt as one task
-}
-
 const MAX_ATTEMPTS = 3; // failover retries before a task is marked failed
 
-// Each agent loops: claim → execute → complete, until all work is finished. Runs concurrently.
-// On quota exhaustion the task is requeued so another agent can take it. A worker keeps polling
-// while other agents hold in-progress tasks, so a failover never orphans its task.
+// Flat-queue worker loop: claim → execute → complete, until all work is finished. Runs concurrently.
+// Retained for the failover regression tests and any flat single-queue use; the DAG scheduler
+// (scheduler.ts) is the primary path driven by runProject below.
 async function worker(agent: Agent, orch: Orchestrator, bus: Bus): Promise<void> {
   const id = agent.config.id;
   for (;;) {
@@ -49,32 +44,41 @@ async function worker(agent: Agent, orch: Orchestrator, bus: Bus): Promise<void>
   }
 }
 
-// Full v1 core loop: lead decomposes → tasks queued → all agents drain the queue concurrently.
+export interface RunnerDeps {
+  messageBus?: MessageBus; // wire hand-off/agent-to-agent messages into the event stream
+  onOrchestration?: (e: OrchestrationEvent) => void; // DAG lifecycle events for the TUI/dashboard
+  shouldStop?: () => boolean; // graceful cancel signal, forwarded to the scheduler
+}
+
+// Primary core loop: the orchestrator plans a DAG → tasks are scheduled in dependency order,
+// independent tasks run concurrently, outputs flow to dependents/hand-offs, then the orchestrator
+// integrates the results. A failed planner degrades gracefully to a single whole-goal task.
 export async function runProject(
   prompt: string,
   agents: Agent[],
   orch: Orchestrator,
   bus: Bus,
+  deps: RunnerDeps = {},
 ): Promise<void> {
   const lead = agents.find((a) => a.config.lead) ?? agents[0];
   if (!lead) throw new Error("no agents configured");
 
-  bus.publish({ agentId: lead.config.id, type: "thought", payload: `decomposing: ${prompt}`, time: Date.now() });
-  let descs: string[];
-  try {
-    descs = await decompose(lead, prompt);
-  } catch (err) {
-    // A down/mis-keyed lead provider shouldn't crash the run — fall back to the whole prompt as one task.
-    bus.publish({ agentId: lead.config.id, type: "error", payload: `decompose failed: ${summarizeError(err)}`, time: Date.now() });
-    descs = [prompt];
-  }
-  for (const desc of descs) {
-    const t = orch.addTask(desc);
-    bus.publish({ agentId: lead.config.id, type: "thought", payload: `queued ${t.id}: ${desc}`, time: Date.now() });
+  bus.publish({ agentId: lead.config.id, type: "thought", payload: `planning: ${prompt}`, time: Date.now() });
+  const roles: RoleInfo[] = agents.map((a) => ({ id: a.config.id, role: a.config.role, description: a.config.systemPrompt.slice(0, 140) }));
+  const plan = await makePlan(lead, prompt, roles);
+
+  orch.load(plan.tasks); // shares the Task objects — scheduler mutates them, orch/UI/resume see updates
+  for (const t of plan.tasks) {
+    bus.publish({ agentId: lead.config.id, type: "thought", payload: `queued ${t.id} → ${t.assignedTo}: ${t.description}`, time: Date.now() });
   }
 
-  await Promise.allSettled(agents.map((a) => worker(a, orch, bus)));
+  try {
+    await schedule(plan.tasks, agents, { bus, messageBus: deps.messageBus, onOrchestration: deps.onOrchestration, shouldStop: deps.shouldStop, lead, goal: prompt });
+  } catch (err) {
+    // e.g. a dependency cycle — surface it, don't crash the session.
+    bus.publish({ agentId: lead.config.id, type: "error", payload: `scheduling failed: ${err instanceof Error ? err.message : err}`, time: Date.now() });
+  }
 }
 
-// Exposed for testing the concurrency/claim path without a decomposition call.
+// Exposed for testing the flat concurrency/claim path without a planning call.
 export { worker as runWorker };

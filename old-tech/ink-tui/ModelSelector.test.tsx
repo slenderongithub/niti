@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import React from "react";
 import { render } from "ink-testing-library";
 import { ModelSelector } from "./ModelSelector.tsx";
-import type { AgentConfig } from "../agent/agent.ts";
+import type { AgentConfig } from "../../src/agent/agent.ts";
 
 const agents: AgentConfig[] = [
   { id: "architect", provider: "anthropic", model: "claude-opus-4-8", role: "Architect", systemPrompt: "s", lead: true },

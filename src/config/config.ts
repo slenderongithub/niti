@@ -1,5 +1,6 @@
-import { readFileSync, existsSync } from "node:fs";
-import { parse } from "yaml";
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { parse, stringify } from "yaml";
 import type { AgentConfig } from "../agent/agent.ts";
 import type { McpServerConfig } from "../mcp/mcp.ts";
 import { CATALOG, providerKeys } from "../providers/catalog.ts";
@@ -24,6 +25,26 @@ export function loadMcpServers(path = ".amux/agents.yaml"): McpServerConfig[] {
     if (typeof r.name !== "string" || typeof r.command !== "string") return [];
     return [{ name: r.name, command: r.command, args: Array.isArray(r.args) ? (r.args as string[]) : undefined }];
   });
+}
+
+// Persist role assignments back to .amux/agents.yaml (written by the onboarding wizard and the
+// live /model switcher so changes survive a restart). Keys never land here — they're in auth.json.
+export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const doc = {
+    agents: agents.map((a) => ({
+      id: a.id,
+      provider: a.provider,
+      model: a.model,
+      role: a.role,
+      ...(a.lead ? { lead: true } : {}),
+      systemPrompt: a.systemPrompt,
+      ...(a.allowedTools ? { allowedTools: a.allowedTools } : {}),
+      ...(a.baseURL ? { baseURL: a.baseURL } : {}),
+      ...(a.autoApprove ? { autoApprove: a.autoApprove } : {}),
+    })),
+  };
+  writeFileSync(path, stringify(doc));
 }
 
 function validate(a: unknown, i: number, path: string): AgentConfig {

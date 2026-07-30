@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text } from "ink";
-import type { AgentConfig } from "../agent/agent.ts";
-import type { Task } from "../orchestrator/task.ts";
+import type { AgentConfig } from "../../src/agent/agent.ts";
+import type { Task } from "../../src/orchestrator/task.ts";
 import { theme, agentColor, agentAvatar } from "./theme.ts";
 
 const SPINNER = "⠋⠙⠹⠸⠼⠦⠧⠇⠏";

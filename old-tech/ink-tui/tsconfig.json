@@ -3,6 +3,7 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -10,5 +11,5 @@
     "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["src"]
+  "include": [".", "../../src"]
 }

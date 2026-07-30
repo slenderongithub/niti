@@ -2,8 +2,8 @@ import { test, expect } from "bun:test";
 import React from "react";
 import { render } from "ink-testing-library";
 import { UsageView } from "./UsageView.tsx";
-import { UsageTracker } from "../usage.ts";
-import type { AgentConfig } from "../agent/agent.ts";
+import { UsageTracker } from "../../src/usage.ts";
+import type { AgentConfig } from "../../src/agent/agent.ts";
 
 const configs: AgentConfig[] = [
   { id: "architect", provider: "anthropic", model: "claude-opus-4-8", role: "Architect", systemPrompt: "s", lead: true },
