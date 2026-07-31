@@ -9,6 +9,7 @@ import (
 
 	"github.com/amux/tui/internal/api"
 	"github.com/amux/tui/internal/theme"
+	"github.com/amux/tui/internal/ui"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -95,7 +96,10 @@ type Model struct {
 	goal      string
 	progress  int
 	commands  []api.Command // fetched from the server registry; drives dispatch and the footer hints
-	view      string        // "panes" | "graph" | "usage"
+	menu      ui.List       // slash-command suggestions shown over the prompt while typing "/…"
+	menuOpen  bool
+	car       carousel // the ctrl+p model switcher, when open
+	view      string   // "panes" | "graph" | "usage"
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
 	root string
@@ -130,6 +134,9 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 			ctxLimit: sess.ContextLimits[c.ID],
 		}
 	}
+	// Seeded with the local-only commands so "/" suggests something even before the server registry
+	// arrives; the commandsMsg handler replaces the list with the full set.
+	m.menu.Set(m.menuItems())
 	return m
 }
 
@@ -180,6 +187,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case commandsMsg:
 		m.commands = msg.commands
+		m.menu.Set(m.menuItems())
+		return m, nil
+
+	case modelsLoadedMsg:
+		m.setCarouselModels(msg)
 		return m, nil
 
 	case commandResultMsg:
@@ -206,6 +218,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// ctrl+c always quits; the popup below swallows everything else, so it can't be the only way out.
+	if s := k.String(); s == "ctrl+c" || s == "ctrl+d" {
+		m.quitting = true
+		m.cancel()
+		return m, tea.Quit
+	}
+	if m.car.open {
+		return m, m.carouselKey(k)
+	}
 	// Approval gate takes priority.
 	if len(m.approvals) > 0 {
 		var ok bool
@@ -229,15 +250,43 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg { return actionResultMsg{action: "approval", err: client.Approve(ok, scope)} }
 	}
 
+	// While the slash menu is up it owns the arrow keys, tab and enter — the same keys the rest of
+	// the view uses, which is why this runs before the general switch below.
+	if m.menuOpen && m.menu.Len() > 0 {
+		switch k.String() {
+		case "up", "shift+tab":
+			m.menu.Move(-1)
+			return m, nil
+		case "down":
+			m.menu.Move(1)
+			return m, nil
+		case "tab": // complete without running, so arguments can be typed after it
+			if it, ok := m.menu.Selected(); ok {
+				m.input.SetValue(it.Value + " ")
+				m.input.CursorEnd()
+				m.refreshMenu()
+			}
+			return m, nil
+		case "enter":
+			if it, ok := m.menu.Selected(); ok {
+				m.input.SetValue("")
+				m.menuOpen = false
+				return m, m.submit(it.Value)
+			}
+		case "esc":
+			m.input.SetValue("")
+			m.refreshMenu()
+			return m, nil
+		}
+	}
+
 	switch k.String() {
-	case "ctrl+c", "ctrl+d":
-		m.quitting = true
-		m.cancel()
-		return m, tea.Quit
 	case "tab":
 		m.view = map[string]string{"panes": "graph", "graph": "usage", "usage": "panes"}[m.view]
 		return m, nil
 	case "ctrl+p":
+		return m, m.openCarousel()
+	case "shift+tab":
 		m.mode = map[string]string{"build": "plan", "plan": "build"}[m.mode]
 		m.status = m.mode + " mode"
 		return m, nil
@@ -247,11 +296,37 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		m.input.SetValue("")
+		m.refreshMenu()
 		return m, m.submit(text)
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
+	m.refreshMenu()
 	return m, cmd
+}
+
+// menuItems is every command the user can type: the server registry plus the two that can only be
+// handled here (quitting tears down this process; the theme is a property of this terminal).
+func (m Model) menuItems() []ui.Item {
+	items := make([]ui.Item, 0, len(m.commands)+2)
+	for _, c := range m.commands {
+		items = append(items, ui.Item{Label: "/" + c.Name, Value: "/" + c.Name, Desc: c.Description})
+	}
+	return append(items,
+		ui.Item{Label: "/theme", Value: "/theme", Desc: "Switch the TUI theme: /theme <name>"},
+		ui.Item{Label: "/quit", Value: "/quit", Desc: "Leave amux"})
+}
+
+// refreshMenu decides whether the suggestion window is up, and what it's filtered to. It opens on
+// a leading "/" and closes as soon as the command name is complete (a space means arguments are
+// being typed, and the list has nothing left to offer).
+func (m *Model) refreshMenu() {
+	text := m.input.Value()
+	m.menuOpen = strings.HasPrefix(text, "/") && !strings.Contains(text, " ")
+	if !m.menuOpen {
+		return
+	}
+	m.menu.SetQuery(strings.TrimPrefix(text, "/"))
 }
 
 func (m *Model) submit(text string) tea.Cmd {

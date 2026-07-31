@@ -17,7 +17,7 @@ import { readFile } from "node:fs/promises";
 import { contextWindow } from "../providers/catalog.ts";
 import { compactTurns } from "./context.ts";
 
-const MAX_TURNS = 12; // bound the tool loop so a misbehaving model can't spin forever
+const MAX_TURNS = 12; // bound the tool loop so a misbehaving model can't spin forever (maxTurns: in agents.yaml raises it)
 const MAX_RESPOND_TURNS = 6; // shorter cap when answering a peer's question (see respond)
 // Mirrors MAX_ASK_DEPTH's role for A→B→A chains: a fork may fork, but not indefinitely. Lower,
 // because each level is a full MAX_TURNS loop rather than a single answer.
@@ -95,6 +95,7 @@ export interface AgentDeps {
   permissionLayers?: PermissionRules[]; // project-level policy (and --auto), consulted after the agent's own
   lsp?: LspRegistry; // present → diagnostics/hover tools, alongside (not instead of) MCP
   onWrite?: (relPath: string) => void; // called just before a file write, so the watcher can ignore our own echo
+  maxTurns?: number; // tool-loop cap for this agent; defaults to MAX_TURNS
 }
 
 export interface RunOptions {
@@ -122,6 +123,7 @@ export class Agent {
   private permissionLayers: PermissionRules[];
   private lsp?: LspRegistry;
   private onWrite?: (relPath: string) => void;
+  private maxTurns: number;
   private lastText = "";
   // A counter, not a boolean: run() and respond() can be concurrently in-flight on the same Agent
   // (ask_agent lets a peer answer while its own task is still running) — a boolean would let one
@@ -135,6 +137,7 @@ export class Agent {
     deps: AgentDeps = {},
   ) {
     this.root = deps.root ?? process.cwd();
+    this.maxTurns = deps.maxTurns && deps.maxTurns > 0 ? deps.maxTurns : MAX_TURNS;
     this.approve = deps.approve;
     this.mcp = deps.mcp;
     this.usageTracker = deps.usageTracker;
@@ -183,7 +186,7 @@ export class Agent {
     let quotaWarned = false;
     this.inFlightCount++;
     try {
-      for (let i = 0; i < MAX_TURNS; i++) {
+      for (let i = 0; i < this.maxTurns; i++) {
         this.injectInbox(turns, sessionId);
         const tools = this.buildTools(allowed, ctx);
         const reply = await this.provider.send(this.config.systemPrompt, turns, tools, onDelta);
@@ -257,7 +260,7 @@ export class Agent {
     this.bus.publish({ agentId: this.config.id, type: "thought", payload: `fork: ${goal.slice(0, 80)}`, time: Date.now() });
     return this.subLoop(goal, {
       kind: "fork",
-      maxTurns: MAX_TURNS,
+      maxTurns: this.maxTurns,
       askDepth: ctx.askDepth,
       forkDepth: ctx.forkDepth + 1,
       parentSessionId: ctx.sessionId,

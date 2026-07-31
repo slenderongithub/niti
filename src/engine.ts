@@ -30,6 +30,7 @@ export interface EngineOptions {
   auto?: boolean; // --auto: approve anything not explicitly denied (dangerous commands still prompt)
   lsp?: LspRegistry; // present → diagnostics/hover available to every agent, alongside MCP
   watch?: boolean; // true → emit external_change events for edits made outside amux
+  maxTurns?: number; // `maxTurns:` from agents.yaml — tool-loop cap per agent turn
 }
 
 // The Engine wires the whole multi-agent runtime: agents (with a live messenger so they can talk to
@@ -112,6 +113,7 @@ export class Engine {
         permissionLayers,
         lsp: opts.lsp,
         onWrite: (path) => this.watcher?.markSelfWrite(path),
+        maxTurns: opts.maxTurns,
       });
       this.agents.push(agent);
       this.byId.set(c.id, agent);

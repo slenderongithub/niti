@@ -9,6 +9,7 @@ import (
 
 	"github.com/amux/tui/internal/api"
 	"github.com/amux/tui/internal/theme"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -40,13 +41,25 @@ func TestTruncate(t *testing.T) {
 }
 
 func model(agents int) Model {
+	ti := textinput.New()
+	ti.Focus()
 	m := Model{agents: map[string]*agentState{}, view: "panes", mode: "build", cancel: func() {},
-		root: "/Users/someone/code/amux", costKnown: true}
+		root: "/Users/someone/code/amux", costKnown: true, input: ti}
 	for i := 0; i < agents; i++ {
 		id := string(rune('a' + i))
 		m.order = append(m.order, id)
-		m.agents[id] = &agentState{cfg: api.AgentConfig{ID: id, Role: "Role", Provider: "p", Model: "m"},
+		m.agents[id] = &agentState{cfg: api.AgentConfig{ID: id, Role: "Role " + id, Provider: "p", Model: "m"},
 			status: "idle", color: theme.AgentColor(i), avatar: theme.Avatar(i), ctxLimit: 200000}
+	}
+	m.menu.Set(m.menuItems())
+	return m
+}
+
+// typing feeds a string through onKey one rune at a time, the way the terminal delivers it.
+func typing(m Model, s string) Model {
+	for _, r := range s {
+		next, _ := m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
 	}
 	return m
 }
@@ -120,7 +133,8 @@ func TestDeltaStreamAssemblesLines(t *testing.T) {
 	}
 }
 
-// ctrl+p flips BUILD↔PLAN, and the mode is what gets sent with the next prompt.
+// shift+tab flips BUILD↔PLAN, and the mode is what gets sent with the next prompt. (ctrl+p is the
+// model carousel — see TestCarousel* below.)
 func TestPlanModeTogglesAndIsSubmitted(t *testing.T) {
 	var gotMode string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -133,10 +147,10 @@ func TestPlanModeTogglesAndIsSubmitted(t *testing.T) {
 
 	m := model(1)
 	m.client = api.New(srv.URL, "tok")
-	toggled, _ := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	toggled, _ := m.onKey(tea.KeyMsg{Type: tea.KeyShiftTab})
 	m = toggled.(Model)
 	if m.mode != "plan" {
-		t.Fatalf("ctrl+p should switch to plan mode, got %q", m.mode)
+		t.Fatalf("shift+tab should switch to plan mode, got %q", m.mode)
 	}
 	cmd := m.submit("build a todo app")
 	if cmd == nil {
@@ -177,6 +191,139 @@ func TestSubmitDispatchesKnownCommandsOnly(t *testing.T) {
 	}
 }
 
+// Typing "/" opens the suggestion window; typing more narrows it; tab completes the highlighted
+// command without running it. This is the whole point of the menu — commands are discovered, not
+// memorised.
+func TestSlashMenuFiltersAndCompletes(t *testing.T) {
+	m := model(1)
+	m.commands = []api.Command{
+		{Name: "model", Description: "switch a model"},
+		{Name: "mcp", Description: "list mcp servers"},
+		{Name: "undo", Description: "revert a write"},
+	}
+	m.menu.Set(m.menuItems())
+
+	if m.menuOpen {
+		t.Fatal("the menu must stay closed until a / is typed")
+	}
+	m = typing(m, "/")
+	if !m.menuOpen || m.menu.Len() != 5 { // 3 server commands + /theme + /quit
+		t.Fatalf("expected all commands offered on /, open=%v len=%d", m.menuOpen, m.menu.Len())
+	}
+	m = typing(m, "m")
+	if m.menu.Len() != 3 { // /model, /mcp, and /theme — which merely contains an m, so it ranks last
+		t.Fatalf("expected the m filter to keep 3 commands, got %d", m.menu.Len())
+	}
+	if it, _ := m.menu.Selected(); it.Value != "/model" {
+		t.Errorf("a name starting with the query should be highlighted first, got %q", it.Value)
+	}
+
+	completed, _ := m.onKey(tea.KeyMsg{Type: tea.KeyTab})
+	m = completed.(Model)
+	if m.input.Value() != "/model " {
+		t.Fatalf("tab should complete the highlighted command, got %q", m.input.Value())
+	}
+	if m.menuOpen {
+		t.Error("a completed command name (with its trailing space) should close the menu")
+	}
+
+	// Plain text must leave the menu alone.
+	m = model(1)
+	m = typing(m, "build a todo app")
+	if m.menuOpen {
+		t.Error("a normal prompt must not open the command menu")
+	}
+}
+
+// Enter on a highlighted suggestion runs it, rather than sending the half-typed text as a goal.
+func TestSlashMenuEnterRunsTheHighlightedCommand(t *testing.T) {
+	var ran string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ran = r.URL.Path
+		w.Write([]byte(`{"ok":true,"message":"done"}`))
+	}))
+	defer srv.Close()
+
+	m := model(1)
+	m.client = api.New(srv.URL, "tok")
+	m.commands = []api.Command{{Name: "undo", Description: "revert a write"}}
+	m.menu.Set(m.menuItems())
+	m = typing(m, "/un")
+
+	entered, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = entered.(Model)
+	if cmd == nil {
+		t.Fatal("enter on a suggestion should dispatch it")
+	}
+	cmd()
+	if ran != "/commands/undo" {
+		t.Errorf("expected /undo to be dispatched, server saw %q", ran)
+	}
+	if m.input.Value() != "" {
+		t.Errorf("the input should be cleared after running, got %q", m.input.Value())
+	}
+}
+
+// ctrl+p opens the carousel; with one agent there's nothing to choose, so it goes straight to
+// models and enter applies the switch.
+func TestCarouselSwitchesTheModel(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/model" {
+			json.NewDecoder(r.Body).Decode(&got)
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	m := model(1)
+	m.client = api.New(srv.URL, "tok")
+	opened, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	m = opened.(Model)
+	if !m.car.open || m.car.stage != "model" || cmd == nil {
+		t.Fatalf("ctrl+p with one agent should open straight on models, open=%v stage=%q", m.car.open, m.car.stage)
+	}
+	m.setCarouselModels(modelsLoadedMsg{options: []modelOption{
+		{provider: "anthropic", model: "claude-opus-4-8"},
+		{provider: "openai", model: "gpt-4o"},
+	}})
+	if m.car.list.Len() != 2 {
+		t.Fatalf("expected both models offered, got %d", m.car.list.Len())
+	}
+
+	m = typing(m, "gpt") // the carousel owns typing while it's open — this filters, not the prompt
+	if m.input.Value() != "" {
+		t.Errorf("keystrokes must not leak into the prompt while the carousel is open, got %q", m.input.Value())
+	}
+	applied, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = applied.(Model)
+	if cmd == nil {
+		t.Fatal("enter should apply the switch")
+	}
+	cmd()
+	if got["agentId"] != "a" || got["provider"] != "openai" || got["model"] != "gpt-4o" {
+		t.Errorf("unexpected switch posted: %v", got)
+	}
+	if m.car.open {
+		t.Error("the carousel should close once a model is chosen")
+	}
+}
+
+// With more than one agent the carousel asks who first, and esc closes it without switching.
+func TestCarouselPicksAnAgentFirstAndEscCloses(t *testing.T) {
+	m := model(3)
+	opened, _ := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	m = opened.(Model)
+	if m.car.stage != "agent" || m.car.list.Len() != 3 {
+		t.Fatalf("expected an agent list of 3, stage=%q len=%d", m.car.stage, m.car.list.Len())
+	}
+	closed, _ := m.onKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = closed.(Model)
+	if m.car.open {
+		t.Error("esc should close the carousel")
+	}
+}
+
 // Regression guard: a narrow terminal must never panic here (the bug this fix closed).
 func TestTruncateNeverPanics(t *testing.T) {
 	defer func() {
@@ -186,5 +333,32 @@ func TestTruncateNeverPanics(t *testing.T) {
 	}()
 	for n := -5; n < 5; n++ {
 		truncate("some non-empty status text", n)
+	}
+}
+
+// The suggestion menu and the carousel overlay must respect the terminal like everything else —
+// the overlay rewrites whole rows, so an off-by-one here is a corrupted screen, not a stray line.
+func TestMenuAndCarouselStayInsideTheTerminal(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{120, 40}, {80, 24}, {60, 16}, {40, 10}} {
+		base := model(3)
+		base.commands = []api.Command{{Name: "model", Description: "switch a model"}, {Name: "undo", Description: "revert"}}
+		base.menu.Set(base.menuItems())
+		sized, _ := base.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
+		base = sized.(Model)
+
+		withMenu := typing(base, "/")
+		opened, _ := base.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+		withCarousel := opened.(Model)
+		withCarousel.setCarouselModels(modelsLoadedMsg{options: []modelOption{{provider: "anthropic", model: "claude-opus-4-8"}}})
+
+		for name, m := range map[string]Model{"menu": withMenu, "carousel": withCarousel} {
+			out := m.View()
+			if got := lipgloss.Width(out); got > size.w {
+				t.Errorf("%s at %dx%d is %d columns wide", name, size.w, size.h, got)
+			}
+			if got := lipgloss.Height(out); got > size.h {
+				t.Errorf("%s at %dx%d is %d rows tall", name, size.w, size.h, got)
+			}
+		}
 	}
 }

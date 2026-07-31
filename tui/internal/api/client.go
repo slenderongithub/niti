@@ -59,6 +59,7 @@ type SessionInfo struct {
 	Lsp           []LspInfo      `json:"lsp"`
 	Mcp           []McpInfo      `json:"mcp"`
 	ContextLimits map[string]int `json:"contextLimits"` // agent id → its model's context window
+	Theme         string         `json:"theme"`         // `theme:` from agents.yaml, applied at launch
 }
 
 type AgentEvent struct {
@@ -272,6 +273,28 @@ type ProvidersResp struct {
 func (c *Client) Providers() (ProvidersResp, error) {
 	var p ProvidersResp
 	return p, c.do("GET", "/providers", nil, &p)
+}
+
+// ProviderInfo is one flattened catalog entry, carrying the category it came from so the picker
+// can say what kind of provider it is ("byok" needs a key, "local" needs a running server).
+type ProviderInfo struct {
+	ID       string
+	Label    string
+	Category string
+}
+
+// AllProviders flattens /providers into one ordered list: bring-your-own-key first, then local
+// runtimes, then login-based ones. The team picker offers the whole catalog — not just providers
+// with a stored key — and collects a key at the moment one is chosen.
+func (c *Client) AllProviders() ([]ProviderInfo, error) {
+	resp, err := c.Providers()
+	var out []ProviderInfo
+	for _, cat := range []string{"byok", "local", "login"} {
+		for _, p := range resp.Providers[cat] {
+			out = append(out, ProviderInfo{ID: p.ID, Label: p.Label, Category: cat})
+		}
+	}
+	return out, err
 }
 
 func (c *Client) Models(provider string) ([]string, error) {

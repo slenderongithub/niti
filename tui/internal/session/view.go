@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/amux/tui/internal/theme"
+	"github.com/amux/tui/internal/ui"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -64,10 +65,20 @@ func (m Model) View() string {
 			feedRows = 1
 		}
 	}
-	bodyH := h - headerRows - tasksRows - feedRows - 2 // -2: the input row and the footer
+	// The slash-command suggestions sit directly on top of the prompt, so they come out of the same
+	// budget as everything else — the body gives up the rows while the menu is open.
+	menuRows := 0
+	if m.menuOpen && m.menu.Len() > 0 {
+		menuRows = clamp(m.menu.Len(), 1, 6)
+	}
+
+	bodyH := h - headerRows - tasksRows - feedRows - menuRows - 2 // -2: the input row and the footer
 	if bodyH < 1 {
 		tasksRows, feedRows = 0, 0
-		bodyH = max(h-headerRows-2, 1)
+		bodyH = max(h-headerRows-menuRows-2, 1)
+	}
+	if bodyH < 1 { // a terminal too short for both: the menu is transient, the transcript isn't
+		menuRows, bodyH = 0, max(h-headerRows-2, 1)
 	}
 
 	sw := 0
@@ -87,6 +98,9 @@ func (m Model) View() string {
 	if feedRows > 0 {
 		rows = append(rows, m.commFeed(w, feedRows))
 	}
+	if menuRows > 0 {
+		rows = append(rows, m.menuView(w, menuRows))
+	}
 	if len(m.approvals) > 0 {
 		rows = append(rows, m.approvalBar(w))
 	} else {
@@ -95,7 +109,11 @@ func (m Model) View() string {
 	rows = append(rows, m.footer(w))
 	// One ANSI-aware guarantee that nothing overflows the terminal, however long a streamed line or
 	// a registry command list turns out to be.
-	return lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(strings.Join(rows, "\n"))
+	out := lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(strings.Join(rows, "\n"))
+	if m.car.open {
+		out = ui.Overlay(out, m.carouselView(w, h), w, h)
+	}
+	return out
 }
 
 // --- small helpers ---
@@ -107,15 +125,7 @@ func txt(fg, bg lipgloss.Color) lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(fg).Background(bg)
 }
 
-func clamp(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
+func clamp(v, lo, hi int) int { return ui.Clamp(v, lo, hi) }
 
 // Exactly n lines: extra dropped, short padded. Keeps a pane's height predictable no matter how
 // much (or little) content it has.
@@ -479,6 +489,14 @@ func (m Model) commFeed(w, lineCount int) string {
 	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).Render(exactly(lines, lineCount))
 }
 
+// The command menu — the small guessing window that sits right over the prompt bar while a "/" is
+// being typed, so the whole command set is discoverable instead of memorised.
+func (m Model) menuView(w, rows int) string {
+	bg := theme.BgPane
+	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).
+		Render(m.menu.Render(max(w-1, 1), rows, bg))
+}
+
 func (m Model) inputBar(w int) string {
 	bg := theme.BgPane
 	c := theme.Accent
@@ -505,16 +523,8 @@ func (m Model) footer(w int) string {
 	if m.mode == "plan" {
 		next = "build"
 	}
-	hints := "/undo /cancel"
-	if len(m.commands) > 0 {
-		names := make([]string, 0, len(m.commands))
-		for _, c := range m.commands {
-			names = append(names, "/"+c.Name)
-		}
-		hints = strings.Join(names, " ")
-	}
-	line := fmt.Sprintf(" tab: %s · ctrl+p: %s · ctrl+t: %s · %s /theme /quit · %s",
-		m.view, next, theme.Current(), hints, m.status)
+	line := fmt.Sprintf(" tab: %s · ctrl+p: models · shift+tab: %s · ctrl+t: %s · / for commands · %s",
+		m.view, next, theme.Current(), m.status)
 	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).
 		Render(txt(theme.Muted, bg).Render(truncate(line, w)))
 }

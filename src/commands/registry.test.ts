@@ -83,5 +83,47 @@ test("a user command overrides a built-in of the same name", async () => {
 
 test("list() is what a client renders for autocomplete", () => {
   const names = new CommandRegistry(BUILTIN_COMMANDS).list().map((c) => c.name);
-  expect(names).toEqual(["panes", "graph", "usage", "cancel", "undo", "model", "sessions"]);
+  // Order matters: it's the order the TUI's "/" menu offers them in, and /help is appended last.
+  expect(names).toEqual([
+    "panes", "graph", "usage", "cancel", "undo", "model", "sessions",
+    "agents", "tasks", "mcp", "lsp", "permissions", "cost", "status", "resume", "clear", "init",
+    "help",
+  ]);
+  expect(new Set(names).size).toBe(names.length); // every name unique — one keystroke, one command
+});
+
+test("/help lists every command, including ones loaded from .amux/commands", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "amux-cmd-"));
+  writeFileSync(join(dir, "ship.md"), "---\nname: ship\ndescription: Ship it\n---\nDo the thing");
+  const r = new CommandRegistry([...BUILTIN_COMMANDS, ...loadCommands(dir)]);
+
+  const help = await r.run(engine(), "help");
+  expect(help.ok).toBe(true);
+  for (const name of ["/help", "/model", "/agents", "/tasks", "/status", "/cost", "/ship"]) {
+    expect(help.message).toContain(name);
+  }
+});
+
+test("the read-only commands report the engine's actual state", async () => {
+  const r = new CommandRegistry(BUILTIN_COMMANDS);
+  const e = engine();
+
+  expect((await r.run(e, "agents")).message).toContain("anthropic/m");
+  expect((await r.run(e, "tasks")).message).toMatch(/no tasks yet/);
+  expect((await r.run(e, "mcp")).message).toMatch(/no MCP servers/);
+  expect((await r.run(e, "lsp")).message).toMatch(/no language servers/);
+  expect((await r.run(e, "permissions")).message).toContain("everything asks");
+  expect((await r.run(e, "cost")).message).toMatch(/nothing spent yet/);
+  expect((await r.run(e, "status")).message).toContain("team      1 agents");
+});
+
+test("/clear empties the board, and refuses while work is running", async () => {
+  const r = new CommandRegistry(BUILTIN_COMMANDS);
+  const e = engine();
+  e.orch.addTask("write the parser");
+  e.orch.addTask("write its tests");
+
+  expect(await r.run(e, "clear")).toEqual({ ok: true, message: "cleared 2 task(s)" });
+  expect(e.orch.all).toHaveLength(0);
+  expect((await r.run(e, "resume")).message).toMatch(/nothing left to resume/);
 });

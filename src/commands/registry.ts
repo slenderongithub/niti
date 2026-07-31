@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import type { Engine } from "../engine.ts";
 import { splitModelId } from "../providers/catalog.ts";
+import { costOf } from "../providers/pricing.ts";
+import { saveTasks } from "../session.ts";
 
 // Slash commands live here, on the server, rather than in the Go TUI's key handler — otherwise the
 // web dashboard needs an identical second implementation of every one of them. Clients fetch the
@@ -71,7 +73,144 @@ export const BUILTIN_COMMANDS: Command[] = [
       };
     },
   },
+  {
+    name: "agents",
+    description: "Show the team: who's on it, on which model, with which tools",
+    async run(engine) {
+      return {
+        ok: true,
+        message: engine.configs
+          .map((c) => `${c.lead ? "★" : " "} ${c.id.padEnd(16)} ${c.provider}/${c.model}  [${(c.allowedTools ?? ["(all)"]).join(",")}]`)
+          .join("\n"),
+      };
+    },
+  },
+  {
+    name: "tasks",
+    description: "Show the task board — what is planned, running, done or failed",
+    async run(engine) {
+      const tasks = engine.orch.all;
+      if (!tasks.length) return { ok: true, message: "no tasks yet — describe what you want built" };
+      return {
+        ok: true,
+        message: tasks
+          .map((t) => `${TASK_GLYPH[t.status] ?? "○"} ${t.id.padEnd(8)} ${t.assignedTo ?? "-"}  ${t.description}`)
+          .join("\n"),
+      };
+    },
+  },
+  {
+    name: "mcp",
+    description: "List connected MCP servers and how many tools each contributes",
+    async run(engine) {
+      const servers = engine.mcp?.servers?.() ?? [];
+      if (!servers.length) return { ok: true, message: "no MCP servers connected (configure them under mcpServers: in .amux/agents.yaml)" };
+      return { ok: true, message: servers.map((s) => `${s.name}  ${s.tools} tools`).join("\n") };
+    },
+  },
+  {
+    name: "lsp",
+    description: "List configured language servers and whether each is running",
+    async run(engine) {
+      const servers = engine.lsp?.list() ?? [];
+      if (!servers.length) return { ok: true, message: "no language servers configured (add an lsp: block to .amux/agents.yaml)" };
+      return {
+        ok: true,
+        message: servers.map((s) => `${s.running ? "●" : "○"} ${s.name}  ${s.command}  ${s.extensions.join(" ")}`).join("\n"),
+      };
+    },
+  },
+  {
+    name: "permissions",
+    description: "Show which tools each agent may use without asking",
+    async run(engine) {
+      const lines = engine.configs.map((c) => {
+        const rules = Object.entries(c.permissions ?? {}).flatMap(([tool, patterns]) =>
+          Object.entries(patterns as Record<string, string>).map(([pattern, decision]) => `${tool}:${pattern}=${decision}`),
+        );
+        const pre = (c.autoApprove ?? []).map((t) => `${t}=allow`);
+        return `${c.id.padEnd(16)} ${[...pre, ...rules].join("  ") || "(everything asks)"}`;
+      });
+      return { ok: true, message: lines.join("\n") };
+    },
+  },
+  {
+    name: "cost",
+    description: "Show session spend, broken down per agent",
+    async run(engine) {
+      const lines: string[] = [];
+      let total = 0;
+      let complete = true;
+      for (const { agentId, usage } of engine.usage.snapshot()) {
+        const cfg = engine.configs.find((c) => c.id === agentId);
+        if (!cfg) continue;
+        const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens);
+        total += usd;
+        if (!priced) complete = false;
+        lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}`);
+      }
+      if (!lines.length) return { ok: true, message: "nothing spent yet" };
+      return { ok: true, message: [...lines, `TOTAL $${total.toFixed(4)}${complete ? "" : "+"}`].join("\n") };
+    },
+  },
+  {
+    name: "status",
+    description: "Summarise this session: project, team, progress and spend",
+    async run(engine) {
+      const tasks = engine.orch.all;
+      const done = tasks.filter((t) => t.status === "done").length;
+      const totals = engine.usage.totals();
+      return {
+        ok: true,
+        message: [
+          `project   ${engine.root}`,
+          `team      ${engine.configs.length} agents${engine.running ? " — running" : ""}`,
+          `tasks     ${done}/${tasks.length} done`,
+          `tokens    ${totals.inputTokens}in ${totals.outputTokens}out over ${totals.calls} calls`,
+          `wired to  ${engine.lsp?.list().length ?? 0} LSP · ${engine.mcp?.servers?.().length ?? 0} MCP · history ${engine.store ? "on" : "off"}`,
+        ].join("\n"),
+      };
+    },
+  },
+  {
+    name: "resume",
+    description: "Pick the previous session's unfinished tasks back up",
+    async run(engine) {
+      if (engine.running) return { ok: false, message: "a task is already running" };
+      if (!engine.orch.all.some((t) => t.status !== "done")) return { ok: false, message: "nothing left to resume" };
+      engine.resume().catch(() => {}); // long-running: progress arrives over the event stream
+      return { ok: true, message: "resuming unfinished tasks" };
+    },
+  },
+  {
+    name: "clear",
+    description: "Empty the task board and start from a clean slate",
+    async run(engine) {
+      if (engine.running) return { ok: false, message: "cancel the running task first" };
+      const n = engine.orch.all.length;
+      engine.orch.clear();
+      saveTasks([]); // otherwise a restart resurrects the board this just cleared
+      return { ok: true, message: `cleared ${n} task(s)` };
+    },
+  },
+  {
+    name: "init",
+    description: "Have the team read this project and write an AGENTS.md for it",
+    async run(engine) {
+      if (engine.running) return { ok: false, message: "a task is already running" };
+      engine.submit(INIT_PROMPT).catch(() => {});
+      return { ok: true, message: "analysing the project → AGENTS.md" };
+    },
+  },
 ];
+
+const TASK_GLYPH: Record<string, string> = { done: "●", in_progress: "◐", failed: "✖", pending: "○" };
+
+const INIT_PROMPT =
+  "Read this repository — its layout, build/test commands, conventions and dependencies — and write " +
+  "an AGENTS.md at the project root describing them for future agents. Keep it short and factual: " +
+  "how to build, how to test, how the code is organised, and any conventions a newcomer would " +
+  "otherwise get wrong. If AGENTS.md already exists, update it rather than duplicating it.";
 
 // User-defined commands: .amux/commands/<name>.md, YAML frontmatter (name/description) + a prompt
 // body. Deliberately the same shape as .amux/skills/<name>/SKILL.md (see skills/skills.ts) rather
@@ -107,6 +246,20 @@ export class CommandRegistry {
   // User commands are loaded last and win on a name clash — a project can override a built-in.
   constructor(commands: Command[] = [...BUILTIN_COMMANDS, ...loadCommands()]) {
     for (const c of commands) this.byName.set(c.name, c);
+    // /help lives here rather than in BUILTIN_COMMANDS because it's the one command that has to
+    // see the finished registry — including whatever .amux/commands/ added.
+    if (!this.byName.has("help")) {
+      this.byName.set("help", {
+        name: "help",
+        description: "List every command",
+        run: async () => ({
+          ok: true,
+          message: this.list()
+            .map((c) => `/${c.name.padEnd(12)} ${c.description}`)
+            .join("\n"),
+        }),
+      });
+    }
   }
 
   list(): { name: string; description: string }[] {

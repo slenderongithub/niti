@@ -4,9 +4,9 @@ A terminal CLI that runs **multiple AI coding agents from different LLM provider
 
 Bring your own keys (Anthropic, OpenAI, Gemini, + 150 more via Models.dev). Keys live in a global `~/.config/amux/auth.json` (0600) and your OS keychain, never a server.
 
-> **v2 overhaul:** the orchestrator-DAG, agent-to-agent messaging, onboarding wizard, HTTP+SSE server,
-> Go+Bubbletea TUI, and web dashboard are new. See [`BUILD_STATUS.md`](./BUILD_STATUS.md) for exactly
-> what's implemented, verified, and adversarially reviewed.
+> **v2 overhaul:** the orchestrator-DAG, agent-to-agent messaging, team picker, HTTP+SSE server,
+> Go+Bubbletea TUI, and web dashboard are new. See [`project_context.md`](./project_context.md) for
+> the full architecture record — what's implemented, verified, and adversarially reviewed.
 
 ## Two front ends, one core
 
@@ -30,22 +30,34 @@ core itself is pure Bun/TypeScript).
 bun install
 bun run build:tui                          # builds ./amux (the Go TUI) — do this once, or after tui/ changes
 
-./amux                                     # first run: onboarding wizard (providers → roles → orchestrator), then the live session
-                                            #   after setup: type a goal, watch the agents plan + build + talk to each other
-                                            #   Tab switches panes/comm-graph/usage views; y/a/n answers approvals
+./amux                                     # every launch: pick the team (1–5 models, one prompt each), then the live session
+                                            #   type a goal, watch the agents plan + build + talk to each other
+                                            #   "/" for commands · ctrl+p switches models · Tab cycles views · y/a/n answers approvals
 ```
 
 For scripting/CI (no interactive terminal, uses the headless core directly):
 
 ```sh
-bun run src/cli.ts init                    # headless setup wizard (plain prompts) — alternative to the Go wizard
+bun run src/cli.ts init                    # headless setup wizard (plain prompts) — alternative to the team picker
 bun run src/cli.ts "Build a clothing website for gen-z."           # one-shot, prints plain-text progress, exits
 bun run src/cli.ts --web "Build a clothing website for gen-z."     # + live web dashboard (localhost)
 bun run src/cli.ts login copilot           # sign in with a GitHub Copilot subscription (no API key)
 bun run src/server/main.ts                 # headless core server (prints a handshake; what `amux` connects to)
 ```
 
-### Three ways to supply models (`/model` selector)
+### Picking the team
+
+`./amux` opens the picker on every launch, centred on screen — a static `agents.yaml` stops being
+useful the moment you want to try a different model. It asks:
+
+1. **how many teammates** (1–5),
+2. then, per teammate: **provider** → **model** → **name** → **what it does**.
+
+The provider list is the whole catalog, not just the ones you've set up: pick one without a key and
+it asks for the key right there. Type to filter, `↑↓` to choose, `esc` to step back. What you write
+in "what it does" becomes that agent's system prompt, so it's worth a sentence.
+
+### Three ways to supply models
 
 1. **API key (BYOK)** — Anthropic, OpenAI, Google, DeepSeek, Groq, OpenRouter, Moonshot/Kimi, xAI, Mistral, Together, Fireworks, Cerebras, plus **Custom (OpenAI-compatible)** — pick "Custom", enter any base URL, and reach any of the 150+ OpenAI-compatible providers via the Models.dev catalog. `amux-core auth login <provider>` (global `~/.config/amux/auth.json` 0600 + OS keychain) or the matching env var.
 2. **Local (offline, no key)** — Ollama (`:11434`) and LM Studio (`:1234`), routed at their local OpenAI-compatible endpoints. Nothing leaves your machine.
@@ -90,7 +102,22 @@ permissions:                            # project-wide default policy
 lsp:                                    # optional language servers (you install them; amux spawns them)
   typescript: { command: typescript-language-server, args: [--stdio], extensions: [.ts, .tsx] }
   go:         { command: gopls, extensions: [.go] }
+
+mcpServers:                             # optional MCP servers, merged into the same tool loop as LSP
+  - name: code-review
+    command: code-review-graph
+    args: [--stdio]
+
+# --- options: everything else is optional and has a working default ---
+theme: amux                             # TUI colours at launch (ctrl+t still cycles live)
+auto: false                             # approve anything not explicitly denied (same as --auto)
+watch: true                             # announce edits made outside amux as external_change events
+instructions: [AGENTS.md, CLAUDE.md]    # appended to every agent's system prompt (missing files are skipped)
+maxTurns: 12                            # tool-loop iterations per agent turn
+maxAgents: 5                            # refuse to load a bigger team than this
 ```
+
+The team picker rewrites only the `agents:` block — everything above survives a relaunch.
 
 **Permissions** resolve agent block → project block → built-in defaults, and the most specific
 pattern wins (`git push --force*` beats `git *`). Anything unmatched asks, so a file with no
@@ -102,7 +129,7 @@ the config says — including under `--auto` (approve anything not explicitly de
 
 ```
                     Go + Bubbletea TUI (amux)         Web dashboard (optional, --web)
-                     wizard · panes · comm-graph        localhost force-graph
+                     team picker · panes · comm-graph    localhost force-graph
                               └──────────── HTTP + SSE (src/server) ────────────┘
                                                   ▼
                                     Engine (src/engine.ts)
@@ -121,14 +148,14 @@ the config says — including under `--auto` (approve anything not explicitly de
 - **Persistence** — every turn is decomposed into parts and written to SQLite at `.amux/amux.db` (`src/store/`), so conversations survive a restart: `amux-core resume` re-runs unfinished tasks with their history seeded. Each file write is checkpointed first, which is what `/undo` reverts.
 - **LSP + MCP together** — MCP servers and language servers are two independent tool sources merged into the same loop. LSP adds `diagnostics(path)` and `hover(path,line,col)` over hand-rolled JSON-RPC (`src/lsp/`); a missing server is a message, never a crash.
 - **Sub-agent forking** — `spawn_fork` runs a child loop on the same model, tools, and permissions, and returns just its findings. It's a child *session*, invisible to the DAG scheduler, capped by `MAX_FORK_DEPTH`.
-- **Slash commands** — defined server-side (`src/commands/registry.ts`) so the TUI and the web dashboard share one implementation: `/panes /graph /usage /cancel /undo /model /sessions`, plus your own in `.amux/commands/<name>.md` (frontmatter + a prompt body, `$ARGUMENTS` interpolated).
+- **Slash commands** — defined server-side (`src/commands/registry.ts`) so the TUI and the web dashboard share one implementation. Typing `/` opens a filtered menu above the prompt with a description per command, so nothing has to be memorised: `/help /status /agents /tasks /model /sessions /resume /clear /cancel /undo /cost /mcp /lsp /permissions /init /panes /graph /usage`, plus `/theme` and `/quit` (client-side), plus your own in `.amux/commands/<name>.md` (frontmatter + a prompt body, `$ARGUMENTS` interpolated).
+- **Model carousel** — `ctrl+p` pops a picker in the middle of the screen: choose the teammate, then its model, with type-to-filter over every model on a provider you have a key for. `/model <agentId> <provider/model>` still works for scripting.
 - **File watching** — edits made outside amux (your editor, a `git checkout`) surface as `external_change` events; an agent's own writes are suppressed so it never hears its own echo.
 
 ## Status
 
-Built, tested, and adversarially reviewed — see [`BUILD_STATUS.md`](./BUILD_STATUS.md) for the full
-verification record (142 TypeScript tests, Go build/vet/test, and the list of bugs two review passes
-found and fixed). Highlights: multi-provider BYOK (150+ providers via Models.dev), an orchestrator DAG
+Built, tested, and adversarially reviewed — see [`project_context.md`](./project_context.md) for the
+full verification record and the list of bugs two review passes found and fixed. Highlights: multi-provider BYOK (150+ providers via Models.dev), an orchestrator DAG
 with concurrent scheduling and agent-to-agent messaging, a global typed auth store, sandboxed tools
 (path-traversal + injection tested), a Go+Bubbletea TUI with a live communication graph, an optional
 web dashboard, single-binary compiles for both front ends, and **the provider-driven tool-use loop** —
@@ -151,12 +178,12 @@ the task is done (Anthropic `tool_use`, OpenAI `tool_calls`, Gemini `functionCal
 
 **Session persistence**: tasks (and the DAG) auto-save to `.amux/session.json`; conversations (sessions → messages → parts, plus per-write checkpoints and the agent-to-agent message trail) go to SQLite at `.amux/amux.db`. `amux-core resume` continues the unfinished tasks with their stored history, rather than starting them over.
 
-Intentional ceilings (deliberate, not gaps — see `BUILD_STATUS.md` for the full list): the tool sandbox is path-prefix jailed, not container/seccomp isolated (symlink escapes are possible); MCP servers are shared across agents, not per-agent scoped; skills are prompt-injected + read-on-demand, not sandboxed execution; Gemini pairs parallel tool calls by name (a rare edge when the same tool is called twice in one turn); agent-to-agent messaging is open within a run rather than restricted to the plan's declared edges (the planner can't anticipate every mid-task question, so only a per-pair rate cap guards against loops); and of the three sign-in options, only GitHub Copilot's OAuth is wired.
+Intentional ceilings (deliberate, not gaps — see `project_context.md` for the full list): the tool sandbox is path-prefix jailed, not container/seccomp isolated (symlink escapes are possible); MCP servers are shared across agents, not per-agent scoped; skills are prompt-injected + read-on-demand, not sandboxed execution; Gemini pairs parallel tool calls by name (a rare edge when the same tool is called twice in one turn); agent-to-agent messaging is open within a run rather than restricted to the plan's declared edges (the planner can't anticipate every mid-task question, so only a per-pair rate cap guards against loops); and of the three sign-in options, only GitHub Copilot's OAuth is wired.
 
 ## Development
 
 ```sh
-bun test              # TypeScript unit + integration tests (142)
+bun test              # TypeScript unit + integration tests
 bunx tsc --noEmit     # typecheck
 cd tui && go build ./... && go vet ./... && go test ./...   # Go TUI: build, vet, unit tests
 ```

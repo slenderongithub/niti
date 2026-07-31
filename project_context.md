@@ -1,305 +1,344 @@
 # Project Context: amux
 
-`amux` is a TypeScript CLI tool for Bun (≥ 1.3) that runs multiple AI coding agents from different LLM providers concurrently on a single project. Agents coordinate via a shared task queue, communicate through a typed event bus, execute tools inside a root-sandboxed runtime, and render live streaming feedback in a React + Ink terminal UI.
+`amux` runs **multiple AI coding agents from different LLM providers concurrently** on one project.
+You assign models to custom roles, pick one as the **orchestrator** (plans a task DAG and sequences
+it), and the role-agents build together — **talking directly to each other** to align — while you
+watch live in a terminal (and an optional web dashboard).
+
+This file is the single merged source of project history/architecture context, replacing
+`BUILD_STATUS.md` and `OPENCODE_PARITY_PLAN.md` (both folded in below, then deleted).
 
 ---
 
-## (1) System Architecture
+## Two front ends, one core
 
-### High-Level Architecture
+- **`amux`** — the Go + Bubbletea terminal UI (`tui/`), the primary interactive front end. It spawns
+  the Bun core as a subprocess and drives it over a local HTTP+SSE API. Build: `bun run build:tui`.
+- **`amux-core`** — the headless Bun/TypeScript engine + scripting CLI (`src/cli.ts`). Used
+  standalone for one-shot/CI runs, `serve`, `auth`, `init`, `--web`, and it's what `amux` spawns.
+  Build: `bun run build`.
+- **`old-tech/ink-tui/`** — the original React/Ink interactive TUI (amux v1). Archived, not deleted,
+  not wired into the active build — `src/cli.ts` no longer imports or renders it. Has its own
+  `package.json`/`tsconfig.json` so it doesn't affect the root project's deps or `tsc`/`bun test`.
+
+## Architecture (as built)
+
 ```
-                         ┌─────────────────────────────┐
-                         │   .amux/agents.yaml         │
-                         │   (Agent & MCP Configs)     │
-                         └──────────────┬──────────────┘
-                                        │
-                                        ▼
-                         ┌─────────────────────────────┐
-                         │   Config Loader & Factory   │
-                         │ (config.ts, factory.ts)     │
-                         └──────────────┬──────────────┘
-                                        │
-                                        ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                             amux CLI (cli.ts)                               │
-│                                                                             │
-│  ┌────────────────────┐    decompose   ┌─────────────────────────────────┐  │
-│  │     Lead Agent     ├───────────────►│          Orchestrator           │  │
-│  └─────────┬──────────┘                │      (Shared Task Queue)        │  │
-│            │                           └────────────────┬────────────────┘  │
-│            │                                            │ claim / requeue   │
-│            ▼                                            ▼                   │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                         Concurrent Workers                           │   │
-│  │                 (Worker Loops in runner.ts)                          │   │
-│  └───────┬──────────────────────────────┬───────────────────────┬───────┘   │
-│          │                              │                       │           │
-│          ▼                              ▼                       ▼           │
-│  ┌──────────────┐              ┌────────────────┐       ┌───────────────┐   │
-│  │ Provider SDK │              │  Tool Sandbox  │       │  MCP Client   │   │
-│  │(OpenAI/Anth/ │              │(read/write/sh) │       │ (stdio transport)│ │
-│  │ Gemini/Copilot)             └───────┬────────┘       └───────┬───────┘   │
-│  └───────┬──────┘                      │                        │           │
-└──────────┼─────────────────────────────┼────────────────────────┼───────────┘
-           │                             │                        │
-           │ publish events              │ acquire locks          │ mcp tools
-           ▼                             ▼                        ▼
-┌──────────────────────┐      ┌────────────────────┐   ┌──────────────────────┐
-│  Event Bus (bus.ts)  │      │ Lock Registry      │   │ Approval Queue       │
-└──────────┬───────────┘      │ (locks.ts)         │   │ (approval.ts)        │
-           │                  └────────────────────┘   └──────────┬───────────┘
-           │ subscribe                                            │ prompt/approve
-           ▼                                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                             Ink Terminal TUI                                │
-│       (App.tsx, GraphView.tsx, UsageView.tsx, ModelSelector.tsx)            │
-└─────────────────────────────────────────────────────────────────────────────┘
+                    Go + Bubbletea TUI (amux)         Web dashboard (optional, --web)
+                     team picker · panes · comm-graph   localhost force-graph
+                              └──────────── HTTP + SSE (src/server) ────────────┘
+                                                  ▼
+                                    Engine (src/engine.ts)
+   loadAgents (.amux/agents.yaml) ──▶ makeProvider (auth store) ──▶ Agent[] (+ Messenger)
+                                                  │
+   orchestrator ──plan (DAG)──▶ scheduler (src/orchestrator) ◀──concurrent claim──┤
+                        │                    │
+                  MessageBus (agent ↔ agent)  AgentEvent stream ──▶ EventHub ──▶ SSE
 ```
 
-### Core Architectural Concepts
-1. **Concurrency & Synchronization**:
-   - Work is distributed across agents via a single-threaded in-memory `Orchestrator` task queue. `claimTask` operations are synchronous and atomic under Node/Bun's event loop.
-   - Concurrent writes and shell commands are synchronized via an in-memory `LockRegistry`. File writes lock per relative path; shell calls lock on a global `*shell*` mutex. Stale locks expire after 60s.
-2. **Failover & Token Safeguards**:
-   - When an agent encounters rate limits (429/529), context limit exhaustion, or account quota depletion, its assigned task is requeued back to the orchestrator with an exponential backoff (`attempts * 500ms`, capped at 3000ms) and same-agent exclusion.
-   - Tasks are failed permanently after 3 attempts (`MAX_ATTEMPTS = 3`).
-   - Context usage warnings trigger at 85% context depth; automatic conversation compacting (`compactTurns`) occurs at 95% threshold using provider-based summarization.
-3. **Security Boundary & Approval Gates**:
-   - `write_file` and `shell` actions require permission via `ApprovalQueue` in interactive mode.
-   - Shell calls are parsed for dangerous patterns (`rm -rf`, `git reset --hard`, `git push --force`, `drop table`, fork bombs) to force interactive confirmation even if standing grants exist.
-   - File system access is jailed using `safePath` prefix validation against `process.cwd()`. Shell executions use `spawn` with array arguments to prevent string injection.
-4. **Provider Abstraction & Keychain Storage**:
-   - Providers implement a unified `Provider` interface.
-   - Primary API keys are retrieved from the OS Keychain via `@napi-rs/keyring` with environment variable fallback.
-   - GitHub Copilot authentication uses OAuth device code flow (`startDeviceFlow` / `pollForToken`).
+### Core architectural concepts
+
+1. **Concurrency & synchronization** — the `Orchestrator` (`src/orchestrator/orchestrator.ts`) is a
+   single-threaded in-memory task queue; `claimTask` is synchronous/atomic under Bun's event loop.
+   Concurrent writes and shell calls are synchronized via `LockRegistry` (`src/orchestrator/locks.ts`)
+   — file writes lock per relative path, shell calls lock a global `*shell*` mutex, stale locks expire
+   after 60s.
+2. **Orchestration is a DAG, not a flat queue** — the lead agent turns a goal into a validated task
+   **DAG** (dependencies + hand-offs) via `planner.ts` (zod-validated, retry, robust JSON extraction,
+   ambiguous-id dependencies dropped rather than guessed at); `scheduler.ts` runs independent tasks
+   concurrently in topological order, delivers each task's output to its dependents/hand-off
+   recipients, and the lead reviews + summarizes at the end.
+3. **Failover & token safeguards** — rate limits (429/529/503), context exhaustion, or account quota
+   depletion requeue the task with backoff (`attempts * 500ms`, capped at 3000ms) and same-agent
+   exclusion; permanently failed after `MAX_ATTEMPTS = 3`. Context warnings fire at 85% depth;
+   `compactTurns()` (`src/agent/context.ts`) summarizes older turns at 95%, walking the cut point back
+   so it never starts on an orphaned `tool` turn (a bug found and fixed during review — see below).
+4. **Security boundary & approval gates** — `write_file`/`edit`/`shell` gate through `ApprovalQueue`
+   in interactive mode, resolved through a **wildcard permission hierarchy**
+   (`src/permissions.ts`: session grant → agent's own `permissions:` → project `permissions:` →
+   default-ask; most-specific pattern wins). Destructive shell patterns (`rm -rf`, `git reset --hard`,
+   `git push --force`, `drop table`, fork bombs) always force a prompt regardless of any `allow` rule
+   or `--auto`. File access is jailed via `safePath` prefix validation; shell exec uses `spawn` with
+   array arguments (no shell string → no injection).
+5. **Provider abstraction & keychain storage** — one `Provider` interface; native clients for
+   Anthropic/Gemini, one OpenAI-compatible client covering 150+ providers via the Models.dev catalog
+   (`src/providers/catalog.ts` + generated `catalog.generated.ts`). Keys come from the OS keychain
+   (`@napi-rs/keyring`) with env-var fallback, or GitHub Copilot's OAuth device-code flow.
+6. **Agent-to-agent messaging (amux's differentiator)** — agents `send_message`/`ask_agent` any
+   teammate directly mid-task, routed through `MessageBus` (`src/messaging/message-bus.ts`).
+   Deliberately **open**, not DAG-edge-restricted (the planner can't anticipate every mid-task
+   question) — a per-pair rate cap is the loop guard instead.
+7. **Persistence** — every turn decomposes into `sessions → messages → parts` in SQLite at
+   `.amux/amux.db` (`src/store/`), so conversations survive a restart (`amux resume`/`/resume`
+   reseed history). Each file write is checkpointed first (`checkpoints` table), which is what
+   `/undo` reverts (LIFO, one write per call). Tasks separately auto-save to `.amux/session.json`
+   (unchanged since v1) — a session is a child concept a task *has*, not a replacement for the DAG.
+8. **LSP + MCP together** — two independent tool sources merged into the same `buildTools()`
+   concatenation in `agent.ts`, neither replacing the other. LSP (`src/lsp/`) spawns
+   user-installed language servers over hand-rolled JSON-RPC (no tree-sitter — amux has no
+   syntax-highlighting UI surface to justify it) and exposes `diagnostics(path)`/`hover(path,line,col)`.
+   MCP (`src/mcp/mcp.ts`) namespaces external stdio server tools as `mcp__<server>__<tool>`. A missing
+   server of either kind is a message, never a crash.
+9. **Sub-agent forking** — `spawn_fork` runs a child loop (`Agent.fork()`) on the same provider,
+   tools, and permissions (no privilege escalation) — a new *session* (`kind:'fork'`), invisible to
+   the DAG scheduler, capped by `MAX_FORK_DEPTH`.
+10. **File watching** — `src/watch.ts` (`node:fs.watch({recursive:true})`, no `chokidar`) announces
+    edits made outside amux as `external_change` events; a short-TTL set of the engine's own recent
+    write paths stops an agent's own `write_file` from re-triggering itself.
 
 ---
 
-## (2) Key File Map & Export Responsibilities
+## Key file map
 
-| File Path | Primary Responsibility | Exports |
-|---|---|---|
-| `src/cli.ts` | Command-line entry point (`amux`, `keys`, `login`, `resume`, one-shot, interactive session) | Command runner, process lifecycle |
-| `src/config/config.ts` | Validates and parses YAML config (`.amux/agents.yaml`) | `loadAgents()`, `loadMcpServers()` |
-| `src/keystore/keystore.ts` | Key management using OS Keychain (`@napi-rs/keyring`) & env vars | `getKey()`, `setKey()`, `envKey()`, `envVarName()` |
-| `src/events/bus.ts` | Central typed event pub/sub mechanism wrapping `node:events` | `Bus` class, `AgentEvent`, `EventType` |
-| `src/orchestrator/task.ts` | Defines task state types | `Task` interface, `TaskStatus` type |
-| `src/orchestrator/orchestrator.ts` | Atomic shared task queue management and failover assignment | `Orchestrator` class |
-| `src/orchestrator/runner.ts` | Project decomposition and concurrent agent worker task loops | `runProject()`, `runWorker()`, `parseTaskList()` |
-| `src/orchestrator/locks.ts` | Mutex lock registry for concurrent file write and shell operations | `LockRegistry` class |
-| `src/agent/agent.ts` | Multi-turn agent execution loop, tool dispatch, approval & quota checks | `Agent` class, `isDangerousShellCall()`, `overContextThreshold()`, `SHELL_LOCK`, `AgentConfig`, `AgentDeps`, `RunOutcome` |
-| `src/agent/context.ts` | Summarizes older conversation turns when context window fills | `compactTurns()` |
-| `src/providers/provider.ts` | Core provider contract, turn definitions, and rate-limit parsing | `Provider`, `ProviderReply`, `Turn`, `ToolSpec`, `ToolCall`, `ToolResult`, `Usage`, `RateLimit`, `summarizeError()`, `parseRateLimit()` |
-| `src/providers/factory.ts` | Instantiates provider instances based on agent configuration and key storage | `makeProvider()` |
-| `src/providers/catalog.ts` | Static catalog of supported providers, clients, categories, & model seeds | `CATALOG`, `providerKeys()`, `providersByCategory()`, `contextWindow()`, `CatalogEntry`, `ClientKind`, `Category` |
-| `src/providers/catalog.generated.ts` | Auto-generated provider definitions (via `scripts/gen-catalog.ts`) | `GENERATED_CATALOG` |
-| `src/providers/openai.ts` | Provider wrapper for OpenAI and OpenAI-compatible APIs | `OpenAIProvider` class |
-| `src/providers/anthropic.ts` | Provider wrapper for Anthropic SDK | `AnthropicProvider` class |
-| `src/providers/gemini.ts` | Provider wrapper for Google Gemini SDK (`@google/genai`) | `GeminiProvider` class |
-| `src/providers/copilot.ts` | Copilot provider wrapper and OAuth device flow logic | `CopilotProvider` class, `startDeviceFlow()`, `pollForToken()`, `DeviceCodeResponse` |
-| `src/tools/tools.ts` | Sandboxed tools execution (`read_file`, `write_file`, `shell`), path safety check | `runTool()`, `toolSpecs()`, `toSandboxCall()`, `safePath()`, `ToolCall` type |
-| `src/mcp/mcp.ts` | MCP client manager connecting to external stdio MCP servers | `McpManager` class, `extractText()`, `McpTools`, `McpServerConfig` |
-| `src/skills/skills.ts` | Discovers `.amux/skills/*/SKILL.md` frontmatter & builds system prompt addendum | `loadSkills()`, `skillsPrompt()`, `Skill` interface |
-| `src/approval.ts` | Approval queue for human-in-the-loop tool execution gating | `ApprovalQueue` class, `ApprovalRequest`, `PermissionScope`, `Approve` type |
-| `src/usage.ts` | Tracks session token usage and rate limit headers | `UsageTracker` class, `AgentUsage`, `RateLimitSnapshot` |
-| `src/session.ts` | Persists and reloads task session state (`.amux/session.json`) | `saveTasks()`, `loadTasks()` |
-| `src/tui/App.tsx` | Main Ink terminal interface component and view router | `renderTui()`, `App` component |
-| `src/tui/GraphView.tsx` | Visual task dependency tree & failover status view (`/graph`) | `GraphView` component |
-| `src/tui/UsageView.tsx` | Live token and rate limit analytics dashboard (`/usage`) | `UsageView` component |
-| `src/tui/ModelSelector.tsx` | Live model/provider switcher dialog (`/model`) | `ModelSelector` component |
-| `src/tui/theme.ts` | Color palettes and 8-bit avatars per agent role | `themeFor()`, `AVATARS` |
+| File | Responsibility |
+|---|---|
+| `src/cli.ts` | Scripting entry point: one-shot, `serve`, `auth login/list/logout`, `init`, `resume`, `--web`, `--auto` |
+| `src/config/config.ts` | Parses/validates `.amux/agents.yaml`: agents, `permissions:`, `lsp:`, `mcpServers:`, top-level options (`loadOptions`/`loadInstructions`), `saveAgents()` (replaces only the `agents:` key so hand-written config survives a picker relaunch) |
+| `src/permissions.ts` | Wildcard pattern resolver (`resolve()`), `Bun.Glob`-based, layered session→agent→project→default-ask |
+| `src/engine.ts` | Wires agents + orchestrator + messaging + approvals + usage + locks + store + watcher into one `EventHub`; `submit()`/`resume()`/`undo()`/`switchModel()` |
+| `src/agent/agent.ts` | Multi-turn tool loop, `send_message`/`ask_agent`/`spawn_fork`, approval + quota checks, checkpoint-before-write, `maxTurns` override |
+| `src/agent/context.ts` | `compactTurns()` — summarizes older turns near the context ceiling |
+| `src/orchestrator/planner.ts`, `scheduler.ts`, `runner.ts`, `orchestrator.ts`, `locks.ts`, `task.ts` | Goal→DAG planning, concurrent topological execution, the shared task queue, the lock registry |
+| `src/messaging/message-bus.ts` | Cross-provider agent↔agent channel: `post`/`announce`/`authorize`/`drain`, per-pair rate cap |
+| `src/providers/*` | `Provider` interface; `anthropic.ts`/`gemini.ts`/`openai.ts`/`copilot.ts` clients; `catalog.ts` (+ generated) provider metadata; `pricing.ts` cost table; `factory.ts` instantiation |
+| `src/tools/tools.ts` | Sandboxed `read_file`/`write_file`/`edit`/`shell`, `safePath()` jail; `edit` requires a unique `oldString` match |
+| `src/tools/lsp-tools.ts`, `src/lsp/client.ts`, `src/lsp/registry.ts` | `diagnostics`/`hover` tools over hand-rolled LSP JSON-RPC |
+| `src/mcp/mcp.ts` | MCP subprocess manager, `mcp__<server>__<tool>` namespacing |
+| `src/store/db.ts`, `src/store/session-store.ts` | SQLite (WAL) open/migrate; `SessionStore` — sessions/messages/parts, checkpoint/undo, `listSessions`, `recordMessage` |
+| `src/approval.ts` | `ApprovalQueue` — scope grants, batch dialogs, dangerous-pattern override |
+| `src/usage.ts`, `src/providers/pricing.ts` | Per-agent token/rate-limit tracking; per-model cost |
+| `src/session.ts` | `saveTasks`/`loadTasks` (`.amux/session.json`), `resumeConversation()` |
+| `src/watch.ts` | External-edit file watcher, self-write suppression |
+| `src/skills/skills.ts` | `.amux/skills/*/SKILL.md` frontmatter → system-prompt addendum |
+| `src/commands/registry.ts` | Server-side slash-command registry, shared by the TUI and the web dashboard; user commands from `.amux/commands/*.md` |
+| `src/server/server.ts`, `src/server/events.ts`, `src/server/main.ts` | HTTP+SSE API, `EventHub`, headless-core bootstrap + handshake line |
+| `src/auth/auth-store.ts`, `src/keystore/keystore.ts` | Global typed credential store (`~/.config/amux/auth.json` 0600 + OS keychain), env-var fallback |
+| `tui/cmd/amux/main.go` | Spawns/attaches to the core, reads its handshake, runs the picker then the live session |
+| `tui/internal/wizard/{picker,chrome}.go` | Every-launch team picker (size → provider → model → name → description, whole catalog, centered card UI) |
+| `tui/internal/session/{session,view,carousel}.go` | Live multi-agent view: panes/graph/usage, approvals, `ctrl+p` model carousel, `/` command menu |
+| `tui/internal/ui/list.go` | Shared filterable list + centered-box + overlay widgets used by both the picker and the session view |
+| `tui/internal/api/client.go` | Typed HTTP+SSE client mirroring the server's JSON contract |
+| `tui/internal/theme/theme.go` | Color palettes, avatars, theme cycling |
 
 ---
 
-## (3) Data Models / Schemas
+## Data models / schemas
 
-### 1. Configuration Schema (`.amux/agents.yaml`)
+### `.amux/agents.yaml`
+
 ```yaml
 agents:
-  - id: string               # Required. Unique agent identifier (e.g. "architect")
-    provider: string         # Required. Catalog key (e.g. "anthropic", "openai", "custom")
-    model: string            # Required. Model name (e.g. "claude-opus-4-8", "gpt-4o")
-    role: string             # Required. Role display title (e.g. "Architect")
-    systemPrompt: string     # Required. System instruction
-    allowedTools: string[]   # Optional. Allowed built-in tools ("read_file" | "write_file" | "shell")
-    lead: boolean            # Optional. If true, decomposes initial goal into tasks
-    baseURL: string          # Optional. Custom base URL for provider: "custom" or OpenAI-compatible endpoints
-    autoApprove: string[]    # Optional. Tools pre-granted for this agent
+  - id: string               # required, unique
+    provider: string         # required, catalog key
+    model: string            # required
+    role: string              # required, display title
+    systemPrompt: string     # required
+    allowedTools: string[]   # optional
+    lead: boolean            # optional — decomposes the goal into tasks
+    baseURL: string          # optional — custom/OpenAI-compatible endpoint
+    autoApprove: string[]    # optional — tools pre-granted for this agent
+    permissions: {tool: {pattern: allow|ask|deny}}   # optional, per-agent override
 
-mcpServers:                  # Optional list of stdio MCP servers
-  - name: string             # Required. Server identifier
-    command: string          # Required. Binary/executable path
-    args: string[]           # Optional. Command arguments
+permissions: {tool: {pattern: allow|ask|deny}}        # optional, project default
+lsp: {name: {command, args?, extensions}}             # optional language servers
+mcpServers: [{name, command, args?}]                  # optional MCP servers
+
+# top-level options (all optional, all have a working default)
+theme: string          # TUI colours at launch
+auto: boolean          # approve anything not explicitly denied
+watch: boolean         # announce external edits (default true)
+instructions: string[] # files appended to every agent's system prompt
+maxTurns: number       # tool-loop cap per agent turn (default 12)
+maxAgents: number      # refuse to load a bigger team than this
 ```
 
-### 2. Task Model (`Task`)
+`saveAgents()` rewrites only the `agents:` key — every other block above survives a relaunch of the
+team picker.
+
+### Task (`src/orchestrator/task.ts`)
+
 ```typescript
 type TaskStatus = "pending" | "in_progress" | "done" | "failed";
-
 interface Task {
-  id: string;                // Formatted as "t1", "t2", etc.
-  description: string;       // Subtask description
-  assignedTo?: string;       // Currently assigned agent ID
-  status: TaskStatus;        // Lifecycle status
-  attempts?: number;         // Number of failover retries
-  lastFailedBy?: string;     // Agent ID that most recently failed/exhausted this task
-  availableAt?: number;      // Epoch ms timestamp before which task cannot be claimed
+  id: string; description: string; assignedTo?: string; status: TaskStatus;
+  attempts?: number; lastFailedBy?: string; availableAt?: number; dependsOn?: string[];
 }
 ```
 
-### 3. Event Model (`AgentEvent`)
+### Event (`src/events/bus.ts`)
+
 ```typescript
-type EventType =
-  | "thought"     // Agent status / planning log
-  | "tool_call"   // Tool invocation notification
-  | "file_edit"   // Successful tool execution outcome
-  | "delta"       // Streaming response chunk
-  | "message"     // Final agent text output
-  | "failover"    // Task reassignment notification
-  | "warning"     // Token limit or rate limit warning
-  | "done"        // Agent task loop completed
-  | "error";      // Error encountered
-
-interface AgentEvent {
-  agentId: string;
-  type: EventType;
-  payload: string;
-  time: number;   // Epoch ms timestamp
-}
+type EventType = "thought" | "tool_call" | "file_edit" | "delta" | "message"
+  | "failover" | "warning" | "done" | "error" | "external_change";
+interface AgentEvent { agentId: string; type: EventType; payload: string; time: number; }
 ```
 
-### 4. Turn & Tool Provider Models
+### Turn / provider contract (`src/providers/provider.ts`)
+
 ```typescript
 type Turn =
   | { role: "user"; text: string }
   | { role: "assistant"; text: string; toolCalls: ToolCall[]; raw?: unknown }
   | { role: "tool"; results: ToolResult[] };
 
-interface ToolSpec {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>; // JSON Schema object
+interface Provider {
+  send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: (text: string) => void): Promise<ProviderReply>;
 }
-
-interface ToolCall {
-  id: string;
-  name: string;
-  input: Record<string, unknown>;
-}
-
-interface ToolResult {
-  id: string;
-  name: string;
-  output: string;
-}
-
-interface ProviderReply {
-  text: string;
-  toolCalls: ToolCall[];
-  raw?: unknown;
-  usage?: Usage;
-  rateLimit?: RateLimit;
-}
+interface ProviderReply { text: string; toolCalls: ToolCall[]; raw?: unknown; usage?: Usage; rateLimit?: RateLimit; }
 ```
 
-### 5. Session State Schema (`.amux/session.json`)
+### Persistence (`src/store/session-store.ts`)
+
+```typescript
+type SessionKind = "task" | "fork" | "ask" | "respond";
+type PartType = "text" | "tool_call" | "tool_result" | "raw" | "file_ref";
+// sessions(id, agentId, taskId?, parentSessionId?, kind, provider, model, status, ...)
+// messages(id, sessionId, role, seq, tokens...) → parts(id, messageId, seq, type, content)
+// checkpoints(id, sessionId, path, content|null, createdAt) — undone LIFO by /undo
+```
+
+### `.amux/session.json` (unchanged since v1 — tasks only, not conversations)
+
 ```json
-{
-  "tasks": [
-    {
-      "id": "t1",
-      "description": "Add /health route",
-      "assignedTo": "architect",
-      "status": "done",
-      "attempts": 0
-    }
-  ]
-}
+{ "tasks": [{ "id": "t1", "description": "Add /health route", "assignedTo": "architect", "status": "done", "attempts": 0 }] }
 ```
 
 ---
 
-## (4) Current API Contracts
+## Current API surface
 
-### 1. Provider Core Contract
-```typescript
-interface Provider {
-  send(
-    sysPrompt: string,
-    turns: Turn[],
-    tools: ToolSpec[],
-    onDelta?: (text: string) => void
-  ): Promise<ProviderReply>;
-}
-```
+### HTTP + SSE (`src/server/server.ts`)
 
-### 2. Orchestrator Contract
-```typescript
-class Orchestrator {
-  addTask(description: string): Task;
-  load(tasks: Task[]): void;
-  clear(): void;
-  claimTask(agentId: string): Task | undefined;
-  complete(task: Task, ok: boolean): void;
-  requeue(task: Task, agentId: string): void;
-  hasUnfinished(): boolean;
-  get all(): readonly Task[];
-}
-```
+`POST /session · POST /prompt · POST /cancel · POST /undo · GET/POST /commands(/:name) · GET /sessions
+· GET/POST /agents · GET /providers · GET /models · POST /model · GET/POST/DELETE /auth · POST
+/approval · GET /events (SSE)`.
 
-### 3. Tool Sandbox Executable Contract
-```typescript
-type ToolCall =
-  | { tool: "read_file"; path: string }
-  | { tool: "write_file"; path: string; content: string }
-  | { tool: "shell"; command: string; args: string[] };
+### Slash commands (`src/commands/registry.ts`, shared by the TUI and the web dashboard)
 
-function runTool(call: ToolCall, allowed: string[], root?: string): Promise<string>;
-```
+`/help /status /agents /tasks /mcp /lsp /permissions /cost /resume /clear /init /model /sessions
+/undo /cancel /panes /graph /usage`, plus client-side `/theme` and `/quit`, plus project-defined
+commands from `.amux/commands/<name>.md` (frontmatter + `$ARGUMENTS`-interpolated body).
 
-### 4. MCP Tools Management Contract
-```typescript
-interface McpTools {
-  toolSpecs(): ToolSpec[];
-  has(name: string): boolean;
-  call(name: string, input: Record<string, unknown>): Promise<string>;
-}
-```
+### TUI interaction (Go, `tui/internal/session`)
 
-### 5. Approval Queue Contract
-```typescript
-class ApprovalQueue {
-  grant(agentId: string, tool: string, pathPattern?: string): void;
-  isAllowed(agentId: string, tool: string, input?: Record<string, unknown>): boolean;
-  request(agentId: string, tool: string, input: Record<string, unknown>, forceAsk?: boolean): Promise<boolean>;
-  current(): ApprovalRequest | undefined;
-  currentBatch(): readonly ApprovalRequest[] | undefined;
-  answer(ok: boolean, scope?: "agent" | "path"): void;
-  approveAll(): void;
-  denyAll(): void;
-  approveAgent(agentId: string): void;
-}
-```
+- Typing `/` opens a filtered command menu above the prompt bar (prefix matches rank first); `tab`
+  completes, `enter` runs, `esc` dismisses.
+- `ctrl+p` opens the model carousel — pick a teammate (skipped for a solo team), then filter/pick a
+  model from any provider with a stored key; `/model <agentId> <provider/model>` still works for
+  scripting.
+- `shift+tab` toggles BUILD/PLAN mode; `Tab` cycles panes/graph/usage; `y`/`a`/`n` answers approvals;
+  `ctrl+t` cycles the theme.
 
-### 6. Event Bus Contract
-```typescript
-class Bus {
-  publish(e: AgentEvent): void;
-  subscribe(fn: (e: AgentEvent) => void): () => void;
-}
-```
+### CLI (`src/cli.ts`)
 
-### 7. CLI Invocation Contracts
+`amux-core "<prompt>"` (one-shot) · `amux-core resume` · `amux-core serve [--auto] [--port=]` ·
+`amux-core auth login/list/logout <provider>` · `amux-core login copilot` · `amux-core init` ·
+`amux-core --web "<prompt>"`.
+
+---
+
+## What's implemented and verified
+
+Covered by `bun test` (215+ tests, 0 fail — flaky-test rate near zero, not chased further) and
+`bunx tsc --noEmit` (clean), plus `cd tui && go build ./... && go vet ./... && go test ./...` (clean)
+and a live server smoke test:
+
+| Area | Files |
+|---|---|
+| Global typed auth store (0600 + keychain, logout revokes) | `src/auth/auth-store.ts`, `src/keystore/keystore.ts` |
+| Inter-agent messaging (routing, edge auth, rate cap, sync `ask` vs async `send`) | `src/messaging/message-bus.ts` |
+| Orchestrator planner → validated DAG | `src/orchestrator/planner.ts` |
+| Scheduler (topological order, concurrency, cycle rejection, hand-offs, integrate) | `src/orchestrator/scheduler.ts` |
+| Agent loop + coordination tools + inbox injection + forking | `src/agent/agent.ts` |
+| SQLite persistence: sessions/messages/parts, checkpoint/undo, resume | `src/store/*` |
+| Wildcard permission resolver, `--auto`, dangerous-pattern override | `src/permissions.ts` |
+| LSP client/registry + tools, alongside MCP | `src/lsp/*`, `src/tools/lsp-tools.ts` |
+| File watcher + `external_change` events | `src/watch.ts` |
+| Server-side command registry + user-defined commands | `src/commands/registry.ts` |
+| Local HTTP + SSE server (constant-time token auth, replay, routes, static dashboard) | `src/server/*` |
+| Go + Bubbletea TUI: every-launch team picker, live session view, model carousel, command menu | `tui/internal/*` |
+| Web dashboard (self-contained SSE force-graph, tasks, messages, usage) | `web/*` |
+
+The headline end-to-end path — orchestrator plans a DAG, a frontend agent **asks the backend agent
+directly**, the answer flows back without clobbering the frontend's task output, and every message
+streams over SSE — is asserted in `src/engine.test.ts` and `src/server/server.test.ts`.
+
+## Bugs found and fixed during adversarial review (kept for history)
+
+- `compactTurns()` could split a tool-call/tool-result pair when `injectInbox()`'s extra turn shifted
+  the parity of a fixed-size tail slice. Fixed: the cut point now walks back to never start on an
+  orphaned `tool` turn.
+- Cancellation didn't stop a task's exhausted-retry/backoff loop or the final integrate call — both
+  now check `shouldStop()`.
+- `normalizePlan()` could silently mis-resolve a dependency when the model reused an id across two
+  tasks; ambiguous ids are now tracked and dropped instead of guessed at.
+- `Engine.switchModel()` had no guard against swapping an agent's provider mid-loop, which could send
+  one provider's turn history (e.g. Anthropic's opaque `raw` thinking blocks) to a different provider.
+  `Agent` tracks in-flight calls with a counter (not a boolean — `run()`/`respond()` legitimately
+  overlap via `ask_agent`) and rejects a live switch while busy.
+- The server's bearer-token check used `!==` instead of a constant-time comparison — a timing
+  side-channel on the sole auth gate. Now `timingSafeEqual`.
+- Go TUI: `truncate()` panicked on any terminal narrow enough to make a computed width ≤0. Now clamps.
+- Go TUI: `StreamEvents` returned quietly on any disconnect with no way to tell "asked to stop" from
+  "should reconnect," freezing the TUI on the last frame. Now a distinguishable `ErrStreamDisconnected`
+  with capped-backoff reconnect and last-seen-`seq` replay.
+- Go TUI: the SSE line buffer was capped at 4MB with no distinct overflow error; raised to 32MB with a
+  documented ceiling and a real error on overflow.
+- Go TUI: approval keys fired bare `go func(){}` goroutines with discarded errors, risking
+  duplicate/misdirected approvals on a fast double-press. Converted to `tea.Cmd` with an optimistic
+  local pop.
+- Go TUI: `saveAgents()` (server-side) used to rewrite the whole `agents.yaml`, silently deleting
+  `permissions:`/`lsp:`/`mcpServers:`/options next to it on every picker relaunch — fixed to replace
+  only the `agents:` key.
+
+## Known simplifications (ponytail ceilings)
+
+- Same-agent retry-with-backoff on exhaustion rather than live reassignment to a different (possibly
+  busy) agent — avoids concurrency races; upgrade if cross-agent failover is needed.
+- Credential validation is deferred to first use (no live provider ping on `auth` save).
+- Re-planning after integrate is not implemented (the orchestrator reviews + summarizes only).
+- The web dashboard is a read-only viewer (no prompt submission from the browser).
+- One global shell lock (`*shell*`) rather than per-path — real path extraction from an arbitrary
+  shell command is a guessing game; upgrade only if shell contention shows up in practice.
+- File watching has no debounce or full `.gitignore` parsing, just an inline ignore list.
+- The tool sandbox is path-prefix jailed, not container/seccomp isolated (symlink escapes possible).
+- MCP servers are shared across agents, not per-agent scoped.
+- Agent-to-agent messaging is open within a run rather than restricted to the plan's declared edges —
+  deliberate (see architecture point 6), not an oversight.
+- Of the three sign-in options, only GitHub Copilot's OAuth is wired.
+
+## Explicitly out of scope (named, not silently dropped)
+
+| Surface | Decision | Reason |
+|---|---|---|
+| ACP (Zed/VS Code embedding) | Out of scope | amux is a standalone CLI/TUI, no IDE host to embed into |
+| Desktop app (SolidJS) | Out of scope | Terminal + optional web dashboard is the UI surface |
+| 20+ TUI themes | Deferred | Pure polish, addable to `tui/internal/theme/theme.go` any time |
+| Frecency-based autocomplete | Deferred | UX polish on top of the command registry, not parity-critical |
+| tree-sitter | Descoped, subprocess LSP instead | No syntax-highlighting UI surface to justify it |
+| Dedicated `git_diff` tool | Descoped, `shell` + permissions instead | Redundant once wildcard permissions exist |
+| Commit-boundary checkpointing | Descoped, per-write checkpoints instead | Strictly coarser for more code |
+| WebSocket transport | Deferred | SSE already covers every event type for single-client use |
+| Multi-project `EngineManager` | Deferred | Real scope beyond single-project use; not yet needed |
+
+## Run it
+
 ```sh
-amux                         # Launches interactive session with TUI
-amux "<prompt>"              # Executes one-shot task and exits
-amux resume                  # Reloads prior task list from .amux/session.json
-amux keys set <provider>     # Stores API key in OS keychain
-amux login copilot           # Executes GitHub Copilot OAuth device code login
+bun install
+bun run build:tui                          # builds ./amux (the Go TUI) — do this once, or after tui/ changes
+./amux                                     # every launch: pick the team (1–5 models), then the live session
+
+# headless/scripting:
+bun run src/cli.ts init
+bun run src/cli.ts "build me a clothing website for gen-z"
+bun run src/cli.ts --web "build me a clothing website for gen-z"
+bun run src/server/main.ts
 ```
 
-### 8. Interactive TUI Commands
-- `/model`: Opens interactive modal to select agent, provider, and model live.
-- `/usage`: Toggles live per-agent token consumption & rate-limit quotas view.
-- `/graph`: Toggles live agent-to-task tree execution graph.
-- `/clear`: Clears task list and resets task queue for fresh prompt submission.
+## Verification
+
+```sh
+bun test                 # TypeScript unit + integration tests
+bunx tsc --noEmit        # typecheck
+cd tui && go build ./... && go vet ./... && go test ./...   # Go TUI
+```

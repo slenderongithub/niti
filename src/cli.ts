@@ -14,7 +14,7 @@
 //     amux-core login copilot       → sign in with a GitHub Copilot subscription
 import { makeProvider } from "./providers/factory.ts";
 import { Engine } from "./engine.ts";
-import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, saveAgents } from "./config/config.ts";
+import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions, saveAgents } from "./config/config.ts";
 import { LspRegistry } from "./lsp/registry.ts";
 import { McpManager } from "./mcp/mcp.ts";
 import { setKey } from "./keystore/keystore.ts";
@@ -162,7 +162,8 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
 // --- helpers ---------------------------------------------------------------
 async function buildEngine(interactive: boolean): Promise<Engine> {
   const configs = loadAgents();
-  const skillText = skillsPrompt(loadSkills());
+  const options = loadOptions();
+  const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions);
   const mcpServers = loadMcpServers();
   let mcp: McpManager | undefined;
   if (mcpServers.length) {
@@ -177,8 +178,10 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
     interactive,
     store: new SessionStore(openDb()),
     permissions: loadPermissions(),
-    auto: args.includes("--auto"),
+    auto: args.includes("--auto") || options.auto,
     lsp: new LspRegistry(loadLspServers()),
+    watch: options.watch,
+    maxTurns: options.maxTurns,
   });
 }
 

@@ -27,7 +27,10 @@ const CONTENT_TYPES: Record<string, string> = {
 // A private-by-default local server (127.0.0.1 + a bearer token from the handshake). The Go TUI
 // sends the token as a header; the browser dashboard passes it as ?token= (EventSource can't set
 // headers). Static dashboard assets are public; every data route is gated.
-export function startServer(engine: Engine, opts: { port?: number; token?: string; webDir?: string; commands?: CommandRegistry } = {}): ServerHandle {
+export function startServer(
+  engine: Engine,
+  opts: { port?: number; token?: string; webDir?: string; commands?: CommandRegistry; theme?: string } = {},
+): ServerHandle {
   const token = opts.token ?? crypto.randomUUID();
   const webDir = opts.webDir ?? new URL("../../web", import.meta.url).pathname;
   const commands = opts.commands ?? new CommandRegistry();
@@ -111,6 +114,7 @@ export function startServer(engine: Engine, opts: { port?: number; token?: strin
           lsp: engine.lsp?.list() ?? [],
           mcp: engine.mcp?.servers?.() ?? [],
           contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider)])),
+          theme: opts.theme ?? "", // `theme:` from agents.yaml — the TUI applies it at launch
         });
       }
 

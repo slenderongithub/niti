@@ -2,7 +2,7 @@
 
 This is the original amux interactive terminal UI, built with [Ink](https://github.com/vadimdemedes/ink)
 (React for CLIs). It has been **superseded by `tui/`** (Go + Bubbletea) as the primary interactive
-front end, per the v2 client/server overhaul (see `../../BUILD_STATUS.md`).
+front end, per the v2 client/server overhaul (see `../../project_context.md`).
 
 **Status: archived, not maintained, not part of the build.** It is kept here for reference and in
 case it's ever useful again — not deleted outright. It is excluded from the root project's

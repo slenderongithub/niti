@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { Engine } from "../engine.ts";
-import { loadAgents, loadMcpServers, loadPermissions, loadLspServers } from "../config/config.ts";
+import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions } from "../config/config.ts";
 import { LspRegistry } from "../lsp/registry.ts";
 import { makeProvider } from "../providers/factory.ts";
 import { McpManager } from "../mcp/mcp.ts";
@@ -23,7 +23,8 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   // /agents against a live server. Once agents.yaml exists we load it (invalid files still throw).
   const configs = existsSync(".amux/agents.yaml") ? loadAgents() : [];
   if (!configs.length) console.error("amux: no agents configured yet — running in setup mode");
-  const skillText = skillsPrompt(loadSkills());
+  const options = loadOptions();
+  const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions);
 
   const mcpServers = loadMcpServers();
   let mcp: McpManager | undefined;
@@ -40,13 +41,16 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
     interactive: opts.interactive ?? true, // gate write_file/shell through approvals by default
     store: new SessionStore(openDb()),
     permissions: loadPermissions(),
-    auto: opts.auto,
+    auto: opts.auto || options.auto, // the flag and the config both turn it on; neither can turn the other off
     lsp: new LspRegistry(loadLspServers()),
-    watch: true, // a long-lived server is exactly where an external edit is worth announcing
+    // A long-lived server is exactly where an external edit is worth announcing, so watching is on
+    // unless agents.yaml explicitly says otherwise.
+    watch: options.watch ?? true,
+    maxTurns: options.maxTurns,
   });
   engine.orch.load(loadTasks()); // show any prior tasks on connect
 
-  const server = startServer(engine, { port: opts.port });
+  const server = startServer(engine, { port: opts.port, theme: options.theme });
   // Handshake — the ONLY thing on stdout, first line, machine-readable for the Go TUI.
   process.stdout.write(JSON.stringify({ amuxServer: { url: server.url, token: server.token } }) + "\n");
   return { engine, server };

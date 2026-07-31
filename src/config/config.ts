@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { parse, stringify } from "yaml";
 import type { AgentConfig } from "../agent/agent.ts";
 import type { McpServerConfig } from "../mcp/mcp.ts";
@@ -14,7 +14,51 @@ export function loadAgents(path = ".amux/agents.yaml"): AgentConfig[] {
   if (!Array.isArray(agents) || agents.length === 0) {
     throw new Error(`${path}: expected a non-empty 'agents:' list`);
   }
+  const max = typeof raw?.maxAgents === "number" && raw.maxAgents > 0 ? raw.maxAgents : undefined;
+  if (max && agents.length > max) {
+    throw new Error(`${path}: ${agents.length} agents configured but maxAgents is ${max}`);
+  }
   return agents.map((a, i) => validate(a, i, path));
+}
+
+// Everything in .amux/agents.yaml that isn't an agent, a permission rule or a server: the knobs
+// that used to be constants or CLI-only flags. All optional — an agents.yaml with none of them
+// behaves exactly as before.
+export interface AmuxOptions {
+  theme?: string; // TUI colour scheme, applied at launch (see tui/internal/theme)
+  auto?: boolean; // approve anything not explicitly denied (same as --auto; dangerous commands still prompt)
+  watch?: boolean; // false → stop announcing edits made outside amux
+  instructions?: string[]; // files (AGENTS.md, CLAUDE.md, …) appended to every agent's system prompt
+  maxTurns?: number; // tool-loop cap per agent turn; the built-in default is 12
+  maxAgents?: number; // ceiling on team size, enforced when agents.yaml is loaded
+}
+
+export function loadOptions(path = ".amux/agents.yaml"): AmuxOptions {
+  if (!existsSync(path)) return {};
+  const raw = (parse(readFileSync(path, "utf8")) ?? {}) as Record<string, unknown>;
+  const num = (v: unknown): number | undefined => (typeof v === "number" && v > 0 ? v : undefined);
+  return {
+    theme: typeof raw.theme === "string" ? raw.theme : undefined,
+    auto: raw.auto === true,
+    watch: raw.watch === undefined ? undefined : raw.watch !== false,
+    instructions: Array.isArray(raw.instructions) ? raw.instructions.filter((i): i is string => typeof i === "string") : undefined,
+    maxTurns: num(raw.maxTurns),
+    maxAgents: num(raw.maxAgents),
+  };
+}
+
+// The contents of every `instructions:` file, concatenated for the system prompt. A listed file
+// that doesn't exist is skipped rather than fatal — AGENTS.md is commonly listed before it's
+// written, and half a prompt beats a core that won't boot.
+export function loadInstructions(files: string[] = [], root = process.cwd()): string {
+  const parts: string[] = [];
+  for (const f of files) {
+    const p = f.startsWith("/") ? f : join(root, f);
+    if (!existsSync(p)) continue;
+    const body = readFileSync(p, "utf8").trim();
+    if (body) parts.push(`\n\n# Project instructions (${f})\n\n${body}`);
+  }
+  return parts.join("");
 }
 
 // Project-wide tool policy under a top-level `permissions:` block — the layer consulted when an
@@ -54,11 +98,17 @@ export function loadMcpServers(path = ".amux/agents.yaml"): McpServerConfig[] {
   });
 }
 
-// Persist role assignments back to .amux/agents.yaml (written by the onboarding wizard and the
-// live /model switcher so changes survive a restart). Keys never land here — they're in auth.json.
+// Persist role assignments back to .amux/agents.yaml (written by the team picker and the live
+// /model switcher so changes survive a restart). Keys never land here — they're in auth.json.
+//
+// Only the `agents:` key is replaced: the picker runs on every launch, and rewriting the file from
+// scratch would silently delete the permissions/lsp/mcpServers blocks and every option next to
+// them — config the user hand-wrote and never asked to have touched.
 export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): void {
   mkdirSync(dirname(path), { recursive: true });
+  const existing = existsSync(path) ? ((parse(readFileSync(path, "utf8")) ?? {}) as Record<string, unknown>) : {};
   const doc = {
+    ...existing,
     agents: agents.map((a) => ({
       id: a.id,
       provider: a.provider,

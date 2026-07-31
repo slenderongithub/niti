@@ -1,9 +1,8 @@
-// Picker is the every-launch model/role selection flow: pick a model + designation from providers
-// that already have a key stored, optionally add up to MaxAgents, then hand off to the session.
-// Unlike Model (the first-run onboarding wizard, which also collects API keys), Picker assumes
-// credentials already exist — it runs on every `./amux`, not just the first one, because a static
-// agents.yaml stops being useful the moment you want to try a different model without hand-editing
-// YAML.
+// Picker is the every-launch team selection flow: choose how many teammates you want (1–5), then
+// for each one pick a provider and model from the full catalog, name it, and say what it does.
+// Unlike Model (the first-run onboarding wizard) it doesn't insist on collecting credentials up
+// front — a provider without a stored key simply asks for one at the moment you choose it, which
+// is why the whole catalog can be offered here rather than only the providers already set up.
 package wizard
 
 import (
@@ -13,6 +12,7 @@ import (
 
 	"github.com/amux/tui/internal/api"
 	"github.com/amux/tui/internal/theme"
+	"github.com/amux/tui/internal/ui"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -21,8 +21,9 @@ import (
 const MaxAgents = 5
 
 type providersMsg struct {
-	creds []api.Credential
-	err   error
+	creds     []api.Credential
+	providers []api.ProviderInfo
+	err       error
 }
 
 type modelsMsg struct {
@@ -33,13 +34,17 @@ type modelsMsg struct {
 type Picker struct {
 	client    *api.Client
 	input     textinput.Model
-	stage     string // loading | provider | model | role | again | orchestrator | error
+	list      ui.List
+	stage     string // loading | size | provider | key | model | role | desc | orchestrator | error
 	status    string
 	err       string
-	providers []string // provider ids with a stored credential
-	models    []string // catalog models for the currently chosen provider
+	creds     map[string]bool    // provider id → a credential is already stored
+	providers []api.ProviderInfo // the whole catalog, credentialed ones first
+	models    []string           // catalog models for the currently chosen provider
+	teamSize  int                // how many teammates the user asked for
 	provider  string
 	pendModel string
+	pendRole  string
 	roles     []api.AgentConfig
 	usedIDs   map[string]bool
 	Completed bool
@@ -52,18 +57,25 @@ func NewPicker(client *api.Client) Picker {
 	ti := textinput.New()
 	ti.Focus()
 	ti.CharLimit = 200
-	ti.Prompt = "" // the frame draws its own ▸
-	return Picker{client: client, input: ti, stage: "loading", usedIDs: map[string]bool{}}
+	ti.Prompt = "" // the card draws its own ▸
+	return Picker{client: client, input: ti, stage: "loading", usedIDs: map[string]bool{}, creds: map[string]bool{}}
 }
 
 func (m Picker) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, fetchCredentials(m.client))
+	return tea.Batch(textinput.Blink, fetchCatalog(m.client))
 }
 
-func fetchCredentials(client *api.Client) tea.Cmd {
+// One command for both halves of "what can I pick": the provider catalog and which of those
+// already have a key. Either failing alone isn't fatal — an empty catalog still lets you type an
+// id, and an unreadable credential list just means nothing is marked as ready.
+func fetchCatalog(client *api.Client) tea.Cmd {
 	return func() tea.Msg {
-		creds, err := client.Credentials()
-		return providersMsg{creds: creds, err: err}
+		providers, err := client.AllProviders()
+		creds, credErr := client.Credentials()
+		if err == nil && credErr != nil {
+			err = credErr
+		}
+		return providersMsg{creds: creds, providers: providers, err: err}
 	}
 }
 
@@ -78,33 +90,24 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.input.Width = msg.Width - 5
+		m.input.Width = max(msg.Width-12, 20)
 		return m, nil
 
 	case providersMsg:
-		if msg.err != nil {
-			m.stage, m.err = "error", "could not load credentials: "+msg.err.Error()
+		if len(msg.providers) == 0 {
+			m.stage, m.err = "error", "could not load the provider catalog: "+errText(msg.err)
 			return m, nil
 		}
-		seen := map[string]bool{}
 		for _, c := range msg.creds {
-			if !seen[c.Provider] {
-				seen[c.Provider] = true
-				m.providers = append(m.providers, c.Provider)
-			}
+			m.creds[c.Provider] = true
 		}
-		if len(m.providers) == 0 {
-			m.stage, m.err = "error", "no providers configured — run 'amux-core auth login <provider>' first"
-			return m, nil
-		}
-		m.stage = "provider"
-		m.input.Placeholder = "provider number, or type an id"
+		m.providers = sortProviders(msg.providers, m.creds)
+		m.toSize()
 		return m, nil
 
 	case modelsMsg:
-		m.models = msg.models // an error or an empty catalog just means "type your own model id" below
-		m.stage = "model"
-		m.input.Placeholder = "model number, or type a model id"
+		m.models = msg.models // an error or an empty catalog just means "type your own model id"
+		m.toModel()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -112,68 +115,127 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+		case "up", "ctrl+p", "shift+tab":
+			m.list.Move(-1)
+			return m, nil
+		case "down", "ctrl+n", "tab":
+			m.list.Move(1)
+			return m, nil
+		case "esc":
+			return m.back()
 		case "enter":
 			return m.advance(strings.TrimSpace(m.input.Value()))
 		}
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	if m.listStage() {
+		m.list.SetQuery(m.input.Value()) // typing narrows the list instead of being read literally
+	}
 	return m, cmd
+}
+
+func (m Picker) listStage() bool {
+	switch m.stage {
+	case "size", "provider", "model", "orchestrator":
+		return true
+	}
+	return false
+}
+
+// choice is what enter means on a list stage: the highlighted row, or — when the typed text
+// matches nothing — the text itself, so a model id missing from the catalog is still reachable.
+func (m Picker) choice(typed string) string {
+	if it, ok := m.list.Selected(); ok {
+		return it.Value
+	}
+	return typed
 }
 
 func (m Picker) advance(val string) (tea.Model, tea.Cmd) {
 	m.status = ""
+	pick := m.choice(val)
 	m.input.SetValue("")
+
 	switch m.stage {
-	case "provider":
-		provider := resolveByNumber(val, m.providers)
-		if provider == "" {
-			m.status = "unknown provider — pick a number from the list, or type its id"
+	case "size":
+		n, err := strconv.Atoi(pick)
+		if err != nil || n < 1 || n > MaxAgents {
+			m.status = fmt.Sprintf("pick a number from 1 to %d", MaxAgents)
 			return m, nil
 		}
-		m.provider = provider
+		m.teamSize = n
+		m.toProvider()
+		return m, nil
+
+	case "provider":
+		if pick == "" {
+			m.status = "pick a provider"
+			return m, nil
+		}
+		m.provider = pick
+		if !m.creds[pick] {
+			// Chosen but not set up: collect the key here rather than sending the user back to a
+			// separate onboarding run just because they picked something new.
+			m.stage = "key"
+			m.list.Set(nil)
+			m.input.Placeholder = "API key for " + pick + " (or a base URL for a local endpoint)"
+			return m, nil
+		}
 		m.models = nil
 		m.stage = "loading"
-		return m, fetchModels(m.client, provider)
+		return m, fetchModels(m.client, pick)
 
-	case "model":
-		model := val
-		if n, err := strconv.Atoi(val); err == nil && n >= 1 && n <= len(m.models) {
-			model = m.models[n-1]
-		}
-		if model == "" {
-			m.status = "enter a model number or id"
+	case "key":
+		if val == "" {
+			m.status = "a key (or base URL) is needed to use " + m.provider
 			return m, nil
 		}
-		m.pendModel = model
+		cred := map[string]string{"provider": m.provider, "type": "api", "key": val}
+		if strings.HasPrefix(val, "http") {
+			cred = map[string]string{"provider": m.provider, "type": "local", "baseURL": val}
+		}
+		if err := m.client.SaveAuth(cred); err != nil {
+			m.status = "auth error: " + err.Error()
+			return m, nil
+		}
+		m.creds[m.provider] = true
+		m.status = "✓ saved " + m.provider
+		m.models = nil
+		m.stage = "loading"
+		return m, fetchModels(m.client, m.provider)
+
+	case "model":
+		if pick == "" {
+			m.status = "pick a model, or type an id"
+			return m, nil
+		}
+		m.pendModel = pick
 		m.stage = "role"
-		m.input.Placeholder = "designation for this model (e.g. Frontend Designer)"
+		m.list.Set(nil)
+		m.input.Placeholder = "designation (e.g. Frontend Designer)"
 		return m, nil
 
 	case "role":
-		role := val
-		if role == "" {
-			role = "Engineer"
+		m.pendRole = val
+		if m.pendRole == "" {
+			m.pendRole = fmt.Sprintf("Engineer %d", len(m.roles)+1)
 		}
-		m.addRole(m.provider, m.pendModel, role)
-		m.status = fmt.Sprintf("✓ %s → %s/%s", role, m.provider, m.pendModel)
-		if len(m.roles) >= MaxAgents {
-			return m.toOrchestratorOrFinish()
-		}
-		m.stage = "again"
-		m.input.Placeholder = fmt.Sprintf("[1] start building   [2] choose another model (%d/%d)", len(m.roles), MaxAgents)
+		m.stage = "desc"
+		m.input.Placeholder = "what does " + m.pendRole + " do? (enter to skip)"
 		return m, nil
 
-	case "again":
-		if val == "2" || strings.HasPrefix(strings.ToLower(val), "a") { // "add"/"another"
-			m.stage = "provider"
-			m.input.Placeholder = "provider number, or type an id"
-			return m, nil
+	case "desc":
+		m.addRole(m.provider, m.pendModel, m.pendRole, val)
+		m.status = fmt.Sprintf("✓ %s → %s/%s", m.pendRole, m.provider, m.pendModel)
+		if len(m.roles) >= m.teamSize {
+			return m.toOrchestratorOrFinish()
 		}
-		return m.toOrchestratorOrFinish()
+		m.toProvider()
+		return m, nil
 
 	case "orchestrator":
-		idx, _ := strconv.Atoi(val)
+		idx, _ := strconv.Atoi(pick)
 		if idx < 1 || idx > len(m.roles) {
 			idx = 1
 		}
@@ -185,12 +247,94 @@ func (m Picker) advance(val string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// Once the model/role loop ends (user chose "start building", or the MaxAgents cap was hit): a
-// single agent needs no orchestrator prompt (it leads by default); more than one asks which leads.
+// back steps one prompt at a time. A five-member setup is twenty answers deep — without this, one
+// mistyped model id means starting the whole thing over.
+func (m Picker) back() (tea.Model, tea.Cmd) {
+	m.status = ""
+	m.input.SetValue("")
+	switch m.stage {
+	case "provider":
+		if len(m.roles) > 0 { // undo the last completed teammate rather than re-picking the size
+			last := m.roles[len(m.roles)-1]
+			delete(m.usedIDs, last.ID)
+			m.roles = m.roles[:len(m.roles)-1]
+			m.toProvider()
+			return m, nil
+		}
+		m.toSize()
+	case "key", "model":
+		m.toProvider()
+	case "role":
+		m.toModel()
+	case "desc":
+		m.stage = "role"
+		m.input.Placeholder = "designation (e.g. Frontend Designer)"
+	case "orchestrator":
+		if len(m.roles) > 0 {
+			last := m.roles[len(m.roles)-1]
+			delete(m.usedIDs, last.ID)
+			m.roles = m.roles[:len(m.roles)-1]
+		}
+		m.toProvider()
+	}
+	return m, nil
+}
+
+func (m *Picker) toSize() {
+	m.stage = "size"
+	items := make([]ui.Item, 0, MaxAgents)
+	for i := 1; i <= MaxAgents; i++ {
+		label := fmt.Sprintf("%d teammate", i)
+		if i > 1 {
+			label += "s"
+		}
+		items = append(items, ui.Item{Label: label, Value: strconv.Itoa(i), Desc: teamHint(i)})
+	}
+	m.list.Set(items)
+	m.input.Placeholder = "how big is the team?"
+}
+
+func teamHint(n int) string {
+	switch n {
+	case 1:
+		return "solo — one model does everything"
+	case 2:
+		return "a lead and a builder"
+	default:
+		return fmt.Sprintf("%d models working in parallel", n)
+	}
+}
+
+func (m *Picker) toProvider() {
+	m.stage = "provider"
+	items := make([]ui.Item, 0, len(m.providers))
+	for _, p := range m.providers {
+		tag, desc := "○", p.Category
+		if m.creds[p.ID] {
+			tag, desc = "✓", p.Category+" · key stored"
+		}
+		items = append(items, ui.Item{Label: p.Label, Value: p.ID, Desc: desc, Tag: tag})
+	}
+	m.list.Set(items)
+	m.input.Placeholder = fmt.Sprintf("teammate %d of %d — filter providers…", len(m.roles)+1, m.teamSize)
+}
+
+func (m *Picker) toModel() {
+	m.stage = "model"
+	items := make([]ui.Item, 0, len(m.models))
+	for _, mo := range m.models {
+		items = append(items, ui.Item{Label: mo, Value: mo})
+	}
+	m.list.Set(items)
+	m.input.Placeholder = "filter models, or type any model id"
+}
+
+// Once every teammate is configured: a single agent needs no orchestrator prompt (it leads by
+// default); more than one asks which one looks over the rest.
 func (m Picker) toOrchestratorOrFinish() (tea.Model, tea.Cmd) {
 	if len(m.roles) == 0 {
 		m.status = "add at least one model first"
-		m.stage = "provider"
+		m.toProvider()
 		return m, nil
 	}
 	if len(m.roles) == 1 {
@@ -198,7 +342,12 @@ func (m Picker) toOrchestratorOrFinish() (tea.Model, tea.Cmd) {
 		return m.finish()
 	}
 	m.stage = "orchestrator"
-	m.input.Placeholder = fmt.Sprintf("orchestrator number 1-%d (looks over everything)", len(m.roles))
+	items := make([]ui.Item, 0, len(m.roles))
+	for i, r := range m.roles {
+		items = append(items, ui.Item{Label: r.Role, Value: strconv.Itoa(i + 1), Desc: r.Provider + "/" + r.Model})
+	}
+	m.list.Set(items)
+	m.input.Placeholder = "who looks over everything?"
 	return m, nil
 }
 
@@ -212,7 +361,7 @@ func (m Picker) finish() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-func (m *Picker) addRole(provider, model, role string) {
+func (m *Picker) addRole(provider, model, role, desc string) {
 	id := sanitize(role)
 	for m.usedIDs[id] {
 		id += "-2"
@@ -220,24 +369,79 @@ func (m *Picker) addRole(provider, model, role string) {
 	m.usedIDs[id] = true
 	m.roles = append(m.roles, api.AgentConfig{
 		ID: id, Provider: provider, Model: model, Role: role,
-		SystemPrompt: fmt.Sprintf("You are the %s. Implement your assigned tasks directly and keep responses concise.", role),
+		SystemPrompt: systemPrompt(role, desc),
 		AllowedTools: []string{"read_file", "write_file", "edit", "shell"},
 	})
 }
 
-func resolveByNumber(val string, options []string) string {
-	if n, err := strconv.Atoi(val); err == nil && n >= 1 && n <= len(options) {
-		return options[n-1]
+// The user's own description of the teammate is the most valuable half of its system prompt — it's
+// the only part that says what this agent is for on this project — so it goes in verbatim.
+func systemPrompt(role, desc string) string {
+	p := fmt.Sprintf("You are the %s.", role)
+	if desc = strings.TrimSpace(desc); desc != "" {
+		p += " " + desc
 	}
-	for _, o := range options {
-		if o == val {
-			return val // a typed id outside the credentialed list is still accepted — the server validates it
+	return p + " Implement your assigned tasks directly and keep responses concise."
+}
+
+// Credentialed providers first (they're one keystroke from usable), then the rest of the catalog in
+// the order the server sent it — byok, local, login.
+func sortProviders(all []api.ProviderInfo, creds map[string]bool) []api.ProviderInfo {
+	ready, rest := []api.ProviderInfo{}, []api.ProviderInfo{}
+	for _, p := range all {
+		if creds[p.ID] {
+			ready = append(ready, p)
+		} else {
+			rest = append(rest, p)
 		}
 	}
-	if val != "" {
-		return val
+	return append(ready, rest...)
+}
+
+// sanitize turns a human role name into an agent id: lowercase, alphanumerics, single dashes.
+func sanitize(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	prevDash := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteRune('-')
+			prevDash = true
+		}
 	}
-	return ""
+	if out := strings.Trim(b.String(), "-"); out != "" {
+		return out
+	}
+	return "agent" // a role name with no alphanumerics at all still needs a usable id
+}
+
+func renderRoles(roles []api.AgentConfig) string {
+	bg := theme.BgPane
+	if len(roles) == 0 {
+		return section("TEAM") + "\n" + lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("  (nobody yet)")
+	}
+	parts := []string{section("TEAM")}
+	for i, r := range roles {
+		lead := ""
+		if r.Lead {
+			lead = lipgloss.NewStyle().Foreground(theme.Alt).Background(bg).Render(" ★")
+		}
+		parts = append(parts,
+			lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render(fmt.Sprintf("  %d. ", i+1))+
+				lipgloss.NewStyle().Foreground(theme.AgentColor(i)).Background(bg).Bold(true).Render(r.Role)+
+				lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render("  "+r.Provider+"/"+r.Model)+lead)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func errText(err error) string {
+	if err == nil {
+		return "empty catalog"
+	}
+	return err.Error()
 }
 
 func (m Picker) View() string {
@@ -247,44 +451,43 @@ func (m Picker) View() string {
 		}
 		return "\ncancelled.\n"
 	}
-	var prompt, hint string
+	if m.stage == "error" {
+		return screen(m.width, m.height, "pick your team",
+			lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.BgPane).Render(m.err), "", "")
+	}
+	if m.stage == "loading" {
+		return screen(m.width, m.height, "pick your team", "loading…", "", "")
+	}
+
+	cardW := clamp(m.width-8, cardMin, min(cardMax, max(m.width-2, cardMin))) - 4
+	listRows := clamp(m.height-14, 3, 10)
+
+	var body, hint string
 	switch m.stage {
-	case "loading":
-		prompt = "loading…"
-	case "error":
-		return frame(m.width, m.height, "pick your team",
-			lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.BgPane).Render(m.err), "")
+	case "size":
+		body = section("HOW MANY") + "\n" + m.list.Render(cardW, listRows, theme.BgPane)
+		hint = "↑↓ choose · enter confirms — each teammate gets its own model"
 	case "provider":
-		prompt = renderRoles(m.roles) + "\n\n" + numberedList(m.providers)
-		hint = "pick a provider — number, or type its id"
+		body = renderRoles(m.roles) + "\n\n" + section("PROVIDER") + "\n" + m.list.Render(cardW, listRows, theme.BgPane)
+		hint = "↑↓ choose · type to filter · esc goes back"
+	case "key":
+		body = section("PROVIDER") + "\n  " + m.provider
+		hint = "paste the API key (or a local base URL) — stored outside the repo"
 	case "model":
-		prompt = numberedList(m.models)
-		hint = "pick a model — number, or type an id directly"
+		body = section(strings.ToUpper(m.provider)) + "\n" + m.list.Render(cardW, listRows, theme.BgPane)
+		hint = "↑↓ choose · type any model id the catalog doesn't list"
 	case "role":
-		prompt = section("MODEL") + "\n  " + m.provider + "/" + m.pendModel
-		hint = "what is this agent's designation? (e.g. Architect, Backend Designer)"
-	case "again":
-		prompt = renderRoles(m.roles)
-		hint = fmt.Sprintf("[1] start building    [2] choose another model    (%d/%d)", len(m.roles), MaxAgents)
+		body = section("MODEL") + "\n  " + m.provider + "/" + m.pendModel
+		hint = "what is this teammate called? (e.g. Architect, Backend Designer)"
+	case "desc":
+		body = section(strings.ToUpper(m.pendRole)) + "\n  " + m.provider + "/" + m.pendModel
+		hint = "describe its job — it becomes this agent's system prompt"
 	case "orchestrator":
-		prompt = renderRoles(m.roles)
+		body = section("ORCHESTRATOR") + "\n" + m.list.Render(cardW, listRows, theme.BgPane)
 		hint = "which one looks over everything and decides the chronology?"
 	}
 	if m.status != "" {
 		hint = m.status + "\n" + hint
 	}
-	return frame(m.width, m.height, "pick your team", prompt, hint) + inputRow(m.width, m.input.View())
-}
-
-func numberedList(items []string) string {
-	if len(items) == 0 {
-		return lipgloss.NewStyle().Foreground(theme.Line).Background(theme.BgPane).Render("  (type a value directly)")
-	}
-	var lines []string
-	for i, it := range items {
-		lines = append(lines, lipgloss.NewStyle().Foreground(theme.Muted).Background(theme.BgPane).
-			Render(fmt.Sprintf("  %d. ", i+1))+
-			lipgloss.NewStyle().Foreground(theme.Fg).Background(theme.BgPane).Render(it))
-	}
-	return strings.Join(lines, "\n")
+	return screen(m.width, m.height, "pick your team", body, hint, m.input.View())
 }
