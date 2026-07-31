@@ -13,6 +13,7 @@ export interface McpTools {
   toolSpecs(): ToolSpec[];
   has(name: string): boolean;
   call(name: string, input: Record<string, unknown>): Promise<string>;
+  servers?(): { name: string; tools: number }[]; // optional: display only, so test fakes needn't implement it
 }
 
 // Flatten MCP tool-result content blocks to a string for feeding back to the model.
@@ -54,6 +55,14 @@ export class McpManager implements McpTools {
 
   toolSpecs(): ToolSpec[] {
     return this.specs;
+  }
+
+  // Connected servers and how many tools each contributed — for the TUI's MCP panel. Only servers
+  // that actually connected appear (connect() skips the ones that failed).
+  servers(): { name: string; tools: number }[] {
+    const counts = new Map<string, number>();
+    for (const { server } of this.routes.values()) counts.set(server, (counts.get(server) ?? 0) + 1);
+    return [...this.clients.keys()].map((name) => ({ name, tools: counts.get(name) ?? 0 }));
   }
 
   has(name: string): boolean {

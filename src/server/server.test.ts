@@ -77,6 +77,28 @@ test("health is public; data routes require the token", async () => {
   expect((await ok.json()).agents.length).toBe(3);
 });
 
+test("commands are listed and dispatched over HTTP — one registry for every client", async () => {
+  const { h } = setup();
+  track(h);
+  const list = await (await fetch(`${h.url}/commands?token=${h.token}`)).json();
+  expect(list.commands.map((c: { name: string }) => c.name)).toContain("undo");
+
+  const run = async (name: string, args = "") =>
+    (await fetch(`${h.url}/commands/${name}?token=${h.token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ args }) })).json();
+
+  expect(await run("graph")).toMatchObject({ ok: true, view: "graph" }); // client-side view switch
+  expect(await run("cancel")).toMatchObject({ ok: true });
+  // A command that fails still answers 200 with ok:false — the message belongs to the caller, not
+  // to an HTTP error path.
+  expect(await run("bogus")).toMatchObject({ ok: false, message: "unknown command: /bogus" });
+});
+
+test("sessions are listable once a store is wired (empty without one)", async () => {
+  const { h } = setup();
+  track(h);
+  expect(await (await fetch(`${h.url}/sessions?token=${h.token}`)).json()).toEqual({ sessions: [] });
+});
+
 test("providers and models routes serve the catalog", async () => {
   const { h } = setup();
   track(h);

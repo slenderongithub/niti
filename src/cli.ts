@@ -4,7 +4,8 @@
 //   For the interactive session, run the Go TUI: ./amux (build with `bun run build:tui`).
 //   This binary is for scripting, automation, and what the Go TUI spawns as its subprocess:
 //     amux-core "<task>"           → run one task headlessly and exit (plain-text progress)
-//     amux-core resume             → reopen the last session's tasks
+//     amux-core resume             → continue the last session's unfinished tasks (with their history)
+//     ... --auto                   → approve anything not explicitly denied in agents.yaml
 //     amux-core init               → setup wizard: add providers, assign models to roles, pick orchestrator
 //     amux-core serve [--port=N]   → start the local core server (what the Go TUI connects to)
 //     amux-core --web ["<task>"]   → start the server + open the live web dashboard
@@ -13,12 +14,15 @@
 //     amux-core login copilot       → sign in with a GitHub Copilot subscription
 import { makeProvider } from "./providers/factory.ts";
 import { Engine } from "./engine.ts";
-import { loadAgents, loadMcpServers, saveAgents } from "./config/config.ts";
+import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, saveAgents } from "./config/config.ts";
+import { LspRegistry } from "./lsp/registry.ts";
 import { McpManager } from "./mcp/mcp.ts";
 import { setKey } from "./keystore/keystore.ts";
 import { startDeviceFlow, pollForToken } from "./providers/copilot.ts";
 import { loadSkills, skillsPrompt } from "./skills/skills.ts";
 import { loadTasks } from "./session.ts";
+import { openDb } from "./store/db.ts";
+import { SessionStore } from "./store/session-store.ts";
 import { serveMain } from "./server/main.ts";
 import { setCredential, removeCredential, listCredentials } from "./auth/auth-store.ts";
 import { CATALOG, providerKeys } from "./providers/catalog.ts";
@@ -77,7 +81,7 @@ if (args[0] === "auth") {
 if (args[0] === "serve") {
   const portArg = args.find((a) => a.startsWith("--port="));
   try {
-    const { server } = await serveMain({ port: portArg ? Number(portArg.slice(7)) : undefined });
+    const { server } = await serveMain({ port: portArg ? Number(portArg.slice(7)) : undefined, auto: args.includes("--auto") });
     console.error(`amux core server running at ${server.url} — Ctrl-C to stop`);
     process.on("SIGINT", () => {
       server.stop();
@@ -117,7 +121,7 @@ if (args[0] === "init") {
 // one-shot runs to completion printing plain-text progress, or `resume` to reload prior tasks.
 if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
   const resume = args[0] === "resume";
-  const goal = resume ? "" : args.join(" ").trim();
+  const goal = resume ? "" : args.filter((a) => !a.startsWith("--")).join(" ").trim(); // flags aren't part of the task text
 
   if (!goal && !resume) {
     console.log(
@@ -138,6 +142,7 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
   }
   if (resume) engine.orch.load(loadTasks());
 
+
   // Plain-text progress: one line per non-streaming event, so scripting/CI output stays readable.
   const unsubscribe = engine.bus.subscribe((e: AgentEvent) => {
     if (e.type === "delta") return; // streaming chunks — too noisy for line-oriented output
@@ -146,6 +151,7 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
   });
 
   if (goal) await engine.submit(goal);
+  else if (resume) await engine.resume(); // continue unfinished tasks with their stored conversations
   unsubscribe();
 
   console.log("\n--- tasks ---");
@@ -163,7 +169,17 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
     mcp = new McpManager();
     await mcp.connect(mcpServers, (name, err) => console.error(`amux: MCP server '${name}' unavailable: ${err}`));
   }
-  return new Engine({ configs, makeProvider, mcp, systemSuffix: skillText, interactive });
+  return new Engine({
+    configs,
+    makeProvider,
+    mcp,
+    systemSuffix: skillText,
+    interactive,
+    store: new SessionStore(openDb()),
+    permissions: loadPermissions(),
+    auto: args.includes("--auto"),
+    lsp: new LspRegistry(loadLspServers()),
+  });
 }
 
 function surfaceStartupError(err: unknown): never {
@@ -228,8 +244,8 @@ async function runInit(): Promise<void> {
     let id = role.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `agent${roles.length + 1}`;
     while (usedIds.has(id)) id += "-2";
     usedIds.add(id);
-    const toolsRaw = prompt("  Allowed tools [read_file,write_file,shell]:")?.trim();
-    const allowedTools = (toolsRaw || "read_file,write_file,shell").split(",").map((s) => s.trim()).filter(Boolean);
+    const toolsRaw = prompt("  Allowed tools [read_file,write_file,edit,shell]:")?.trim();
+    const allowedTools = (toolsRaw || "read_file,write_file,edit,shell").split(",").map((s) => s.trim()).filter(Boolean);
     roles.push({ id, provider, model, role, systemPrompt: `You are the ${role}. Implement your assigned tasks directly and keep responses concise.`, allowedTools });
     console.log(`  ✓ ${role} → ${provider}/${model}`);
     if ((prompt("Assign another model to a role? (y = another / Enter = start):")?.trim().toLowerCase() ?? "") !== "y") break;

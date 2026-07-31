@@ -3,6 +3,8 @@ import { dirname } from "node:path";
 import { parse, stringify } from "yaml";
 import type { AgentConfig } from "../agent/agent.ts";
 import type { McpServerConfig } from "../mcp/mcp.ts";
+import type { LspServerConfig } from "../lsp/registry.ts";
+import { parsePermissions, type PermissionRules } from "../permissions.ts";
 import { CATALOG, providerKeys } from "../providers/catalog.ts";
 
 // Loads and validates .amux/agents.yaml. User-authored → validate required fields with clear errors.
@@ -13,6 +15,31 @@ export function loadAgents(path = ".amux/agents.yaml"): AgentConfig[] {
     throw new Error(`${path}: expected a non-empty 'agents:' list`);
   }
   return agents.map((a, i) => validate(a, i, path));
+}
+
+// Project-wide tool policy under a top-level `permissions:` block — the layer consulted when an
+// agent's own `permissions:` has nothing to say about a call.
+export function loadPermissions(path = ".amux/agents.yaml"): PermissionRules | undefined {
+  if (!existsSync(path)) return undefined;
+  const raw = parse(readFileSync(path, "utf8")) as { permissions?: unknown };
+  return parsePermissions(raw?.permissions, path);
+}
+
+// Language servers declared under a top-level `lsp:` block — one entry per language:
+//   lsp:
+//     typescript: { command: typescript-language-server, args: [--stdio], extensions: [.ts, .tsx] }
+// Servers are user-installed; a malformed entry is skipped rather than blocking startup, exactly
+// like mcpServers above.
+export function loadLspServers(path = ".amux/agents.yaml"): LspServerConfig[] {
+  if (!existsSync(path)) return [];
+  const raw = parse(readFileSync(path, "utf8")) as { lsp?: unknown };
+  if (typeof raw?.lsp !== "object" || raw.lsp == null || Array.isArray(raw.lsp)) return [];
+  return Object.entries(raw.lsp as Record<string, unknown>).flatMap(([name, value]) => {
+    const s = (value ?? {}) as Record<string, unknown>;
+    const extensions = Array.isArray(s.extensions) ? s.extensions.filter((e): e is string => typeof e === "string") : [];
+    if (typeof s.command !== "string" || !extensions.length) return [];
+    return [{ name, command: s.command, args: Array.isArray(s.args) ? (s.args as string[]) : undefined, extensions }];
+  });
 }
 
 // MCP servers declared under `mcpServers:` in the same file. Skips malformed entries.
@@ -42,6 +69,7 @@ export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): v
       ...(a.allowedTools ? { allowedTools: a.allowedTools } : {}),
       ...(a.baseURL ? { baseURL: a.baseURL } : {}),
       ...(a.autoApprove ? { autoApprove: a.autoApprove } : {}),
+      ...(a.permissions ? { permissions: a.permissions } : {}),
     })),
   };
   writeFileSync(path, stringify(doc));
@@ -72,5 +100,6 @@ function validate(a: unknown, i: number, path: string): AgentConfig {
     lead: rec.lead === true,
     baseURL,
     autoApprove: Array.isArray(rec.autoApprove) ? (rec.autoApprove as string[]) : undefined,
+    permissions: parsePermissions(rec.permissions, `${path} agent[${i}]`),
   };
 }

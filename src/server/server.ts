@@ -3,9 +3,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { timingSafeEqual } from "node:crypto";
 import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "./events.ts";
-import { CATALOG, providersByCategory, type Category } from "../providers/catalog.ts";
+import { CATALOG, contextWindow, providersByCategory, splitModelId, type Category } from "../providers/catalog.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
 import { saveAgents } from "../config/config.ts";
+import { CommandRegistry } from "../commands/registry.ts";
 import type { AgentConfig } from "../agent/agent.ts";
 
 export interface ServerHandle {
@@ -26,9 +27,10 @@ const CONTENT_TYPES: Record<string, string> = {
 // A private-by-default local server (127.0.0.1 + a bearer token from the handshake). The Go TUI
 // sends the token as a header; the browser dashboard passes it as ?token= (EventSource can't set
 // headers). Static dashboard assets are public; every data route is gated.
-export function startServer(engine: Engine, opts: { port?: number; token?: string; webDir?: string } = {}): ServerHandle {
+export function startServer(engine: Engine, opts: { port?: number; token?: string; webDir?: string; commands?: CommandRegistry } = {}): ServerHandle {
   const token = opts.token ?? crypto.randomUUID();
   const webDir = opts.webDir ?? new URL("../../web", import.meta.url).pathname;
+  const commands = opts.commands ?? new CommandRegistry();
 
   const json = (data: unknown, status = 200) =>
     new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -98,20 +100,51 @@ export function startServer(engine: Engine, opts: { port?: number; token?: strin
 
       if (p === "/session" && method === "POST") {
         engine.emitUsage();
-        return json({ agents: engine.configs, tasks: engine.orch.all, lastSeq: engine.hub.lastSeq(), running: engine.running });
+        return json({
+          agents: engine.configs,
+          tasks: engine.orch.all,
+          lastSeq: engine.hub.lastSeq(),
+          running: engine.running,
+          // Everything the TUI's sidebar reports about the project it's attached to. Static for the
+          // life of the process, so it rides on /session rather than being re-sent on every event.
+          root: engine.root,
+          lsp: engine.lsp?.list() ?? [],
+          mcp: engine.mcp?.servers?.() ?? [],
+          contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider)])),
+        });
       }
 
       if (p === "/prompt" && method === "POST") {
-        const { text } = (await req.json().catch(() => ({}))) as { text?: string };
+        const { text, mode } = (await req.json().catch(() => ({}))) as { text?: string; mode?: string };
         if (!text?.trim()) return json({ error: "empty prompt" }, 400);
         if (engine.running) return json({ error: "a task is already running" }, 409);
-        engine.submit(text).catch((err) => console.error("submit error:", err)); // fire-and-forget; progress via SSE
+        // fire-and-forget; progress via SSE
+        engine.submit(text, { planOnly: mode === "plan" }).catch((err) => console.error("submit error:", err));
         return json({ accepted: true });
       }
 
       if (p === "/cancel" && method === "POST") {
         engine.cancel();
         return json({ ok: true });
+      }
+
+      if (p === "/undo" && method === "POST") return json({ ok: true, message: engine.undo() });
+
+      // Slash commands: one registry, every client. GET to populate a menu/autocomplete, POST to run.
+      if (p === "/commands" && method === "GET") return json({ commands: commands.list() });
+      if (p.startsWith("/commands/") && method === "POST") {
+        const name = decodeURIComponent(p.slice("/commands/".length));
+        const { args } = (await req.json().catch(() => ({}))) as { args?: string };
+        // Always 200: the command was dispatched, and its own `ok` says how it went. A non-2xx
+        // would strand that message in the client's generic error path.
+        return json(await commands.run(engine, name, args ?? ""));
+      }
+
+      if (p === "/sessions" && method === "GET") {
+        if (!engine.store) return json({ sessions: [] });
+        const taskId = u.searchParams.get("taskId") ?? undefined;
+        const agentId = u.searchParams.get("agentId") ?? undefined;
+        return json({ sessions: engine.store.listSessions({ taskId, agentId }) });
       }
 
       if (p === "/agents" && method === "GET") return json({ agents: engine.configs });
@@ -185,17 +218,9 @@ export function startServer(engine: Engine, opts: { port?: number; token?: strin
   };
 }
 
-// Canonical model ids are "provider/model". If an explicit provider is given, trust it; otherwise
-// split on the first "/" only when the head is a known provider (model names can contain slashes).
-export function splitModelId(provider: string | undefined, model: string): { provider: string; model: string } {
-  if (provider) return { provider, model };
-  const slash = model.indexOf("/");
-  if (slash > 0) {
-    const head = model.slice(0, slash);
-    if (CATALOG[head]) return { provider: head, model: model.slice(slash + 1) };
-  }
-  return { provider: "", model };
-}
+// Lives in providers/catalog.ts (its only dependency is the catalog); re-exported here because the
+// route contract has always named it, and server.test.ts imports it from this module.
+export { splitModelId } from "../providers/catalog.ts";
 
 function buildCredential(input: Partial<AuthCredential> & { provider?: string; key?: string; access?: string; baseURL?: string; type?: string }): AuthCredential | undefined {
   const provider = input.provider!;

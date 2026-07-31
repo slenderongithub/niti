@@ -160,3 +160,15 @@ export function providerKeys(): string[] {
 export function providersByCategory(cat: Category): string[] {
   return Object.keys(CATALOG).filter((k) => (CATALOG[k]!.category ?? "byok") === cat);
 }
+
+// Canonical model ids are "provider/model". If an explicit provider is given, trust it; otherwise
+// split on the first "/" only when the head is a known provider (model names can contain slashes).
+export function splitModelId(provider: string | undefined, model: string): { provider: string; model: string } {
+  if (provider) return { provider, model };
+  const slash = model.indexOf("/");
+  if (slash > 0) {
+    const head = model.slice(0, slash);
+    if (CATALOG[head]) return { provider: head, model: model.slice(slash + 1) };
+  }
+  return { provider: "", model };
+}

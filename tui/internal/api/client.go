@@ -23,6 +23,7 @@ type AgentConfig struct {
 	Model        string   `json:"model"`
 	Role         string   `json:"role"`
 	Lead         bool     `json:"lead"`
+	SystemPrompt string   `json:"systemPrompt"`
 	AllowedTools []string `json:"allowedTools"`
 }
 
@@ -34,11 +35,30 @@ type Task struct {
 	DependsOn   []string `json:"dependsOn"`
 }
 
+// LspInfo / McpInfo describe what the project is wired to — listed in the sidebar so it's obvious
+// at a glance whether a language server is merely configured or actually running.
+type LspInfo struct {
+	Name       string   `json:"name"`
+	Command    string   `json:"command"`
+	Extensions []string `json:"extensions"`
+	Running    bool     `json:"running"`
+}
+
+type McpInfo struct {
+	Name  string `json:"name"`
+	Tools int    `json:"tools"`
+}
+
 type SessionInfo struct {
 	Agents  []AgentConfig `json:"agents"`
 	Tasks   []Task        `json:"tasks"`
 	LastSeq int           `json:"lastSeq"`
 	Running bool          `json:"running"`
+	// Static project context, sent once on /session rather than repeated on every event.
+	Root          string         `json:"root"`
+	Lsp           []LspInfo      `json:"lsp"`
+	Mcp           []McpInfo      `json:"mcp"`
+	ContextLimits map[string]int `json:"contextLimits"` // agent id → its model's context window
 }
 
 type AgentEvent struct {
@@ -122,6 +142,10 @@ type Event struct {
 	Holders  []Lock          `json:"holders"`
 	State    string          `json:"state"`
 	Goal     string          `json:"goal"`
+	// usage events only: session spend so far. CostKnown is false when some agent's model has no
+	// published price, so the UI can show "$0.42+" instead of implying the total is complete.
+	Cost      float64 `json:"cost"`
+	CostKnown bool    `json:"costKnown"`
 }
 
 func (e Event) AsAgentEvent() (AgentEvent, bool) {
@@ -192,11 +216,43 @@ func (c *Client) Session() (SessionInfo, error) {
 	return s, c.do("POST", "/session", nil, &s)
 }
 
-func (c *Client) Prompt(text string) error {
-	return c.do("POST", "/prompt", map[string]string{"text": text}, nil)
+// Prompt submits a goal. mode "plan" stops after the orchestrator has built the task DAG; "build"
+// (or "") runs it.
+func (c *Client) Prompt(text, mode string) error {
+	return c.do("POST", "/prompt", map[string]string{"text": text, "mode": mode}, nil)
 }
 
 func (c *Client) Cancel() error { return c.do("POST", "/cancel", nil, nil) }
+
+// Command mirrors one entry of the server-side slash-command registry (src/commands/registry.ts).
+// The TUI renders this list rather than hardcoding a switch, so the TUI and the web dashboard stay
+// in step as commands are added.
+type Command struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// CommandResult is what running one returns. View is a pure client-side view switch when set.
+type CommandResult struct {
+	Ok      bool   `json:"ok"`
+	Message string `json:"message"`
+	View    string `json:"view"`
+	Error   string `json:"error"`
+}
+
+func (c *Client) Commands() ([]Command, error) {
+	var r struct {
+		Commands []Command `json:"commands"`
+	}
+	err := c.do("GET", "/commands", nil, &r)
+	return r.Commands, err
+}
+
+func (c *Client) RunCommand(name, args string) (CommandResult, error) {
+	var res CommandResult
+	err := c.do("POST", "/commands/"+url.PathEscape(name), map[string]string{"args": args}, &res)
+	return res, err
+}
 
 func (c *Client) SwitchModel(agentID, provider, model, baseURL string) error {
 	return c.do("POST", "/model", map[string]string{"agentId": agentID, "provider": provider, "model": model, "baseURL": baseURL}, nil)
@@ -229,6 +285,22 @@ func (c *Client) Models(provider string) ([]string, error) {
 // SaveAuth stores a credential (api/oauth/local). See src/server/server.ts POST /auth.
 func (c *Client) SaveAuth(cred map[string]string) error {
 	return c.do("POST", "/auth", cred, nil)
+}
+
+// Credential mirrors GET /auth's redacted entries — provider + auth type, never the secret itself.
+type Credential struct {
+	Provider string `json:"provider"`
+	Type     string `json:"type"`
+}
+
+// Credentials lists which providers already have a key/session stored, so the model picker can
+// offer only providers actually usable right now.
+func (c *Client) Credentials() ([]Credential, error) {
+	var r struct {
+		Credentials []Credential `json:"credentials"`
+	}
+	err := c.do("GET", "/auth", nil, &r)
+	return r.Credentials, err
 }
 
 // SaveAgents persists role assignments to .amux/agents.yaml (POST /agents).

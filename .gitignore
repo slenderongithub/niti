@@ -4,5 +4,6 @@ amux-core
 *.log
 .DS_Store
 .amux/session.json
+.amux/amux.db*
 .env
 .env.*

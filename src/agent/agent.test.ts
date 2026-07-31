@@ -1,12 +1,15 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Agent, overContextThreshold, isDangerousShellCall, SHELL_LOCK, type AgentConfig } from "./agent.ts";
+import { Agent, overContextThreshold, isDangerousShellCall, SHELL_LOCK, MAX_FORK_DEPTH, type AgentConfig } from "./agent.ts";
 import { Bus } from "../events/bus.ts";
 import { ApprovalQueue } from "../approval.ts";
 import { LockRegistry } from "../orchestrator/locks.ts";
-import type { Provider } from "../providers/provider.ts";
+import { openDb } from "../store/db.ts";
+import { SessionStore } from "../store/session-store.ts";
+import { resumeConversation } from "../session.ts";
+import type { Provider, Turn } from "../providers/provider.ts";
 
 const cfg: AgentConfig = {
   id: "a",
@@ -318,6 +321,230 @@ test("a dangerous shell command still prompts even with a standing 'always allow
   expect(approvals.current()?.tool).toBe("shell"); // queued despite the grant — dangerous overrides it
   approvals.answer(false);
   expect(await runP).toBe("done"); // denied, not executed, loop still finishes cleanly
+});
+
+test("with a store, loadTurns reconstructs exactly what was fed to provider.send()", async () => {
+  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const store = new SessionStore(openDb(":memory:"));
+  let n = 0;
+  let lastSeen: Turn[] = [];
+  const stub: Provider = {
+    async send(_sys, turns) {
+      n++;
+      lastSeen = structuredClone(turns); // snapshot: the array is mutated in place by the loop
+      if (n === 1) {
+        return { text: "writing", toolCalls: [{ id: "1", name: "write_file", input: { path: "s.txt", content: "hi" } }], raw: [{ type: "thinking" }] };
+      }
+      return { text: "all done", toolCalls: [] };
+    },
+  };
+
+  const agent = new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, store });
+  expect(await agent.run("write a file", { taskId: "t1" })).toBe("done");
+
+  const [session] = store.listSessions({ taskId: "t1" });
+  expect(session?.status).toBe("done");
+  const stored = store.loadTurns(session!.id);
+  // Everything the model saw on its final call, plus the final assistant answer that ended the loop.
+  expect(stored.slice(0, lastSeen.length)).toEqual(lastSeen);
+  expect(stored.at(-1)).toEqual({ role: "assistant", text: "all done", toolCalls: [] });
+  expect(resumeConversation(store, "t1")).toEqual(stored);
+});
+
+test("priorTurns seed a resumed run without being persisted twice", async () => {
+  const store = new SessionStore(openDb(":memory:"));
+  let seen: Turn[] = [];
+  const stub: Provider = {
+    async send(_sys, turns) {
+      seen = structuredClone(turns);
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  const prior: Turn[] = [{ role: "user", text: "earlier work" }];
+  const agent = new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), { store });
+  await agent.run("continue", { taskId: "t9", priorTurns: prior });
+
+  expect(seen[0]).toEqual(prior[0]!); // the model saw the resumed history
+  const [session] = store.listSessions({ taskId: "t9" });
+  // ...but this session only owns the new turns — prior ones stay attached to the session that made them.
+  expect(store.loadTurns(session!.id)).toEqual([
+    { role: "user", text: "continue" },
+    { role: "assistant", text: "ok", toolCalls: [] },
+  ]);
+});
+
+test("a config 'allow' runs the tool without ever queuing an approval", async () => {
+  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const approvals = new ApprovalQueue();
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      n++;
+      if (n === 1) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "src/ok.txt", content: "hi" } }] };
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  mkdirSync(join(root, "src"));
+  const agent = new Agent({ ...cfg, allowedTools: ["write_file"], permissions: { write_file: { "src/**": "allow" } } }, stub, new Bus(), {
+    root,
+    approve: (tool, input, forceAsk) => approvals.request("a", tool, input, forceAsk),
+  });
+
+  expect(await agent.run("write it")).toBe("done");
+  expect(approvals.current()).toBeUndefined(); // never prompted
+  expect(readFileSync(join(root, "src/ok.txt"), "utf8")).toBe("hi");
+});
+
+test("a config 'deny' short-circuits without queuing — and holds in headless mode (no approver)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      n++;
+      if (n === 1) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "secret.txt", content: "x" } }] };
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  const bus = new Bus();
+  const errors: string[] = [];
+  bus.subscribe((e) => e.type === "error" && errors.push(e.payload));
+
+  // No `approve` at all: headless. A deny is policy, not a question, so it must still block.
+  const agent = new Agent({ ...cfg, allowedTools: ["write_file"], permissions: { write_file: { "secret*": "deny" } } }, stub, bus, { root });
+  expect(await agent.run("write it")).toBe("done");
+  expect(existsSync(join(root, "secret.txt"))).toBe(false);
+  expect(errors.some((e) => e.includes("denied by permission policy"))).toBe(true);
+});
+
+test("a dangerous shell command still prompts despite a blanket allow rule", async () => {
+  const approvals = new ApprovalQueue();
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      n++;
+      if (n === 1) return { text: "", toolCalls: [{ id: "1", name: "shell", input: { command: "rm", args: ["-rf", "/tmp/x"] } }] };
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: ["shell"] }, stub, new Bus(), {
+    approve: (tool, input, forceAsk) => approvals.request("a", tool, input, forceAsk),
+    permissionLayers: [{ "*": { "*": "allow" } }], // as if --auto were on
+  });
+
+  const runP = agent.run("clean up");
+  await new Promise((r) => setTimeout(r, 10));
+  expect(approvals.current()?.tool).toBe("shell"); // dangerous overrides the allow
+  approvals.answer(false);
+  expect(await runP).toBe("done");
+});
+
+test("an edit is checkpointed before it runs, shows a diff in the approval, and undoes cleanly", async () => {
+  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  writeFileSync(join(root, "app.ts"), "const port = 3000;\n");
+  const store = new SessionStore(openDb(":memory:"));
+  const approvals = new ApprovalQueue();
+
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      n++;
+      if (n === 1) {
+        return { text: "", toolCalls: [{ id: "1", name: "edit", input: { path: "app.ts", oldString: "3000", newString: "8080" } }] };
+      }
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: ["edit"] }, stub, new Bus(), {
+    root,
+    store,
+    approve: (tool, input, forceAsk) => approvals.request("a", tool, input, forceAsk),
+  });
+
+  const runP = agent.run("change the port", { taskId: "t1" });
+  await new Promise((r) => setTimeout(r, 10));
+  expect(approvals.current()?.input.diff).toBe("@@ line 1 @@\n-3000\n+8080"); // hunk offered to the user
+  approvals.answer(true);
+  await runP;
+
+  expect(readFileSync(join(root, "app.ts"), "utf8")).toBe("const port = 8080;\n");
+  expect(store.undoLast()?.action).toBe("restored");
+  expect(readFileSync(join(root, "app.ts"), "utf8")).toBe("const port = 3000;\n"); // back to disk truth
+});
+
+test("a denied write is never checkpointed — undo has nothing to revert", async () => {
+  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const store = new SessionStore(openDb(":memory:"));
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      n++;
+      if (n === 1) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "no.txt", content: "x" } }] };
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, store, approve: async () => false }).run("write", { taskId: "t1" });
+  expect(store.undoLast()).toBeUndefined();
+});
+
+test("spawn_fork runs a child loop, links its session to the parent, and returns its findings", async () => {
+  const store = new SessionStore(openDb(":memory:"));
+  let call = 0;
+  const stub: Provider = {
+    async send(_sys, turns) {
+      call++;
+      if (call === 1) return { text: "", toolCalls: [{ id: "1", name: "spawn_fork", input: { goal: "count the routes" } }] };
+      if (call === 2) {
+        expect(turns[0]).toEqual({ role: "user", text: "count the routes" }); // the fork starts fresh, on its own goal
+        return { text: "there are 7 routes", toolCalls: [] };
+      }
+      return { text: "parent wraps up", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), { store });
+  expect(await agent.run("audit the server", { taskId: "t1" })).toBe("done");
+  expect(agent.output).toBe("parent wraps up"); // the fork never overwrote the parent's output
+
+  const [parent] = store.listSessions({ taskId: "t1" });
+  const [fork] = store.listSessions({ parentSessionId: parent!.id });
+  expect(fork?.kind).toBe("fork");
+  const forkTurns = store.loadTurns(fork!.id);
+  expect(forkTurns.at(-1)).toEqual({ role: "assistant", text: "there are 7 routes", toolCalls: [] });
+  // ...and the parent got the finding back as its tool result.
+  expect(store.loadTurns(parent!.id).some((t) => t.role === "tool" && t.results[0]?.output === "there are 7 routes")).toBe(true);
+});
+
+test("forks stop at MAX_FORK_DEPTH instead of nesting forever", async () => {
+  let forks = 0;
+  const stub: Provider = {
+    async send(_sys, turns, tools) {
+      const alreadyForked = turns.some((t) => t.role === "tool"); // one fork per level, then stop
+      if (!alreadyForked && tools.some((t) => t.name === "spawn_fork")) {
+        forks++;
+        return { text: "", toolCalls: [{ id: String(forks), name: "spawn_fork", input: { goal: "deeper" } }] };
+      }
+      return { text: "bottom", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: [] }, stub, new Bus());
+  await agent.run("start");
+  expect(forks).toBe(MAX_FORK_DEPTH); // the tool is withdrawn once the cap is reached, so nesting stops
+});
+
+test("a fork inherits the parent's tool permissions — no privilege escalation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  let call = 0;
+  const stub: Provider = {
+    async send() {
+      call++;
+      if (call === 1) return { text: "", toolCalls: [{ id: "1", name: "spawn_fork", input: { goal: "write it" } }] };
+      if (call === 2) return { text: "", toolCalls: [{ id: "2", name: "write_file", input: { path: "x.txt", content: "y" } }] };
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  // Deny inherited from the parent config; the fork is the same Agent, so it's bound by it too.
+  const agent = new Agent({ ...cfg, allowedTools: ["write_file"], permissions: { write_file: { "*": "deny" } } }, stub, new Bus(), { root });
+  await agent.run("delegate a write");
+  expect(existsSync(join(root, "x.txt"))).toBe(false);
 });
 
 test("a disallowed tool surfaces an error and doesn't crash the loop", async () => {

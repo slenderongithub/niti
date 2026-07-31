@@ -17,6 +17,16 @@ import (
 type eventMsg api.Event
 type errMsg struct{ err error }
 
+// commandsMsg delivers the server-side slash-command registry once it has been fetched.
+type commandsMsg struct{ commands []api.Command }
+
+// commandResultMsg is the outcome of running one of those commands.
+type commandResultMsg struct {
+	name   string
+	result api.CommandResult
+	err    error
+}
+
 // actionResultMsg reports the outcome of a fire-and-forget client call (approve/cancel) that was
 // dispatched as a tea.Cmd rather than a bare goroutine, so its error reaches Update() instead of
 // being silently discarded.
@@ -30,8 +40,45 @@ type agentState struct {
 	status   string // idle | working | done | failed
 	activity string
 	tokens   int
+	ctxUsed  int // most recent call's input tokens = current context depth
+	ctxLimit int // the model's context window, from /session
+	log      []string
+	pending  string // partial line being streamed by `delta` events, shown live under the log
 	color    lipgloss.Color
 	avatar   string
+}
+
+const agentLogMax = 60 // per-agent scrollback; only the tail is ever rendered
+
+func (s *agentState) push(line string) {
+	if line = strings.TrimRight(line, " \t\r"); line == "" {
+		return
+	}
+	s.log = append(s.log, line)
+	if len(s.log) > agentLogMax {
+		s.log = s.log[len(s.log)-agentLogMax:]
+	}
+}
+
+// feedDelta accumulates a streamed text chunk, flushing to the log a line at a time so the pane
+// reads like a transcript instead of a jumble. A model that streams a long paragraph without any
+// newline is force-flushed at maxPendingLine, so `pending` can't grow without bound.
+const maxPendingLine = 400
+
+func (s *agentState) feedDelta(chunk string) {
+	s.pending += chunk
+	for {
+		i := strings.IndexByte(s.pending, '\n')
+		if i < 0 {
+			break
+		}
+		s.push(s.pending[:i])
+		s.pending = s.pending[i+1:]
+	}
+	if len(s.pending) > maxPendingLine {
+		s.push(s.pending)
+		s.pending = ""
+	}
 }
 
 type Model struct {
@@ -47,8 +94,17 @@ type Model struct {
 	input     textinput.Model
 	goal      string
 	progress  int
-	view      string // "panes" | "graph" | "usage"
+	commands  []api.Command // fetched from the server registry; drives dispatch and the footer hints
+	view      string        // "panes" | "graph" | "usage"
 	totals    api.Totals
+	// Project context for the sidebar — fixed for the life of the core process.
+	root string
+	lsp  []api.LspInfo
+	mcp  []api.McpInfo
+	// Live session spend. costKnown=false → some model has no published price, so show "+".
+	cost      float64
+	costKnown bool
+	mode      string // "build" (agents execute) | "plan" (orchestrator plans, nothing runs)
 	width     int
 	height    int
 	status    string
@@ -58,22 +114,39 @@ type Model struct {
 // New builds the model. `events` is the already-open SSE channel; `cancel` tears down the stream.
 func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, cancel context.CancelFunc) Model {
 	ti := textinput.New()
-	ti.Placeholder = "describe the project… (/model, /graph, /usage, /cancel, /quit)"
+	ti.Placeholder = "describe the project…"
+	ti.Prompt = ""
 	ti.Focus()
 	ti.CharLimit = 4000
 	m := Model{
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected",
-		tasks: sess.Tasks,
+		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true,
 	}
 	for i, c := range sess.Agents {
 		m.order = append(m.order, c.ID)
-		m.agents[c.ID] = &agentState{cfg: c, status: "idle", color: theme.AgentColor(i), avatar: theme.Avatar(i)}
+		m.agents[c.ID] = &agentState{
+			cfg: c, status: "idle", color: theme.AgentColor(i), avatar: theme.Avatar(i),
+			ctxLimit: sess.ContextLimits[c.ID],
+		}
 	}
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return waitFor(m.events) }
+func (m Model) Init() tea.Cmd { return tea.Batch(waitFor(m.events), fetchCommands(m.client)) }
+
+// The command list lives on the server (src/commands/registry.ts) so the TUI and the web dashboard
+// share one implementation. A failure here is not fatal: /quit still works, and the next fetch —
+// or the server's own error message on dispatch — will say what's wrong.
+func fetchCommands(client *api.Client) tea.Cmd {
+	return func() tea.Msg {
+		cmds, err := client.Commands()
+		if err != nil {
+			return errMsg{err}
+		}
+		return commandsMsg{cmds}
+	}
+}
 
 func waitFor(ch <-chan api.Event) tea.Cmd {
 	return func() tea.Msg {
@@ -102,6 +175,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionResultMsg:
 		if msg.err != nil {
 			m.status = msg.action + " failed: " + msg.err.Error()
+		}
+		return m, nil
+
+	case commandsMsg:
+		m.commands = msg.commands
+		return m, nil
+
+	case commandResultMsg:
+		switch {
+		case msg.err != nil:
+			m.status = "/" + msg.name + " failed: " + msg.err.Error()
+		case msg.result.View != "":
+			m.view = msg.result.View // view switches are the client's job; the registry just names them
+		default:
+			m.status = msg.result.Message
+		}
+		if msg.result.Message != "" && msg.result.View == "" {
+			m.pushFeed("/" + msg.name + ": " + msg.result.Message)
 		}
 		return m, nil
 
@@ -146,6 +237,13 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.view = map[string]string{"panes": "graph", "graph": "usage", "usage": "panes"}[m.view]
 		return m, nil
+	case "ctrl+p":
+		m.mode = map[string]string{"build": "plan", "plan": "build"}[m.mode]
+		m.status = m.mode + " mode"
+		return m, nil
+	case "ctrl+t":
+		m.status = "theme: " + theme.Next()
+		return m, nil
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		m.input.SetValue("")
@@ -160,32 +258,41 @@ func (m *Model) submit(text string) tea.Cmd {
 	if text == "" {
 		return nil
 	}
+	// Two commands can't be server-side: quitting tears down this process, and the theme is a
+	// property of this terminal that the core has no opinion about.
 	switch text {
 	case "/quit", "/exit", "/q":
 		m.quitting = true
 		m.cancel()
 		return tea.Quit
-	case "/graph":
-		m.view = "graph"
+	}
+	if name, args, _ := strings.Cut(strings.TrimPrefix(text, "/"), " "); strings.HasPrefix(text, "/") && name == "theme" {
+		switch {
+		case args == "":
+			m.status = "themes: " + strings.Join(theme.Names(), " ") + "  (now: " + theme.Current() + ")"
+		case theme.Use(strings.TrimSpace(args)):
+			m.status = "theme: " + theme.Current()
+		default:
+			m.status = "unknown theme " + args + " — try: " + strings.Join(theme.Names(), " ")
+		}
 		return nil
-	case "/usage":
-		m.view = "usage"
-		return nil
-	case "/panes":
-		m.view = "panes"
-		return nil
-	case "/cancel":
-		client := m.client
-		return func() tea.Msg { return actionResultMsg{action: "cancel", err: client.Cancel()} }
 	}
 	if strings.HasPrefix(text, "/") {
-		m.status = "unknown command: " + text
-		return nil
+		name, args, _ := strings.Cut(strings.TrimPrefix(text, "/"), " ")
+		if !m.knows(name) {
+			m.status = "unknown command: " + text
+			return nil
+		}
+		client := m.client
+		return func() tea.Msg {
+			res, err := client.RunCommand(name, args)
+			return commandResultMsg{name: name, result: res, err: err}
+		}
 	}
 	m.goal = text
-	c := m.client
+	c, mode := m.client, m.mode
 	return func() tea.Msg {
-		if err := c.Prompt(text); err != nil {
+		if err := c.Prompt(text, mode); err != nil {
 			return errMsg{err}
 		}
 		return nil
@@ -224,9 +331,11 @@ func (m *Model) apply(e api.Event) {
 		if e.Totals != nil {
 			m.totals = *e.Totals
 		}
+		m.cost, m.costKnown = e.Cost, e.CostKnown
 		for _, a := range e.Agents {
 			if st := m.agents[a.AgentID]; st != nil {
 				st.tokens = a.Usage.InputTokens + a.Usage.OutputTokens
+				st.ctxUsed = a.Usage.LastInput
 			}
 		}
 	case "approval_request":
@@ -235,6 +344,11 @@ func (m *Model) apply(e api.Event) {
 }
 
 func (m *Model) applyAgentEvent(ae api.AgentEvent) {
+	// Not an agent speaking: a file changed outside amux (a human's editor, a git checkout).
+	if ae.Type == "external_change" {
+		m.pushFeed("⟳ changed outside amux: " + truncate(ae.Payload, 60))
+		return
+	}
 	st := m.agents[ae.AgentID]
 	if st == nil {
 		return
@@ -251,8 +365,38 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 	case "error":
 		st.status = "failed"
 	}
-	if ae.Payload != "" && ae.Type != "delta" {
-		st.activity = truncate(ae.Payload, 46)
+
+	// `delta` is streamed text — it belongs in the agent's transcript, assembled line by line.
+	// Everything else is a discrete event and gets its own labelled line.
+	if ae.Type == "delta" {
+		st.feedDelta(ae.Payload)
+		return
+	}
+	if ae.Payload == "" {
+		return
+	}
+	st.activity = truncate(ae.Payload, 46)
+	st.push(eventPrefix(ae.Type) + strings.ReplaceAll(ae.Payload, "\n", " "))
+}
+
+// A one-glyph prefix so a transcript line's kind is readable without color (and survives being
+// copied out of the terminal).
+func eventPrefix(kind string) string {
+	switch kind {
+	case "tool_call":
+		return "⚒ "
+	case "file_edit":
+		return "✎ "
+	case "thought":
+		return "· "
+	case "error":
+		return "✖ "
+	case "failover":
+		return "⇄ "
+	case "warning":
+		return "⚠ "
+	default:
+		return "  "
 	}
 }
 
@@ -289,6 +433,21 @@ func (m *Model) applyOrch(oe api.OrchestrationEvent) {
 	}
 }
 
+// knows reports whether the server offered this command. Before the registry has been fetched we
+// let anything through and let the server answer — better than rejecting a valid command because
+// the list hasn't arrived yet.
+func (m *Model) knows(name string) bool {
+	if len(m.commands) == 0 {
+		return true
+	}
+	for _, c := range m.commands {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) setTask(id, status string) {
 	for i := range m.tasks {
 		if m.tasks[i].ID == id {
@@ -304,19 +463,21 @@ func (m *Model) pushFeed(line string) {
 	}
 }
 
-// n<=0 happens on a very narrow terminal (header()/approvalBar()/graphView() compute widths from
-// the terminal size minus a fixed margin, which can go non-positive). Clamp instead of panicking
-// on s[:n-1].
+// n<=0 happens on a very narrow terminal (widths are computed from the terminal size minus fixed
+// margins, which can go non-positive). Clamp instead of panicking on a negative slice bound.
+// Counts runes, not bytes: the UI is full of multibyte glyphs (avatars, box drawing, ─kind→ edges)
+// and a byte-wise cut would both under-fill the line and split a rune into mojibake.
 func truncate(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	if n <= 0 {
 		return ""
 	}
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
 	if n == 1 {
 		return "…"
 	}
-	return s[:n-1] + "…"
+	return string(r[:n-1]) + "…"
 }

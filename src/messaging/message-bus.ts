@@ -12,6 +12,7 @@ export interface AgentMessage {
   subject: string;
   body: string;
   refs?: string[]; // file paths / task ids / prior message ids
+  sessionId?: string; // the sender's session, when one exists — what makes an exchange a persisted thread
   time: number;
 }
 
@@ -138,8 +139,10 @@ export class MessageBus {
 // live agent registry (ask() actually invokes the peer's model; send() is fire-and-forget).
 export interface Messenger {
   peers(selfId: string): { id: string; role: string }[];
-  send(from: string, to: string, kind: MessageKind, subject: string, body: string, refs?: string[]): string;
-  ask(from: string, to: string, question: string, depth: number): Promise<string>;
+  send(from: string, to: string, kind: MessageKind, subject: string, body: string, refs?: string[], fromSessionId?: string): string;
+  // fromSessionId links the answering session back to the asking one, so a persisted exchange can
+  // be rendered as a thread rather than two unrelated sessions.
+  ask(from: string, to: string, question: string, depth: number, fromSessionId?: string): Promise<string>;
   inbox(agentId: string): AgentMessage[];
 }
 

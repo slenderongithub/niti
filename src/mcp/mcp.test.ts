@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 import { extractText, type McpTools } from "./mcp.ts";
 import { Agent, type AgentConfig } from "../agent/agent.ts";
 import { Bus } from "../events/bus.ts";
+import { LspRegistry } from "../lsp/registry.ts";
 import type { Provider } from "../providers/provider.ts";
 
 test("extractText flattens text content blocks", () => {
@@ -45,4 +46,19 @@ test("agent routes an MCP tool call to the manager, not the sandbox, and feeds t
   expect(outcome).toBe("done");
   expect(mcp.calls).toEqual(['mcp__demo__ping:{"x":1}']); // routed to MCP
   expect(seenResults).toContain("pong"); // MCP result fed back to the model
+});
+
+test("MCP and LSP tools are offered side by side — adding LSP replaces nothing", async () => {
+  let offered: string[] = [];
+  const stub: Provider = {
+    async send(_sys, _turns, tools) {
+      offered = tools.map((t) => t.name);
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const lsp = new LspRegistry([{ name: "fake", command: "does-not-need-to-exist", extensions: [".ts"] }], ".");
+
+  await new Agent({ ...cfg, allowedTools: ["read_file", "edit"] }, stub, new Bus(), { mcp: fakeMcp(), lsp }).run("look around");
+  expect(offered).toEqual(["read_file", "edit", "mcp__demo__ping", "diagnostics", "hover", "spawn_fork"]);
+  lsp.close();
 });

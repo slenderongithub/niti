@@ -10,7 +10,7 @@ export type ServerEventBody =
   | { kind: "agent_event"; event: AgentEvent }
   | { kind: "agent_message"; message: AgentMessage }
   | { kind: "orchestration"; event: OrchestrationEvent }
-  | { kind: "usage"; agents: { agentId: string; usage: AgentUsage }[]; totals: { inputTokens: number; outputTokens: number; calls: number }; rateLimits: RateLimitSnapshot[] }
+  | { kind: "usage"; agents: { agentId: string; usage: AgentUsage }[]; totals: { inputTokens: number; outputTokens: number; calls: number }; rateLimits: RateLimitSnapshot[]; cost: number; costKnown: boolean }
   | { kind: "approval_request"; requests: { agentId: string; tool: string; input: Record<string, unknown> }[] }
   | { kind: "lock"; holders: { path: string; holder: string }[] }
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string };

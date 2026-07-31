@@ -2,6 +2,7 @@ import type { Agent } from "../agent/agent.ts";
 import type { Bus } from "../events/bus.ts";
 import type { TaskNode } from "./task.ts";
 import type { MessageBus } from "../messaging/message-bus.ts";
+import type { Turn } from "../providers/provider.ts";
 
 // Orchestration lifecycle events — a higher-level stream than per-agent AgentEvents. The server
 // forwards these over SSE so the TUI/dashboard can draw DAG progress and a completion percentage.
@@ -21,6 +22,7 @@ export interface SchedulerDeps {
   lead?: Agent; // runs the final integrate/review pass
   goal?: string; // surfaced on the "plan" event for the dashboard
   shouldStop?: () => boolean; // graceful cancel — stop launching new tasks; in-flight ones finish
+  priorTurns?: (taskId: string) => Turn[]; // resume: stored conversation to seed a task's first attempt with
 }
 
 const MAX_ATTEMPTS = 3; // same-agent retries (with backoff) before a task is marked failed
@@ -100,14 +102,16 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     const accept = t.acceptance ? `\n\nAcceptance criterion: ${t.acceptance}` : "";
     const prompt = `${t.description}${accept}${depContext ? `\n\nContext from completed prerequisites:\n${depContext}` : ""}`;
 
-    let outcome = await runner.run(prompt);
+    // Seeded once, for the first attempt only: a retry's own turns are already in the store, so
+    // re-reading them would replay the attempt that just failed back into the context window.
+    let outcome = await runner.run(prompt, { taskId: t.id, priorTurns: deps.priorTurns?.(t.id) });
     // A retry is NEW work (a fresh billed model call), not the original call finishing — so it
     // must honor cancellation too, or "stop launching new work" is broken for exhausted tasks.
     while (outcome === "exhausted" && (t.attempts ?? 0) < MAX_ATTEMPTS && !(deps.shouldStop?.() ?? false)) {
       t.attempts = (t.attempts ?? 0) + 1;
       bus?.publish({ agentId: t.role, type: "failover", payload: `${t.role} exhausted — retry ${t.attempts}/${MAX_ATTEMPTS} of ${t.id}`, time: Date.now() });
       await sleep(Math.min(t.attempts * 500, 3000));
-      outcome = await runner.run(prompt);
+      outcome = await runner.run(prompt, { taskId: t.id });
     }
 
     t.output = runner.output;

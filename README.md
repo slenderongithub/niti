@@ -74,12 +74,29 @@ agents:
     role: Architect
     lead: true
     systemPrompt: You are a software architect. Decompose work into independent subtasks.
+    permissions:                        # optional, per-agent — overrides the project block below
+      shell: { "git *": allow }
   - id: engineer
     provider: openai
     model: gpt-4o
     role: Backend Engineer
     systemPrompt: You are a backend engineer. Implement the assigned task.
+    allowedTools: [read_file, write_file, edit, shell]
+
+permissions:                            # project-wide default policy
+  shell:      { "git *": allow, "git commit *": ask, "rm -rf*": deny }
+  write_file: { "src/**": allow, "*": ask }
+
+lsp:                                    # optional language servers (you install them; amux spawns them)
+  typescript: { command: typescript-language-server, args: [--stdio], extensions: [.ts, .tsx] }
+  go:         { command: gopls, extensions: [.go] }
 ```
+
+**Permissions** resolve agent block → project block → built-in defaults, and the most specific
+pattern wins (`git push --force*` beats `git *`). Anything unmatched asks, so a file with no
+`permissions:` behaves exactly as before. A `deny` is policy, not a prompt: it blocks even in
+headless runs. Destructive shell commands (`rm -rf`, `git push --force`, …) always prompt, whatever
+the config says — including under `--auto` (approve anything not explicitly denied).
 
 ## How it works
 
@@ -100,7 +117,12 @@ agents:
 - **Agent-to-agent messaging** — agents can `send_message`/`ask_agent` any teammate directly mid-task (e.g. frontend asking backend about the API shape), routed through a `MessageBus` with a per-pair rate cap as the loop guard (`src/messaging/`).
 - **Providers** — one `Provider` interface; native clients for Anthropic/Gemini, one OpenAI-compatible client covering 150+ providers via the Models.dev catalog.
 - **Event bus → SSE** — agents publish to a typed `Bus`; the `Engine` fans that (plus orchestration lifecycle, agent messages, usage, approvals) into one `EventHub` served over Server-Sent Events to both the Go TUI and the web dashboard.
-- **Tools** — sandboxed `read_file` / `write_file` / `shell`, gated per-agent by `allowedTools`, with every path jailed to the project root and shell exec via `spawn` (no shell string → no injection).
+- **Tools** — sandboxed `read_file` / `write_file` / `edit` / `shell`, gated per-agent by `allowedTools` *and* by the wildcard permission policy above, with every path jailed to the project root and shell exec via `spawn` (no shell string → no injection). `edit` replaces an exact snippet (unique match required) instead of overwriting a whole file.
+- **Persistence** — every turn is decomposed into parts and written to SQLite at `.amux/amux.db` (`src/store/`), so conversations survive a restart: `amux-core resume` re-runs unfinished tasks with their history seeded. Each file write is checkpointed first, which is what `/undo` reverts.
+- **LSP + MCP together** — MCP servers and language servers are two independent tool sources merged into the same loop. LSP adds `diagnostics(path)` and `hover(path,line,col)` over hand-rolled JSON-RPC (`src/lsp/`); a missing server is a message, never a crash.
+- **Sub-agent forking** — `spawn_fork` runs a child loop on the same model, tools, and permissions, and returns just its findings. It's a child *session*, invisible to the DAG scheduler, capped by `MAX_FORK_DEPTH`.
+- **Slash commands** — defined server-side (`src/commands/registry.ts`) so the TUI and the web dashboard share one implementation: `/panes /graph /usage /cancel /undo /model /sessions`, plus your own in `.amux/commands/<name>.md` (frontmatter + a prompt body, `$ARGUMENTS` interpolated).
+- **File watching** — edits made outside amux (your editor, a `git checkout`) surface as `external_change` events; an agent's own writes are suppressed so it never hears its own echo.
 
 ## Status
 
@@ -127,7 +149,7 @@ the task is done (Anthropic `tool_use`, OpenAI `tool_calls`, Gemini `functionCal
 
 **Skills**: drop `.amux/skills/<name>/SKILL.md` (YAML frontmatter) — descriptions are injected into every agent's system prompt; agents read the full file on demand.
 
-**Session persistence**: tasks (and the DAG) auto-save to `.amux/session.json`; both `amux` (Go TUI) and `amux-core resume` reload prior tasks on start.
+**Session persistence**: tasks (and the DAG) auto-save to `.amux/session.json`; conversations (sessions → messages → parts, plus per-write checkpoints and the agent-to-agent message trail) go to SQLite at `.amux/amux.db`. `amux-core resume` continues the unfinished tasks with their stored history, rather than starting them over.
 
 Intentional ceilings (deliberate, not gaps — see `BUILD_STATUS.md` for the full list): the tool sandbox is path-prefix jailed, not container/seccomp isolated (symlink escapes are possible); MCP servers are shared across agents, not per-agent scoped; skills are prompt-injected + read-on-demand, not sandboxed execution; Gemini pairs parallel tool calls by name (a rare edge when the same tool is called twice in one turn); agent-to-agent messaging is open within a run rather than restricted to the plan's declared edges (the planner can't anticipate every mid-task question, so only a per-pair rate cap guards against loops); and of the three sign-in options, only GitHub Copilot's OAuth is wired.
 

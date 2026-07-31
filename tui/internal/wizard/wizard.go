@@ -28,12 +28,14 @@ type Model struct {
 	Completed        bool
 	quitting         bool
 	width            int
+	height           int
 }
 
 func New(client *api.Client) Model {
 	ti := textinput.New()
 	ti.Focus()
 	ti.CharLimit = 200
+	ti.Prompt = "" // the frame draws its own ▸
 	return Model{client: client, input: ti, stage: "welcome", usedIDs: map[string]bool{}}
 }
 
@@ -42,8 +44,8 @@ func (m Model) Init() tea.Cmd { return textinput.Blink }
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.input.Width = msg.Width - 4
+		m.width, m.height = msg.Width, msg.Height
+		m.input.Width = msg.Width - 5
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -115,11 +117,11 @@ func (m Model) advance(val string) (tea.Model, tea.Cmd) {
 			m.pendRole = "Engineer"
 		}
 		m.stage = "roleTools"
-		m.input.Placeholder = "allowed tools [read_file,write_file,shell]"
+		m.input.Placeholder = "allowed tools [read_file,write_file,edit,shell]"
 	case "roleTools":
 		tools := val
 		if tools == "" {
-			tools = "read_file,write_file,shell"
+			tools = "read_file,write_file,edit,shell"
 		}
 		m.addRole(m.pendModel, m.pendRole, tools)
 		m.status = "✓ " + m.pendRole
@@ -168,7 +170,11 @@ func (m *Model) addRole(modelID, role, tools string) {
 			toolList = append(toolList, t)
 		}
 	}
-	m.roles = append(m.roles, api.AgentConfig{ID: id, Provider: provider, Model: model, Role: role, AllowedTools: toolList})
+	m.roles = append(m.roles, api.AgentConfig{
+		ID: id, Provider: provider, Model: model, Role: role,
+		SystemPrompt: fmt.Sprintf("You are the %s. Implement your assigned tasks directly and keep responses concise.", role),
+		AllowedTools: toolList,
+	})
 }
 
 func sanitize(s string) string {
@@ -194,43 +200,48 @@ func (m Model) View() string {
 		}
 		return "\ncancelled.\n"
 	}
-	title := lipgloss.NewStyle().Foreground(theme.Violet).Bold(true).Render("amux setup")
-	var prompt string
+	var body, hint string
 	switch m.stage {
 	case "welcome":
-		prompt = "Assign different models to custom roles and watch them build together.\nPress enter to begin."
+		body = lipgloss.NewStyle().Foreground(theme.Fg).Background(theme.BgPane).
+			Render("  Assign different models to custom roles and watch them build together.")
+		hint = "press enter to begin"
 	case "provider":
-		prompt = "Add a provider. Type its id, then its API key. Type 'done' when finished."
+		hint = "add a provider — type its id (openai, anthropic, google, github-copilot), or 'done'"
 	case "key":
-		prompt = "Paste the API key (or a local base URL)."
+		hint = "paste the API key (or a local base URL)"
 	case "roleModel":
-		prompt = renderRoles(m.roles) + "\nAssign a model to a role (provider/model), or 'done'."
+		body = renderRoles(m.roles)
+		hint = "assign a model to a role as provider/model — or 'done'"
 	case "roleName":
-		prompt = "Name this role — e.g. \"Frontend Designer\", \"Backend Engineer\"."
+		hint = "name this role — e.g. \"Frontend Designer\", \"Backend Engineer\""
 	case "roleTools":
-		prompt = "Which tools may it use?"
+		hint = "which tools may it use? [read_file,write_file,edit,shell]"
 	case "orchestrator":
-		prompt = renderRoles(m.roles) + "\nWhich model looks over everything and decides the chronology?"
+		body = renderRoles(m.roles)
+		hint = "which model looks over everything and decides the chronology?"
 	}
-	status := ""
 	if m.status != "" {
-		status = "\n" + lipgloss.NewStyle().Foreground(theme.Amber).Render(m.status)
+		hint = m.status + "\n" + hint
 	}
-	return fmt.Sprintf("\n%s\n\n%s\n\n%s %s%s\n",
-		title,
-		lipgloss.NewStyle().Foreground(theme.Muted).Render(prompt),
-		lipgloss.NewStyle().Foreground(theme.Green).Render("▸"),
-		m.input.View(),
-		status)
+	return frame(m.width, m.height, "setup", body, hint) + inputRow(m.width, m.input.View())
 }
 
 func renderRoles(roles []api.AgentConfig) string {
+	bg := theme.BgPane
 	if len(roles) == 0 {
-		return lipgloss.NewStyle().Foreground(theme.Line).Render("(no roles yet)")
+		return section("TEAM") + "\n" + lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("  (nobody yet)")
 	}
-	var parts []string
+	parts := []string{section("TEAM")}
 	for i, r := range roles {
-		parts = append(parts, fmt.Sprintf("%d. %s → %s/%s", i+1, r.Role, r.Provider, r.Model))
+		lead := ""
+		if r.Lead {
+			lead = lipgloss.NewStyle().Foreground(theme.Alt).Background(bg).Render(" ★")
+		}
+		parts = append(parts,
+			lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render(fmt.Sprintf("  %d. ", i+1))+
+				lipgloss.NewStyle().Foreground(theme.AgentColor(i)).Background(bg).Bold(true).Render(r.Role)+
+				lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render("  "+r.Provider+"/"+r.Model)+lead)
 	}
-	return lipgloss.NewStyle().Foreground(theme.Muted).Render(strings.Join(parts, "\n"))
+	return strings.Join(parts, "\n")
 }

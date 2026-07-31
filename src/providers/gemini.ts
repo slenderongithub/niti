@@ -16,6 +16,12 @@ export class GeminiProvider implements Provider {
     const contents = turns.map((t) => {
       if (t.role === "user") return { role: "user", parts: [{ text: t.text }] };
       if (t.role === "assistant") {
+        // Replay the native parts verbatim when we have them: newer Gemini models attach a
+        // thoughtSignature to each functionCall part and reject the next turn's request if it's
+        // missing (400 INVALID_ARGUMENT). Rebuilding functionCall parts from toolCalls (as below)
+        // drops that signature, so a fresh reply must always carry raw forward — same pattern as
+        // Anthropic's thinking blocks (see anthropic.ts).
+        if (t.raw) return { role: "model", parts: t.raw as Record<string, unknown>[] };
         const parts: Record<string, unknown>[] = [];
         if (t.text) parts.push({ text: t.text });
         for (const c of t.toolCalls) parts.push({ functionCall: { name: c.name, args: c.input } });
@@ -54,6 +60,7 @@ export class GeminiProvider implements Provider {
 
     let text = "";
     const toolCalls: ToolCall[] = [];
+    const rawParts: Record<string, unknown>[] = []; // native parts, verbatim — carries thoughtSignature
     let usage: { inputTokens: number; outputTokens: number } | undefined;
     let n = 0;
     const grabUsage = (meta?: { promptTokenCount?: number; candidatesTokenCount?: number }) => {
@@ -61,17 +68,19 @@ export class GeminiProvider implements Provider {
     };
     // ponytail: Gemini gives no call id → synthesize name+index. Parallel calls to the SAME tool
     // can't be disambiguated on the response side; rare in practice.
-    const consume = (parts: { text?: string; functionCall?: { name?: string; args?: unknown } }[]) => {
+    const consume = (parts: readonly Record<string, unknown>[]) => {
       for (const p of parts) {
-        if (p.text) {
+        rawParts.push(p);
+        if (typeof p.text === "string") {
           text += p.text;
           onDelta?.(p.text);
         }
-        if (p.functionCall) {
+        const fc = p.functionCall as { name?: string; args?: unknown } | undefined;
+        if (fc) {
           toolCalls.push({
-            id: `${p.functionCall.name}-${n++}`,
-            name: p.functionCall.name ?? "",
-            input: (p.functionCall.args ?? {}) as Record<string, unknown>,
+            id: `${fc.name}-${n++}`,
+            name: fc.name ?? "",
+            input: (fc.args ?? {}) as Record<string, unknown>,
           });
         }
       }
@@ -80,14 +89,14 @@ export class GeminiProvider implements Provider {
     if (onDelta) {
       const stream = await this.client.models.generateContentStream(params);
       for await (const chunk of stream) {
-        consume(chunk.candidates?.[0]?.content?.parts ?? []);
+        consume((chunk.candidates?.[0]?.content?.parts ?? []) as Record<string, unknown>[]);
         grabUsage(chunk.usageMetadata);
       }
     } else {
       const res = await this.client.models.generateContent(params);
-      consume(res.candidates?.[0]?.content?.parts ?? []);
+      consume((res.candidates?.[0]?.content?.parts ?? []) as Record<string, unknown>[]);
       grabUsage(res.usageMetadata);
     }
-    return { text, toolCalls, usage };
+    return { text, toolCalls, raw: rawParts, usage };
   }
 }
