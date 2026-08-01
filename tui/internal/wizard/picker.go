@@ -89,8 +89,7 @@ func fetchModels(client *api.Client, provider string) tea.Cmd {
 func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.input.Width = max(msg.Width-12, 20)
+		m.width, m.height = msg.Width, msg.Height // View() sizes the input to the card, not the terminal
 		return m, nil
 
 	case providersMsg:
@@ -452,42 +451,61 @@ func (m Picker) View() string {
 		return "\ncancelled.\n"
 	}
 	if m.stage == "error" {
-		return screen(m.width, m.height, "pick your team",
+		return screen(m.width, m.height, "pick your team", fit(m.width, widest(m.err)),
 			lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.BgPane).Render(m.err), "", "")
 	}
 	if m.stage == "loading" {
-		return screen(m.width, m.height, "pick your team", "loading…", "", "")
+		return screen(m.width, m.height, "pick your team", cardMin, "loading…", "", "")
 	}
 
-	cardW := clamp(m.width-8, cardMin, min(cardMax, max(m.width-2, cardMin))) - 4
-	listRows := clamp(m.height-14, 3, 10)
+	// Two passes: work out how wide the card wants to be from the text that will go in it, then draw
+	// the list into exactly that width. Otherwise a three-model catalog gets a card sized for forty.
+	head, hint, fixed := m.stageText()
+	roles := ""
+	if m.stage == "provider" {
+		roles = renderRoles(m.roles)
+	}
+	cardW := fit(m.width, widest(head, hint, fixed, roles, m.input.Placeholder)+2, m.list.NaturalWidth())
+	inner := cardW - 2
 
-	var body, hint string
-	switch m.stage {
-	case "size":
-		body = section("HOW MANY") + "\n" + m.list.Render(cardW, listRows, theme.BgPane)
-		hint = "↑↓ choose · enter confirms — each teammate gets its own model"
-	case "provider":
-		body = renderRoles(m.roles) + "\n\n" + section("PROVIDER") + "\n" + m.list.Render(cardW, listRows, theme.BgPane)
-		hint = "↑↓ choose · type to filter · esc goes back"
-	case "key":
-		body = section("PROVIDER") + "\n  " + m.provider
-		hint = "paste the API key (or a local base URL) — stored outside the repo"
-	case "model":
-		body = section(strings.ToUpper(m.provider)) + "\n" + m.list.Render(cardW, listRows, theme.BgPane)
-		hint = "↑↓ choose · type any model id the catalog doesn't list"
-	case "role":
-		body = section("MODEL") + "\n  " + m.provider + "/" + m.pendModel
-		hint = "what is this teammate called? (e.g. Architect, Backend Designer)"
-	case "desc":
-		body = section(strings.ToUpper(m.pendRole)) + "\n  " + m.provider + "/" + m.pendModel
-		hint = "describe its job — it becomes this agent's system prompt"
-	case "orchestrator":
-		body = section("ORCHESTRATOR") + "\n" + m.list.Render(cardW, listRows, theme.BgPane)
-		hint = "which one looks over everything and decides the chronology?"
+	listRows := m.list.Rows(clamp(m.height-14, 3, 14))
+	body := head
+	switch {
+	case fixed != "":
+		body += "\n  " + fixed
+	case m.listStage():
+		body += "\n" + m.list.Render(inner, listRows, theme.BgPane)
+	}
+	if roles != "" {
+		body = roles + "\n\n" + body
 	}
 	if m.status != "" {
 		hint = m.status + "\n" + hint
 	}
-	return screen(m.width, m.height, "pick your team", body, hint, m.input.View())
+	// The prompt is the last line of the card, so it gets the card's width and no more — a textinput
+	// sized to the terminal is what used to blow the card out to full width before anything was typed.
+	m.input.Width = max(inner-2, 8)
+	return screen(m.width, m.height, "pick your team", cardW, body, hint, m.input.View())
+}
+
+// stageText is the per-stage copy: the section heading, the hint under the body, and — for the
+// stages that show a value instead of a list — that value.
+func (m Picker) stageText() (head, hint, fixed string) {
+	switch m.stage {
+	case "size":
+		return section("HOW MANY"), "↑↓ choose · enter confirms — each teammate gets its own model", ""
+	case "provider":
+		return section("PROVIDER"), "↑↓ choose · type to filter · esc goes back", ""
+	case "key":
+		return section("PROVIDER"), "paste the API key (or a local base URL) — stored outside the repo", m.provider
+	case "model":
+		return section(strings.ToUpper(m.provider)), "↑↓ choose · type any model id the catalog doesn't list", ""
+	case "role":
+		return section("MODEL"), "what is this teammate called? (e.g. Architect, Backend Designer)", m.provider + "/" + m.pendModel
+	case "desc":
+		return section(strings.ToUpper(m.pendRole)), "describe its job — it becomes this agent's system prompt", m.provider + "/" + m.pendModel
+	case "orchestrator":
+		return section("ORCHESTRATOR"), "which one looks over everything and decides the chronology?", ""
+	}
+	return "", "", ""
 }

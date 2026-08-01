@@ -10,7 +10,12 @@ import (
 
 	"github.com/amux/tui/internal/theme"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
+
+// Version is the amux release string. It lives here because both the setup screens and the live
+// session view put it on screen, and `ui` is the one package both already import.
+const Version = "0.2.0"
 
 // Item is one selectable row. Value is what the caller acts on; Label/Desc are what it reads as.
 type Item struct {
@@ -89,14 +94,46 @@ func (l *List) Selected() (Item, bool) {
 	return l.items[l.shown[l.cursor]], true
 }
 
-// Render draws exactly `rows` lines. The visible window follows the cursor, and an off-screen
-// remainder is reported on the last line so a filtered-down list never looks like the whole list.
+// Rows is how many lines Render will draw for a `rows`-line budget — never more than there is
+// content for. Callers size their frame off this so a three-item list doesn't sit in a ten-row hole.
+func (l *List) Rows(rows int) int {
+	if rows < 1 {
+		return 0
+	}
+	if len(l.shown) == 0 {
+		return 1 // the "no matches" line
+	}
+	return min(len(l.shown), rows)
+}
+
+// NaturalWidth is the width the widest row wants, so a frame can shrink to its content instead of
+// always claiming the maximum.
+func (l *List) NaturalWidth() int {
+	w := 0
+	for _, i := range l.shown {
+		it := l.items[i]
+		n := 2 + lipgloss.Width(it.Label)
+		if it.Tag != "" {
+			n += lipgloss.Width(it.Tag) + 1
+		}
+		if it.Desc != "" {
+			n += 2 + lipgloss.Width(it.Desc)
+		}
+		w = max(w, n)
+	}
+	return w
+}
+
+// Render draws at most `rows` lines — exactly Rows(rows) of them. The visible window follows the
+// cursor, and an off-screen remainder is reported on the last line so a filtered-down list never
+// looks like the whole list. It deliberately does *not* pad out to `rows`: an empty tail is dead
+// space the caller's frame would have to draw a border around.
 func (l *List) Render(w, rows int, bg lipgloss.Color) string {
 	if rows < 1 {
 		return ""
 	}
 	if len(l.shown) == 0 {
-		return pad(lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("  no matches"), w, bg, rows)
+		return pad(lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("  no matches"), w, bg, 1)
 	}
 
 	body := rows
@@ -126,7 +163,7 @@ func (l *List) Render(w, rows int, bg lipgloss.Color) string {
 		lines = append(lines, lipgloss.NewStyle().Foreground(theme.Line).Background(bg).
 			Render(Truncate("  +"+strconv.Itoa(hidden)+" more", w)))
 	}
-	return pad(strings.Join(lines, "\n"), w, bg, rows)
+	return pad(strings.Join(lines, "\n"), w, bg, len(lines))
 }
 
 func (l *List) row(it Item, selected bool, w int, bg lipgloss.Color) string {
@@ -164,7 +201,12 @@ func Box(title, body, hint string, w int) string {
 	head := lipgloss.NewStyle().Foreground(theme.Accent).Background(bg).Bold(true).Render(Truncate(title, inner))
 	parts := []string{head, body}
 	if hint != "" {
-		parts = append(parts, lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render(Truncate(hint, inner)))
+		// One blank row between the content and the hint — the box is content-sized now, and without
+		// this the hint reads as another list row.
+		parts = append(parts, "")
+		for _, hl := range strings.Split(hint, "\n") {
+			parts = append(parts, lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render(Truncate(hl, inner)))
+		}
 	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).BorderForeground(theme.Accent).BorderBackground(theme.BgDeep).
@@ -172,9 +214,10 @@ func Box(title, body, hint string, w int) string {
 		Render(strings.Join(parts, "\n"))
 }
 
-// Overlay floats `box` over the middle of `base`, replacing whole lines rather than splicing into
-// them — a rendered line is full of ANSI runs, and cutting one mid-sequence is how a "modal" turns
-// into mojibake. Whole-line replacement is why the modal spans the full width.
+// Overlay floats `box` over the middle of `base`. The part of the base line to the *left* of the
+// box is kept — ansi.Truncate cuts on cell boundaries and carries the active SGR state, so the
+// sidebar keeps its own background instead of being blanked into a dark stripe wherever a modal
+// happens to sit. The right-hand gap is repainted in BgDeep, which is what the main pane is anyway.
 func Overlay(base, box string, w, h int) string {
 	baseLines := strings.Split(base, "\n")
 	boxLines := strings.Split(box, "\n")
@@ -182,15 +225,19 @@ func Overlay(base, box string, w, h int) string {
 		boxLines = boxLines[:h]
 	}
 	top := max((h-len(boxLines))/2, 0)
+	gap := lipgloss.NewStyle().Background(theme.BgDeep)
 	for i, bl := range boxLines {
 		row := top + i
 		if row >= len(baseLines) {
 			break
 		}
-		side := max((w-lipgloss.Width(bl))/2, 0)
-		gap := lipgloss.NewStyle().Background(theme.BgDeep)
-		baseLines[row] = gap.Render(strings.Repeat(" ", side)) + bl +
-			gap.Render(strings.Repeat(" ", max(w-side-lipgloss.Width(bl), 0)))
+		bw := lipgloss.Width(bl)
+		side := max((w-bw)/2, 0)
+		left := ansi.Truncate(baseLines[row], side, "")
+		if pad := side - lipgloss.Width(left); pad > 0 { // a base line shorter than the gap
+			left += gap.Render(strings.Repeat(" ", pad))
+		}
+		baseLines[row] = left + "\x1b[0m" + bl + gap.Render(strings.Repeat(" ", max(w-side-bw, 0)))
 	}
 	return strings.Join(baseLines, "\n")
 }

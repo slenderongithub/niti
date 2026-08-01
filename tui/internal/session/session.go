@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/amux/tui/internal/api"
 	"github.com/amux/tui/internal/theme"
@@ -103,6 +104,7 @@ type Model struct {
 	menuOpen  bool
 	car       carousel // the ctrl+p model switcher, when open
 	sett      settings // the /settings · /status · /config · /usage · /stats overlay, when open
+	out       output   // the pager a multi-line command result opens, when open
 	view      string   // "panes" | "usage"
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
@@ -116,8 +118,13 @@ type Model struct {
 	width     int
 	height    int
 	status    string
+	quitArm   time.Time // when ctrl+c was last pressed — a second press inside quitGrace leaves
 	quitting  bool
 }
+
+// Quitting takes two keystrokes (or /quit) on purpose: this window holds a live session, and a
+// stray ctrl+c aimed at cancelling a runaway agent used to take the whole thing down with it.
+const quitGrace = 3 * time.Second
 
 // New builds the model. `events` is the already-open SSE channel; `cancel` tears down the stream.
 func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, cancel context.CancelFunc) Model {
@@ -193,6 +200,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.onKey(msg)
 
+	case tea.MouseMsg:
+		// Mouse reporting is on so the wheel can't scroll the shell's scrollback over a live session
+		// (see cmd/amux/main.go). Having taken it, the wheel drives whatever list is on screen.
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.scroll(-1)
+		case tea.MouseButtonWheelDown:
+			m.scroll(1)
+		}
+		return m, nil
+
 	case errMsg:
 		m.status = msg.err.Error()
 		return m, nil
@@ -228,10 +246,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.result.View != "":
 			m.view = msg.result.View // view switches are the client's job; the registry just names them
 		default:
-			m.status = msg.result.Message
-		}
-		if msg.result.Message != "" && msg.result.View == "" {
-			m.pushFeed("/" + msg.name + ": " + msg.result.Message)
+			// Not pushed to the feed: that strip is for agent-to-agent traffic, and a multi-row
+			// command answer stacked there is what buried it.
+			m.show("/"+msg.name, msg.result.Message)
 		}
 		return m, nil
 
@@ -245,11 +262,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// ctrl+c always quits; the popup below swallows everything else, so it can't be the only way out.
-	if s := k.String(); s == "ctrl+c" || s == "ctrl+d" {
-		m.quitting = true
-		m.cancel()
-		return m, tea.Quit
+	// ctrl+c is the escape hatch from any popup, so it's handled before them — but it arms first and
+	// quits second, and /quit is the deliberate way out.
+	if k.String() == "ctrl+c" {
+		if !m.quitArm.IsZero() && time.Since(m.quitArm) < quitGrace {
+			m.quitting = true
+			m.cancel()
+			return m, tea.Quit
+		}
+		m.quitArm = time.Now()
+		m.status = "press ctrl+c again to quit — or type /quit"
+		return m, nil
+	}
+	m.quitArm = time.Time{} // any other key disarms: the two presses have to be consecutive
+	if m.out.open {
+		return m, m.outputKey(k)
 	}
 	if m.sett.open {
 		return m, m.settingsKey(k)
@@ -335,20 +362,59 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// scroll moves whichever list has the screen by one row. Nothing open means nothing to scroll —
+// the transcript follows the agents, not the wheel.
+func (m *Model) scroll(delta int) {
+	switch {
+	case m.out.open:
+		m.out.top = clamp(m.out.top+delta, 0, m.outputMaxTop())
+	case m.car.open:
+		m.car.list.Move(delta)
+	case m.menuOpen:
+		m.menu.Move(delta)
+	}
+}
+
 // menuItems is every command the user can type: the server registry plus the two that can only be
 // handled here (quitting tears down this process; the theme is a property of this terminal).
 func (m Model) menuItems() []ui.Item {
-	items := make([]ui.Item, 0, len(m.commands)+2)
-	for _, c := range m.commands {
-		items = append(items, ui.Item{Label: "/" + c.Name, Value: "/" + c.Name, Desc: c.Description})
+	items := make([]ui.Item, 0, len(m.commands)+8)
+	seen := map[string]bool{}
+	add := func(name, desc string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		items = append(items, ui.Item{Label: "/" + name, Value: "/" + name, Desc: desc})
 	}
-	return append(items,
-		ui.Item{Label: "/graph", Value: "/graph", Desc: "Open the interactive graph in your browser"},
-		ui.Item{Label: "/settings", Value: "/settings", Desc: "Open the settings overlay (Status · Config · Usage · Stats)"},
-		ui.Item{Label: "/config", Value: "/config", Desc: "Theme, mode and the team's model assignments"},
-		ui.Item{Label: "/stats", Value: "/stats", Desc: "Token stats: favorite model and per-model breakdown"},
-		ui.Item{Label: "/theme", Value: "/theme", Desc: "Switch the TUI theme: /theme <name>"},
-		ui.Item{Label: "/quit", Value: "/quit", Desc: "Leave amux"})
+	// /help first: it's the one command someone types before they know any of the others.
+	add("help", "List every command in a window")
+	for _, c := range m.commands {
+		add(c.Name, c.Description)
+	}
+	add("graph", "Open the interactive graph in your browser")
+	add("settings", "Open the settings overlay (Status · Config · Usage · Stats)")
+	add("config", "Theme, mode and the team's model assignments")
+	add("stats", "Token stats: favorite model and per-model breakdown")
+	add("theme", "Switch the TUI theme: /theme <name>")
+	add("quit", "Leave amux")
+	return items
+}
+
+// helpLines is /help: every command the menu offers, name-padded into two columns so the window
+// reads as a table rather than as wrapped prose.
+func (m Model) helpLines() []string {
+	items := m.menuItems()
+	w := 0
+	for _, it := range items {
+		w = max(w, len(it.Label))
+	}
+	lines := make([]string, 0, len(items)+2)
+	for _, it := range items {
+		lines = append(lines, fmt.Sprintf("%-*s  %s", w, it.Label, it.Desc))
+	}
+	return append(lines, "",
+		"keys — tab: usage · shift+tab: plan mode · ctrl+p: models · ctrl+t: theme")
 }
 
 // refreshMenu decides whether the suggestion window is up, and what it's filtered to. It opens on
@@ -389,10 +455,23 @@ func (m *Model) submit(text string) tea.Cmd {
 	// The settings overlay is a pure client surface (it paints over the whole TUI, like the ctrl+p
 	// carousel), so its commands are handled here rather than round-tripped to the server. This
 	// supersedes the plain-text /status and /usage the registry still offers — richer, same data.
-	if name, _, _ := strings.Cut(strings.TrimPrefix(text, "/"), " "); strings.HasPrefix(text, "/") {
+	if name, args, _ := strings.Cut(strings.TrimPrefix(text, "/"), " "); strings.HasPrefix(text, "/") {
 		if tab, ok := settingsTabFor(name); ok {
 			m.sett = settings{open: true, tab: tab}
 			return fetchStats(m.client) // load the all-time history the Stats/Usage panels draw
+		}
+		switch name {
+		case "help":
+			// Client-side, because only the client knows the whole set: the server registry plus the
+			// commands that can only happen here (/quit, /theme, /graph, the settings tabs).
+			m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
+			return nil
+		case "model":
+			// Bare /model opens the same centred picker ctrl+p does; with arguments it's the scriptable
+			// form and goes to the server. Nobody should have to type an agent id from memory.
+			if strings.TrimSpace(args) == "" {
+				return m.openCarousel()
+			}
 		}
 		if name == "graph" {
 			// The interactive graph lives in the browser — the terminal can't do drag/hover/zoom. Open

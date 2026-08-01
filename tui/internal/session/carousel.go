@@ -7,6 +7,7 @@ import (
 	"github.com/amux/tui/internal/theme"
 	"github.com/amux/tui/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // The carousel is the ctrl+p model switcher: a popup in the middle of the screen that picks a
@@ -178,10 +179,11 @@ func (m *Model) carouselConfirm() tea.Cmd {
 	return nil
 }
 
-// carouselView renders the popup body; view.go floats it over the middle of the screen.
+// carouselView renders the popup body; view.go floats it over the middle of the screen. The box is
+// sized to the catalog it's showing — three models get a three-row box, not a twelve-row one with
+// nine rows of nothing under them.
 func (m Model) carouselView(w, h int) string {
-	boxW := clamp(w*3/5, 34, 72)
-	rows := clamp(h-10, 4, 12)
+	rows := m.car.list.Rows(clamp(h-10, 4, 14))
 	title, hint := "SWITCH MODEL — pick a teammate", "↑↓ choose · enter confirms · esc cancels"
 	if m.car.stage == "model" {
 		st := m.agents[m.car.agentID]
@@ -195,12 +197,25 @@ func (m Model) carouselView(w, h int) string {
 			hint = "loading models… · esc cancels"
 		}
 	}
+	if m.car.status != "" {
+		hint = m.car.status + "\n" + hint
+	}
+	boxW := clamp(max(m.car.list.NaturalWidth(), widest(title, hint, m.car.query))+6, 34, max(w-6, 34))
 	body := m.car.list.Render(boxW-4, rows, theme.BgPane)
 	if m.car.query != "" {
 		body = txt(theme.Green, theme.BgPane).Render("  /"+m.car.query) + "\n" + body
 	}
-	if m.car.status != "" {
-		hint = m.car.status + "\n" + hint
-	}
 	return ui.Box(title, body, hint, boxW)
+}
+
+// widest is the display width of the longest of these lines — how every popup here decides how much
+// of the terminal it actually needs.
+func widest(lines ...string) int {
+	n := 0
+	for _, l := range lines {
+		for _, part := range strings.Split(l, "\n") {
+			n = max(n, lipgloss.Width(part))
+		}
+	}
+	return n
 }

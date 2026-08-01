@@ -116,7 +116,12 @@ func (m Model) View() string {
 	// One ANSI-aware guarantee that nothing overflows the terminal, however long a streamed line or
 	// a registry command list turns out to be.
 	out := lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(strings.Join(rows, "\n"))
-	if m.car.open {
+	// At most one popup is reachable at a time (onKey gives whichever is open the keyboard), so the
+	// order here is only about which one wins if both flags are somehow set.
+	switch {
+	case m.out.open:
+		out = ui.Overlay(out, m.outputView(w, h), w, h)
+	case m.car.open:
 		out = ui.Overlay(out, m.carouselView(w, h), w, h)
 	}
 	return out
@@ -183,7 +188,9 @@ func bar(pct, width int, fill, empty, bg lipgloss.Color) string {
 
 func (m Model) header(w int) string {
 	bg := theme.BgPane
-	brand := txt(theme.Accent, bg).Bold(true).Render(" ● amux")
+	// The version sits in the header rather than only behind /settings — "which amux is this?" is a
+	// question worth answering without a keystroke, especially in a bug report screenshot.
+	brand := txt(theme.Accent, bg).Bold(true).Render(" ● amux") + txt(theme.Line, bg).Render(" v"+ui.Version)
 	left := brand + " " + m.pill("BUILD", "build") + m.pill("PLAN", "plan")
 
 	pb := bar(m.progress, clamp(w/8, 5, 18), theme.Accent, theme.Line, bg)
@@ -506,8 +513,13 @@ func (m Model) footer(w int) string {
 	if m.mode == "plan" {
 		next = "build"
 	}
-	line := fmt.Sprintf(" tab: %s · ctrl+p: models · shift+tab: %s · ctrl+t: %s · / for commands · %s",
-		m.view, next, theme.Current(), m.status)
+	line := fmt.Sprintf(" tab: %s · ctrl+p: models · shift+tab: %s · ctrl+t: %s · /help for commands",
+		m.view, next, theme.Current())
+	// The status is the only part that changes, so it goes last and only when there is one — a
+	// trailing "· " with nothing after it is what an empty status used to leave behind.
+	if s := strings.TrimSpace(m.status); s != "" {
+		line += " · " + s
+	}
 	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).
 		Render(txt(theme.Muted, bg).Render(truncate(line, w)))
 }

@@ -5,6 +5,7 @@ import type { Engine } from "../engine.ts";
 import { splitModelId } from "../providers/catalog.ts";
 import { costOf } from "../providers/pricing.ts";
 import { saveTasks } from "../session.ts";
+import { loadSkills } from "../skills/skills.ts";
 
 // Slash commands live here, on the server, rather than in the Go TUI's key handler — otherwise the
 // web dashboard needs an identical second implementation of every one of them. Clients fetch the
@@ -96,6 +97,19 @@ export const BUILTIN_COMMANDS: Command[] = [
           .map((t) => `${TASK_GLYPH[t.status] ?? "○"} ${t.id.padEnd(8)} ${t.assignedTo ?? "-"}  ${t.description}`)
           .join("\n"),
       };
+    },
+  },
+  {
+    name: "skills",
+    description: "List the skills agents can read from .amux/skills/",
+    async run() {
+      // Read from disk rather than off the engine: skills are files, and a skill added mid-session
+      // should show up without a restart. The list is small and this is a manual command.
+      const skills = loadSkills();
+      if (!skills.length) {
+        return { ok: true, message: "no skills yet — add .amux/skills/<name>/SKILL.md (name + description frontmatter)" };
+      }
+      return { ok: true, message: skills.map((s) => `${s.name.padEnd(20)} ${s.description || "(no description)"}`).join("\n") };
     },
   },
   {

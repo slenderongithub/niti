@@ -8,19 +8,44 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Shared chrome for the two setup screens. They're the first thing shown on every launch, so they
-// use the same painted full-screen surface as the session view — but the prompt itself is a card
+// Shared chrome for the setup screens. They're the first thing shown on every launch, so they use
+// the same painted full-screen surface as the session view — but the prompt itself is a card
 // centered in the terminal rather than a column pinned to the top-left, because at this point
 // there's nothing else on screen for it to be aligned with.
+//
+// The card is sized to what it actually holds, in both directions: five short options make a small
+// card, forty models make a tall one. A frame that stays the same size whatever is inside it reads
+// as a hole with text in the corner.
 
 const (
 	cardMin = 34
 	cardMax = 78
 )
 
+// fit is the card's content width for a set of lines: the widest of them, clamped to the card
+// bounds and to what the terminal can actually show.
+func fit(w int, natural ...int) int {
+	want := 0
+	for _, n := range natural {
+		want = max(want, n)
+	}
+	return clamp(want+2, cardMin, min(cardMax, max(w-6, cardMin))) // +2 for the card's side padding
+}
+
+func widest(lines ...string) int {
+	n := 0
+	for _, l := range lines {
+		for _, part := range strings.Split(l, "\n") {
+			n = max(n, lipgloss.Width(part))
+		}
+	}
+	return n
+}
+
 // screen paints the whole terminal: brand bar, mode stripe, then the setup card centered in
-// whatever is left. body/hint/input are stacked inside the card in that order.
-func screen(w, h int, title, body, hint, input string) string {
+// whatever is left. body/hint/input are stacked inside the card in that order, and the card is
+// exactly as tall as they are.
+func screen(w, h int, title string, cardW int, body, hint, input string) string {
 	if w <= 0 {
 		w = 90
 	}
@@ -30,11 +55,12 @@ func screen(w, h int, title, body, hint, input string) string {
 	bg := theme.BgPane
 	head := lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).Render(
 		lipgloss.NewStyle().Foreground(theme.Accent).Background(bg).Bold(true).Render(" ● amux ") +
+			lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("v"+ui.Version+" ") +
 			lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render("— "+title))
 	stripe := lipgloss.NewStyle().Foreground(theme.Accent).Background(theme.BgDeep).Render(strings.Repeat("━", w))
 
 	inner := max(h-2, 1) // the two header rows
-	cardW := clamp(w-8, cardMin, min(cardMax, max(w-2, cardMin)))
+	cardW = clamp(cardW, cardMin, min(cardMax, max(w-2, cardMin)))
 
 	var lines []string
 	if body != "" {

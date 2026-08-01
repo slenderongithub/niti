@@ -9,6 +9,7 @@ import (
 
 	"github.com/amux/tui/internal/api"
 	"github.com/amux/tui/internal/theme"
+	"github.com/amux/tui/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -18,7 +19,7 @@ import (
 // panel is built from data the session already holds — the team, the live usage totals, the
 // per-agent token split — so nothing here needs a server round-trip.
 
-const version = "0.2.0"
+const version = ui.Version
 
 var settingsTabs = []string{"Settings", "Status", "Config", "Usage", "Stats"}
 

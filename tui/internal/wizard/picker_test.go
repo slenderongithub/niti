@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/amux/tui/internal/api"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -222,4 +223,70 @@ func TestPickerViewFitsTheTerminal(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The card is sized to what it holds, in both directions. Before this it was drawn at a fixed
+// width and a fixed ten rows, so a three-model catalog sat in a box with seven empty rows under it
+// — and the box collapsed to a sane size only once a keystroke filtered the list.
+func TestCardIsSizedToItsContent(t *testing.T) {
+	client, _, _ := fakeCore(t)
+	m := loaded(t, client)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: 44})
+	m = updated.(Picker)
+
+	tall := cardRows(m.View())
+	// Typing "1" narrows five options to one; the card must lose the four rows it no longer needs.
+	m.input.SetValue("1")
+	m.list.SetQuery("1")
+	short := cardRows(m.View())
+	if short >= tall {
+		t.Errorf("a one-option card is %d rows, a five-option one %d — it must shrink", short, tall)
+	}
+
+	// And it never claims the whole terminal: the card is centered content, not a full-width bar.
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, "╭") && lipgloss.Width(strings.TrimSpace(line)) > cardMax+2 {
+			t.Errorf("the card is %d columns wide on a 160-column terminal", lipgloss.Width(strings.TrimSpace(line)))
+		}
+	}
+}
+
+// The card must not be blown out to full width by the prompt behind it — the textinput is sized to
+// the card, which is why an untyped placeholder no longer stretches the box across the screen.
+func TestPlaceholderDoesNotWidenTheCard(t *testing.T) {
+	client, _, _ := fakeCore(t)
+	m := loaded(t, client)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 44})
+	m = updated.(Picker)
+
+	empty := cardRule(t, m.View())
+	m.input.SetValue("1")
+	m.list.SetQuery("1")
+	typed := cardRule(t, m.View())
+	if empty != typed {
+		t.Errorf("the card is %d wide empty and %d wide after a keystroke — width must not depend on typing", empty, typed)
+	}
+}
+
+// cardRows is how many rows the card body occupies inside the centered screen.
+func cardRows(view string) int {
+	n := 0
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "│") {
+			n++
+		}
+	}
+	return n
+}
+
+// cardRule is the width of the card's top border.
+func cardRule(t *testing.T, view string) int {
+	t.Helper()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "╭") {
+			return lipgloss.Width(strings.TrimSpace(line))
+		}
+	}
+	t.Fatal("no card in the view")
+	return 0
 }
