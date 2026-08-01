@@ -165,6 +165,39 @@ export class SessionStore {
     return (this.db.query(sql).all(...(args as string[])) as SessionDbRow[]).map(toRow);
   }
 
+  // All-time usage aggregates for the /stats page: tokens per calendar day (for the heatmap and the
+  // tokens-per-day chart), tokens per model (for the breakdown and the favorite-model pick), and the
+  // session-level counters (how many sessions, the longest one). Pure SQL over the same rows the
+  // agent loop already writes — no separate ledger to keep in step. Days are bucketed in local time
+  // so "most active day" lines up with the user's calendar, not UTC.
+  stats(): {
+    perDay: { date: string; tokens: number; msgs: number }[];
+    perModel: { provider: string; model: string; inTokens: number; outTokens: number; msgs: number }[];
+    sessions: number;
+    longestSessionMs: number;
+  } {
+    const perDay = this.db
+      .query(
+        `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+                SUM(input_tokens + output_tokens) AS tokens,
+                COUNT(*) AS msgs
+         FROM messages GROUP BY date ORDER BY date`,
+      )
+      .all() as { date: string; tokens: number; msgs: number }[];
+    const perModel = this.db
+      .query(
+        `SELECT s.provider AS provider, s.model AS model,
+                SUM(m.input_tokens) AS inTokens, SUM(m.output_tokens) AS outTokens, COUNT(*) AS msgs
+         FROM messages m JOIN sessions s ON s.id = m.session_id
+         GROUP BY s.provider, s.model ORDER BY (inTokens + outTokens) DESC`,
+      )
+      .all() as { provider: string; model: string; inTokens: number; outTokens: number; msgs: number }[];
+    const agg = this.db
+      .query(`SELECT COUNT(*) AS sessions, COALESCE(MAX(updated_at - created_at), 0) AS longest FROM sessions`)
+      .get() as { sessions: number; longest: number };
+    return { perDay, perModel, sessions: agg.sessions, longestSessionMs: agg.longest };
+  }
+
   getSession(id: string): SessionRow | undefined {
     const r = this.db.query("SELECT * FROM sessions WHERE id = ?").get(id) as SessionDbRow | null;
     return r ? toRow(r) : undefined;

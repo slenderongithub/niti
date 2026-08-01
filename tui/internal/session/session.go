@@ -5,6 +5,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/amux/tui/internal/api"
@@ -41,6 +42,8 @@ type agentState struct {
 	status   string // idle | working | done | failed
 	activity string
 	tokens   int
+	in, out  int // split input/output totals, for the /usage and /stats breakdowns
+	calls    int
 	ctxUsed  int // most recent call's input tokens = current context depth
 	ctxLimit int // the model's context window, from /session
 	log      []string
@@ -99,7 +102,8 @@ type Model struct {
 	menu      ui.List       // slash-command suggestions shown over the prompt while typing "/…"
 	menuOpen  bool
 	car       carousel // the ctrl+p model switcher, when open
-	view      string   // "panes" | "graph" | "usage"
+	sett      settings // the /settings · /status · /config · /usage · /stats overlay, when open
+	view      string   // "panes" | "usage"
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
 	root string
@@ -155,6 +159,20 @@ func fetchCommands(client *api.Client) tea.Cmd {
 	}
 }
 
+// statsMsg carries the all-time usage aggregate the /stats overlay renders. Fetched once when the
+// overlay opens (it reads the on-disk session history, which doesn't change mid-frame).
+type statsMsg struct {
+	stats api.Stats
+	err   error
+}
+
+func fetchStats(client *api.Client) tea.Cmd {
+	return func() tea.Msg {
+		s, err := client.Stats()
+		return statsMsg{stats: s, err: err}
+	}
+}
+
 func waitFor(ch <-chan api.Event) tea.Cmd {
 	return func() tea.Msg {
 		e, ok := <-ch
@@ -194,6 +212,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setCarouselModels(msg)
 		return m, nil
 
+	case statsMsg:
+		m.sett.statsLoaded = true
+		if msg.err != nil {
+			m.sett.statsErr = msg.err.Error()
+		} else {
+			m.sett.stats, m.sett.statsErr = msg.stats, ""
+		}
+		return m, nil
+
 	case commandResultMsg:
 		switch {
 		case msg.err != nil:
@@ -223,6 +250,9 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		m.cancel()
 		return m, tea.Quit
+	}
+	if m.sett.open {
+		return m, m.settingsKey(k)
 	}
 	if m.car.open {
 		return m, m.carouselKey(k)
@@ -282,7 +312,7 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch k.String() {
 	case "tab":
-		m.view = map[string]string{"panes": "graph", "graph": "usage", "usage": "panes"}[m.view]
+		m.view = map[string]string{"panes": "usage", "usage": "panes"}[m.view]
 		return m, nil
 	case "ctrl+p":
 		return m, m.openCarousel()
@@ -313,6 +343,10 @@ func (m Model) menuItems() []ui.Item {
 		items = append(items, ui.Item{Label: "/" + c.Name, Value: "/" + c.Name, Desc: c.Description})
 	}
 	return append(items,
+		ui.Item{Label: "/graph", Value: "/graph", Desc: "Open the interactive graph in your browser"},
+		ui.Item{Label: "/settings", Value: "/settings", Desc: "Open the settings overlay (Status · Config · Usage · Stats)"},
+		ui.Item{Label: "/config", Value: "/config", Desc: "Theme, mode and the team's model assignments"},
+		ui.Item{Label: "/stats", Value: "/stats", Desc: "Token stats: favorite model and per-model breakdown"},
 		ui.Item{Label: "/theme", Value: "/theme", Desc: "Switch the TUI theme: /theme <name>"},
 		ui.Item{Label: "/quit", Value: "/quit", Desc: "Leave amux"})
 }
@@ -351,6 +385,22 @@ func (m *Model) submit(text string) tea.Cmd {
 			m.status = "unknown theme " + args + " — try: " + strings.Join(theme.Names(), " ")
 		}
 		return nil
+	}
+	// The settings overlay is a pure client surface (it paints over the whole TUI, like the ctrl+p
+	// carousel), so its commands are handled here rather than round-tripped to the server. This
+	// supersedes the plain-text /status and /usage the registry still offers — richer, same data.
+	if name, _, _ := strings.Cut(strings.TrimPrefix(text, "/"), " "); strings.HasPrefix(text, "/") {
+		if tab, ok := settingsTabFor(name); ok {
+			m.sett = settings{open: true, tab: tab}
+			return fetchStats(m.client) // load the all-time history the Stats/Usage panels draw
+		}
+		if name == "graph" {
+			// The interactive graph lives in the browser — the terminal can't do drag/hover/zoom. Open
+			// the core's own /graph/view page, passing the token the same way the web dashboard does.
+			target := m.client.BaseURL + "/graph/view?token=" + url.QueryEscape(m.client.Token)
+			m.status = "opened the graph in your browser"
+			return func() tea.Msg { return actionResultMsg{action: "open graph", err: openBrowser(target)} }
+		}
 	}
 	if strings.HasPrefix(text, "/") {
 		name, args, _ := strings.Cut(strings.TrimPrefix(text, "/"), " ")
@@ -409,6 +459,7 @@ func (m *Model) apply(e api.Event) {
 		m.cost, m.costKnown = e.Cost, e.CostKnown
 		for _, a := range e.Agents {
 			if st := m.agents[a.AgentID]; st != nil {
+				st.in, st.out, st.calls = a.Usage.InputTokens, a.Usage.OutputTokens, a.Usage.Calls
 				st.tokens = a.Usage.InputTokens + a.Usage.OutputTokens
 				st.ctxUsed = a.Usage.LastInput
 			}

@@ -1,11 +1,11 @@
 agents:
-  - id: backend-engineer
-    provider: google
-    model: gemini-1.5-pro
-    role: backend engineer
+  - id: s
+    provider: anyapi
+    model: cohere/command-r-plus-08-2024
+    role: s
     lead: true
-    systemPrompt: You are the backend engineer. Implement your assigned tasks
-      directly and keep responses concise.
+    systemPrompt: You are the s. s Implement your assigned tasks directly and keep
+      responses concise.
     allowedTools:
       - read_file
       - write_file

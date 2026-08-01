@@ -20,7 +20,7 @@ function engine(store?: SessionStore): Engine {
 
 test("view commands are a pure client-side switch", async () => {
   const r = new CommandRegistry(BUILTIN_COMMANDS);
-  expect(await r.run(engine(), "graph")).toEqual({ ok: true, message: "", view: "graph" });
+  expect(await r.run(engine(), "usage")).toEqual({ ok: true, message: "", view: "usage" });
 });
 
 test("/undo reports what it reverted (or that there's nothing to revert)", async () => {
@@ -85,7 +85,7 @@ test("list() is what a client renders for autocomplete", () => {
   const names = new CommandRegistry(BUILTIN_COMMANDS).list().map((c) => c.name);
   // Order matters: it's the order the TUI's "/" menu offers them in, and /help is appended last.
   expect(names).toEqual([
-    "panes", "graph", "usage", "cancel", "undo", "model", "sessions",
+    "panes", "usage", "cancel", "undo", "model", "sessions",
     "agents", "tasks", "mcp", "lsp", "permissions", "cost", "status", "resume", "clear", "init",
     "help",
   ]);

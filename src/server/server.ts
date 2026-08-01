@@ -4,6 +4,8 @@ import { timingSafeEqual } from "node:crypto";
 import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "./events.ts";
 import { CATALOG, contextWindow, providersByCategory, splitModelId, type Category } from "../providers/catalog.ts";
+import { costOf } from "../providers/pricing.ts";
+import { buildFileGraph } from "../graph/filegraph.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
 import { saveAgents } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
@@ -93,6 +95,10 @@ export function startServer(
       if (p === "/" || p === "/dashboard" || p === "/dashboard/") return serveFile("index.html");
       if (p.startsWith("/dashboard/")) return serveFile(p.slice("/dashboard/".length));
       if (p === "/app.js" || p === "/style.css") return serveFile(p.slice(1));
+      // The interactive graph page — public shell like the dashboard; its /graph and /events calls
+      // carry the token via ?token=. (Distinct from the gated data route `/graph` below.)
+      if (p === "/graph/view" || p === "/graph/view/") return serveFile("graph.html");
+      if (p === "/graph.js") return serveFile("graph.js");
 
       // --- everything below requires the token (header or ?token=) ---
       const bearer = req.headers.get("authorization");
@@ -142,6 +148,32 @@ export function startServer(
         // Always 200: the command was dispatched, and its own `ok` says how it went. A non-2xx
         // would strand that message in the client's generic error path.
         return json(await commands.run(engine, name, args ?? ""));
+      }
+
+      if (p === "/graph" && method === "GET") {
+        try {
+          return json(buildFileGraph(engine.root));
+        } catch {
+          return json({ nodes: [], edges: [] }); // scanning is best-effort; an unreadable tree isn't fatal
+        }
+      }
+
+      if (p === "/stats" && method === "GET") {
+        if (!engine.store) return json({ perDay: [], perModel: [], sessions: 0, inTokens: 0, outTokens: 0, longestSessionMs: 0, totalUsd: 0, costComplete: true });
+        const s = engine.store.stats();
+        let totalUsd = 0;
+        let costComplete = true;
+        let inTokens = 0;
+        let outTokens = 0;
+        const perModel = s.perModel.map((m) => {
+          const { usd, priced } = costOf(m.provider, m.model, m.inTokens, m.outTokens);
+          totalUsd += usd;
+          if (!priced) costComplete = false;
+          inTokens += m.inTokens;
+          outTokens += m.outTokens;
+          return { name: `${m.provider}/${m.model}`, inTokens: m.inTokens, outTokens: m.outTokens, msgs: m.msgs, usd, priced };
+        });
+        return json({ perDay: s.perDay, perModel, sessions: s.sessions, inTokens, outTokens, longestSessionMs: s.longestSessionMs, totalUsd, costComplete });
       }
 
       if (p === "/sessions" && method === "GET") {

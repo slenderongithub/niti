@@ -12,6 +12,7 @@
     "serve": "bun run src/server/main.ts",
     "build": "bun build --compile ./src/cli.ts --outfile amux-core",
     "build:tui": "cd tui && go mod tidy && go build -o ../amux ./cmd/amux",
+    "build:all": "bun run build:tui && bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "gen:catalog": "bun run scripts/gen-catalog.ts"

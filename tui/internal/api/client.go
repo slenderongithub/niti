@@ -255,6 +255,41 @@ func (c *Client) RunCommand(name, args string) (CommandResult, error) {
 	return res, err
 }
 
+// StatsDay is one calendar day's token total, driving the contribution heatmap and the
+// tokens-per-day chart. Date is "YYYY-MM-DD" in the server's local time.
+type StatsDay struct {
+	Date   string `json:"date"`
+	Tokens int    `json:"tokens"`
+	Msgs   int    `json:"msgs"`
+}
+
+type StatsModel struct {
+	Name      string  `json:"name"` // provider/model
+	InTokens  int     `json:"inTokens"`
+	OutTokens int     `json:"outTokens"`
+	Msgs      int     `json:"msgs"`
+	Usd       float64 `json:"usd"`
+	Priced    bool    `json:"priced"`
+}
+
+// Stats is the all-time usage aggregate behind the /stats overlay — computed by the server from the
+// SQLite session history (src/store/session-store.ts stats()).
+type Stats struct {
+	PerDay           []StatsDay   `json:"perDay"`
+	PerModel         []StatsModel `json:"perModel"`
+	Sessions         int          `json:"sessions"`
+	InTokens         int          `json:"inTokens"`
+	OutTokens        int          `json:"outTokens"`
+	LongestSessionMs int64        `json:"longestSessionMs"`
+	TotalUsd         float64      `json:"totalUsd"`
+	CostComplete     bool         `json:"costComplete"`
+}
+
+func (c *Client) Stats() (Stats, error) {
+	var s Stats
+	return s, c.do("GET", "/stats", nil, &s)
+}
+
 func (c *Client) SwitchModel(agentID, provider, model, baseURL string) error {
 	return c.do("POST", "/model", map[string]string{"agentId": agentID, "provider": provider, "model": model, "baseURL": baseURL}, nil)
 }

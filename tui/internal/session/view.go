@@ -51,6 +51,12 @@ func (m Model) View() string {
 		h = 30
 	}
 
+	// The settings overlay paints over the whole TUI — like the Claude app's settings panel, and like
+	// the ctrl+p carousel it takes the screen while open rather than tiling into the layout.
+	if m.sett.open {
+		return m.settingsView(w, h)
+	}
+
 	// Fixed chrome is budgeted first; the body absorbs whatever is left. The optional strips (tasks,
 	// agent-to-agent feed) are the first thing given up on a short terminal.
 	tasksRows, feedRows := 0, 0
@@ -329,8 +335,6 @@ func (m Model) mainPane(mw, h int) string {
 	iw := max(mw-2, 1) // the two columns of padding Width() below accounts for
 	var content string
 	switch m.view {
-	case "graph":
-		content = m.graphView(iw, h)
 	case "usage":
 		content = m.usageView(iw, h)
 	default:
@@ -347,6 +351,12 @@ func (m Model) workView(w, h int) string {
 	bg := theme.BgDeep
 	if len(m.order) == 0 {
 		return txt(theme.Muted, bg).Render(truncate("no agents configured — restart amux to pick a team", w))
+	}
+	// Before the first prompt there's nothing to transcribe, so the pane is the welcome: a
+	// time-of-day greeting, the version, and the roster as avatars wired together — the visual the
+	// notes ask for, sitting right on top of the command bar.
+	if m.goal == "" {
+		return m.welcomeView(w, h)
 	}
 
 	shown, note := m.order, ""
@@ -410,33 +420,6 @@ func agentHeader(st *agentState, w int, bg lipgloss.Color) string {
 		txt(theme.Muted, bg).Render(model) +
 		txt(theme.Muted, bg).Render(strings.Repeat(" ", gap)) +
 		txt(theme.StatusColor(st.status), bg).Render(status)
-}
-
-// graphView: who is talking to whom. The roster with the orchestrator marked, then the recent
-// edges — as many as the pane has room for.
-func (m Model) graphView(w, h int) string {
-	bg := theme.BgDeep
-	lines := []string{txt(theme.Accent, bg).Bold(true).Render("AGENTS")}
-	for _, id := range m.order {
-		st := m.agents[id]
-		lead := ""
-		if st.cfg.Lead {
-			lead = txt(theme.Alt, bg).Render(" ★ orchestrator")
-		}
-		lines = append(lines, txt(st.color, bg).Render(" "+st.avatar+" "+truncate(id, max(w/2, 1)))+
-			txt(theme.StatusColor(st.status), bg).Render(" ("+st.status+")")+lead)
-	}
-	lines = append(lines, "", txt(theme.Accent, bg).Bold(true).Render("MESSAGES"))
-
-	shown := max(h-len(lines), 0)
-	for i := max(len(m.messages)-shown, 0); i < len(m.messages); i++ {
-		msg := m.messages[i]
-		edge := fmt.Sprintf(" %s ─%s→ %s", msg.From, msg.Kind, msg.To)
-		edge = truncate(edge, w)
-		lines = append(lines, txt(theme.MessageColor(msg.Kind), bg).Render(edge)+
-			txt(theme.Muted, bg).Render(truncate("  "+msg.Subject, max(w-lipgloss.Width(edge), 0))))
-	}
-	return exactly(lines, h)
 }
 
 func (m Model) usageView(w, h int) string {

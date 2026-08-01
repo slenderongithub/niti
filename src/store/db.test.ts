@@ -105,3 +105,23 @@ test("resumeConversation flattens every session for a task, oldest first", () =>
   ]);
   expect(resumeConversation(s, "nope")).toEqual([]);
 });
+
+test("stats aggregates tokens by day and by model, and counts sessions", () => {
+  const s = store();
+  const usage = (i: number, o: number) => ({ inputTokens: i, outputTokens: o });
+  const a = s.createSession({ agentId: "architect", kind: "task", provider: "google", model: "gemini" });
+  s.appendMessage(a, "assistant", [{ type: "text", content: "x" }], usage(100, 50));
+  s.appendMessage(a, "assistant", [{ type: "text", content: "y" }], usage(200, 100));
+  const b = s.createSession({ agentId: "backend", kind: "task", provider: "zhipuai", model: "glm" });
+  s.appendMessage(b, "assistant", [{ type: "text", content: "z" }], usage(500, 500));
+
+  const st = s.stats();
+  expect(st.sessions).toBe(2);
+  // Two models, ranked by total tokens desc → glm (1000) before gemini (450).
+  expect(st.perModel.map((m) => `${m.provider}/${m.model}`)).toEqual(["zhipuai/glm", "google/gemini"]);
+  const gemini = st.perModel.find((m) => m.model === "gemini");
+  expect(gemini).toMatchObject({ inTokens: 300, outTokens: 150, msgs: 2 });
+  // All messages land on the same (local) day here, so one perDay bucket holds every token.
+  const total = st.perDay.reduce((n, d) => n + d.tokens, 0);
+  expect(total).toBe(1450);
+});

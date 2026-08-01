@@ -86,7 +86,7 @@ test("commands are listed and dispatched over HTTP — one registry for every cl
   const run = async (name: string, args = "") =>
     (await fetch(`${h.url}/commands/${name}?token=${h.token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ args }) })).json();
 
-  expect(await run("graph")).toMatchObject({ ok: true, view: "graph" }); // client-side view switch
+  expect(await run("usage")).toMatchObject({ ok: true, view: "usage" }); // client-side view switch
   expect(await run("cancel")).toMatchObject({ ok: true });
   // A command that fails still answers 200 with ok:false — the message belongs to the caller, not
   // to an HTTP error path.
@@ -149,6 +149,19 @@ test("serves the self-contained dashboard shell without a token", async () => {
   const js = await fetch(`${h.url}/app.js`);
   expect(js.headers.get("content-type")).toContain("javascript");
   expect((await fetch(`${h.url}/style.css`)).headers.get("content-type")).toContain("css");
+});
+
+test("the interactive graph page is public; its /graph data stays gated", async () => {
+  const { h } = setup();
+  track(h);
+  const page = await fetch(`${h.url}/graph/view`); // no token — the shell is public
+  expect(page.status).toBe(200);
+  expect(page.headers.get("content-type")).toContain("text/html");
+  expect(await page.text()).toContain('src="/graph.js"');
+  expect((await fetch(`${h.url}/graph.js`)).headers.get("content-type")).toContain("javascript");
+  // The data route it calls is still token-gated.
+  expect((await fetch(`${h.url}/graph`)).status).toBe(401);
+  expect((await fetch(`${h.url}/graph?token=${h.token}`)).status).toBe(200);
 });
 
 test("a submitted goal streams orchestration + agent-message events over SSE", async () => {
