@@ -180,3 +180,59 @@ export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo
     tasks: [{ id: "t1", description: goal, status: "pending", role, assignedTo: role, dependsOn: [], handoffTo: [] }],
   };
 }
+
+const RawRemediation = z.object({
+  action: z.enum(["retry", "redirect", "inject", "accept"]),
+  description: z.string().optional(), // retry/redirect: a clearer restatement of the task
+  role: z.string().optional(), // redirect: teammate id to hand the task to instead
+  tasks: z.array(RawTask).optional(), // inject: freestanding remediation tasks, same shape as a plan
+  reason: z.string().optional(),
+});
+export type RemediationPlan = z.infer<typeof RawRemediation>;
+
+const MAX_REPLAN_PLANNER_ATTEMPTS = 2; // a recovery call, not a full plan — cheaper retry budget than makePlan's
+
+function replanPrompt(ctx: { goal: string; roles: RoleInfo[]; board: string; failed: TaskNode; error: string }, correction?: string): string {
+  const roster = ctx.roles.map((r) => `  - id "${r.id}" — role: ${r.role}${r.description ? ` (${r.description})` : ""}`).join("\n");
+  return (
+    `You are the orchestrator of a team of AI coding agents. A task in the current plan failed. Decide how to recover.\n\n` +
+    `Goal: ${ctx.goal}\n\n` +
+    `Teammates:\n${roster}\n\n` +
+    `Current task board:\n${ctx.board}\n\n` +
+    `Failed task ${ctx.failed.id} (${ctx.failed.role}): ${ctx.failed.description}\n` +
+    `Error: ${ctx.error}\n\n` +
+    `Choose ONE recovery action:\n` +
+    `- "retry": the same task should run again, optionally with a clearer "description".\n` +
+    `- "redirect": a different teammate ("role" = their id) should attempt it instead.\n` +
+    `- "inject": add new remediation "tasks" (same shape as a plan: description/role/dependsOn/handoffTo/acceptance) ` +
+    `to work around the failure; the original task stays failed.\n` +
+    `- "accept": no recovery is possible; let the failure stand.\n\n` +
+    `Return ONLY JSON: {"action": "...", "description"?, "role"?, "tasks"?: [...], "reason"?: "why"}. No prose.` +
+    (correction ? `\n\nYour previous reply was invalid: ${correction}. Return valid JSON only.` : "")
+  );
+}
+
+// Ask the lead how to recover from a failed task. Never throws — a bad or missing model reply
+// degrades to {action: "accept"}, which lets the failure cascade exactly as it does today.
+export async function replan(
+  lead: PlannerAgent,
+  ctx: { goal: string; roles: RoleInfo[]; board: string; failed: TaskNode; error: string },
+): Promise<RemediationPlan> {
+  let correction: string | undefined;
+  for (let attempt = 0; attempt < MAX_REPLAN_PLANNER_ATTEMPTS; attempt++) {
+    let raw: string;
+    try {
+      raw = await lead.ask(replanPrompt(ctx, correction));
+    } catch (err) {
+      correction = summarizeError(err);
+      continue;
+    }
+    const parsed = RawRemediation.safeParse(extractJson(raw));
+    if (!parsed.success) {
+      correction = `expected {"action": "retry"|"redirect"|"inject"|"accept", ...}`;
+      continue;
+    }
+    return parsed.data;
+  }
+  return { action: "accept" };
+}

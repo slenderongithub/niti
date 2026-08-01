@@ -50,6 +50,19 @@ agents:
   expect(loadAgents(path)[0]?.autoApprove).toEqual(["read_file", "write_file"]);
 });
 
+test("parses reviewer into the agent config", () => {
+  const path = writeYaml(`
+agents:
+  - id: a
+    provider: anthropic
+    model: x
+    role: r
+    systemPrompt: hi
+    reviewer: qa
+`);
+  expect(loadAgents(path)[0]?.reviewer).toBe("qa");
+});
+
 test("throws on unknown provider", () => {
   const path = writeYaml(`
 agents:
@@ -84,6 +97,7 @@ agents:
     maxTurns: 40,
     maxAgents: 3,
     instructions: ["AGENTS.md", "CLAUDE.md"], // non-strings are dropped, not fatal
+    worktree: false,
   });
 
   const bare = writeYaml(`
@@ -95,7 +109,7 @@ agents:
     systemPrompt: s
 `);
   // watch stays undefined (not false) so the caller's own default still wins.
-  expect(loadOptions(bare)).toEqual({ theme: undefined, auto: false, watch: undefined, maxTurns: undefined, maxAgents: undefined, instructions: undefined });
+  expect(loadOptions(bare)).toEqual({ theme: undefined, auto: false, watch: undefined, maxTurns: undefined, maxAgents: undefined, instructions: undefined, worktree: false });
   expect(loadOptions(join(tmpdir(), "does-not-exist.yaml"))).toEqual({});
 });
 

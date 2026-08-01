@@ -150,6 +150,210 @@ test("the lead runs an integrate pass and completion is reported", async () => {
   expect(complete).toMatchObject({ type: "complete", completed: 1, total: 1 });
 });
 
+test("a failed task is rescued by a retry replan from the lead", async () => {
+  const events: OrchestrationEvent[] = [];
+  let calls = 0;
+  const fe: any = {
+    config: { id: "fe", role: "FE" },
+    output: "",
+    error: "boom",
+    async run() {
+      calls++;
+      if (calls === 1) return "failed";
+      fe.output = "fixed";
+      return "done";
+    },
+  };
+  const lead: any = {
+    config: { id: "orchestrator", role: "Orchestrator" },
+    output: "",
+    async run() {
+      return "done";
+    },
+    async ask(prompt: string) {
+      return prompt.includes("recover") ? '{"action":"retry"}' : "integration summary";
+    },
+  };
+  const tasks = [node({ id: "t1", role: "fe", description: "x" })];
+  await schedule(tasks, [fe], { lead, onOrchestration: (e) => events.push(e) });
+  expect(calls).toBe(2);
+  expect(tasks[0]!.status).toBe("done");
+  expect(events.some((e) => e.type === "replan" && e.action === "retry")).toBe(true);
+});
+
+test("a redirect replan frees the original agent's slot instead of orphaning it", async () => {
+  // Regression test: t.role mutates mid-flight on redirect. If the running-map key isn't captured
+  // before the mutation, the original agent's slot is never freed and the scheduler spins forever
+  // (an already-settled promise still satisfies Promise.race, so this hangs rather than crashing).
+  const order: string[] = [];
+  let feCalls = 0;
+  const fe: any = {
+    config: { id: "fe", role: "FE" },
+    output: "",
+    error: "boom",
+    async run() {
+      feCalls++;
+      order.push("fe");
+      return "failed";
+    },
+  };
+  const be: any = {
+    config: { id: "be", role: "BE" },
+    output: "",
+    async run() {
+      order.push("be");
+      be.output = "rescued";
+      return "done";
+    },
+  };
+  const lead: any = {
+    config: { id: "orchestrator", role: "Orchestrator" },
+    output: "",
+    async run() {
+      return "done";
+    },
+    async ask(prompt: string) {
+      return prompt.includes("recover") ? '{"action":"redirect","role":"be"}' : "integration summary";
+    },
+  };
+  const tasks = [node({ id: "t1", role: "fe", description: "x" })];
+  await schedule(tasks, [fe, be], { lead });
+  expect(feCalls).toBe(1);
+  expect(order).toEqual(["fe", "be"]);
+  expect(tasks[0]!.status).toBe("done");
+  expect(tasks[0]!.role).toBe("be");
+});
+
+test("an inject replan that would create a cycle is discarded, not applied", async () => {
+  const fe: any = {
+    config: { id: "fe", role: "FE" },
+    output: "",
+    error: "boom",
+    async run() {
+      return "failed";
+    },
+  };
+  const lead: any = {
+    config: { id: "orchestrator", role: "Orchestrator" },
+    output: "",
+    async run() {
+      return "done";
+    },
+    async ask(prompt: string) {
+      if (!prompt.includes("recover")) return "integration summary";
+      return JSON.stringify({
+        action: "inject",
+        tasks: [
+          { id: "a", description: "fix a", role: "fe", dependsOn: ["b"] },
+          { id: "b", description: "fix b", role: "fe", dependsOn: ["a"] },
+        ],
+      });
+    },
+  };
+  const tasks = [node({ id: "t1", role: "fe", description: "x" })];
+  await schedule(tasks, [fe], { lead });
+  expect(tasks.length).toBe(1); // the cyclic injected batch never made it into the DAG
+  expect(tasks[0]!.status).toBe("failed");
+});
+
+test("a configured reviewer approves a completed task before it's marked done, posting feedback over the message bus", async () => {
+  const events: OrchestrationEvent[] = [];
+  const mb = new MessageBus();
+  mb.register("fe");
+  mb.register("qa");
+  const seen: AgentMessage[] = [];
+  mb.subscribe((m) => seen.push(m));
+  const fe: any = {
+    config: { id: "fe", role: "FE", reviewer: "qa" },
+    output: "",
+    async run() {
+      fe.output = "built it";
+      return "done";
+    },
+  };
+  const qa: any = {
+    config: { id: "qa", role: "QA" },
+    output: "",
+    async run() {
+      qa.output = "VERDICT: approve looks good";
+      return "done";
+    },
+  };
+  const tasks = [node({ id: "t1", role: "fe", description: "x" })];
+  await schedule(tasks, [fe, qa], { messageBus: mb, onOrchestration: (e) => events.push(e) });
+  expect(tasks[0]!.status).toBe("done");
+  expect(events.filter((e) => e.type === "review").map((e: any) => e.phase)).toEqual(["requested", "approved"]);
+  expect(seen.find((m) => m.kind === "review")).toMatchObject({ from: "qa", to: "fe" });
+});
+
+test("a reviewer's change request triggers one revision before approval", async () => {
+  let feCalls = 0;
+  let qaCalls = 0;
+  const fe: any = {
+    config: { id: "fe", role: "FE", reviewer: "qa" },
+    output: "",
+    async run() {
+      feCalls++;
+      fe.output = feCalls === 1 ? "first draft" : "revised";
+      return "done";
+    },
+  };
+  const qa: any = {
+    config: { id: "qa", role: "QA" },
+    output: "",
+    async run() {
+      qaCalls++;
+      qa.output = qaCalls === 1 ? "VERDICT: changes_requested needs tests" : "VERDICT: approve";
+      return "done";
+    },
+  };
+  const tasks = [node({ id: "t1", role: "fe", description: "x" })];
+  await schedule(tasks, [fe, qa]);
+  expect(feCalls).toBe(2);
+  expect(qaCalls).toBe(2);
+  expect(tasks[0]!.status).toBe("done");
+  expect(tasks[0]!.output).toBe("revised");
+});
+
+test("a persistently rejected task is marked failed after the review round cap", async () => {
+  const fe: any = {
+    config: { id: "fe", role: "FE", reviewer: "qa" },
+    output: "",
+    error: "",
+    async run() {
+      fe.output = "not good enough";
+      return "done";
+    },
+  };
+  const qa: any = {
+    config: { id: "qa", role: "QA" },
+    output: "",
+    async run() {
+      qa.output = "VERDICT: changes_requested still broken";
+      return "done";
+    },
+  };
+  const tasks = [node({ id: "t1", role: "fe", description: "x" })];
+  await schedule(tasks, [fe, qa]);
+  expect(tasks[0]!.status).toBe("failed");
+});
+
+test("a reviewer configured as its own assignee is a no-op (self-review is skipped)", async () => {
+  const events: OrchestrationEvent[] = [];
+  const fe: any = {
+    config: { id: "fe", role: "FE", reviewer: "fe" },
+    output: "",
+    async run() {
+      fe.output = "built it";
+      return "done";
+    },
+  };
+  const tasks = [node({ id: "t1", role: "fe", description: "x" })];
+  await schedule(tasks, [fe], { onOrchestration: (e) => events.push(e) });
+  expect(tasks[0]!.status).toBe("done");
+  expect(events.some((e) => e.type === "review")).toBe(false);
+});
+
 test("a cancelled run skips the integrate pass (no extra unabortable model call) but still reports complete", async () => {
   const order: string[] = [];
   const events: OrchestrationEvent[] = [];

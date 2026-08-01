@@ -3,6 +3,7 @@ import type { Bus } from "../events/bus.ts";
 import type { TaskNode } from "./task.ts";
 import type { MessageBus } from "../messaging/message-bus.ts";
 import type { Turn } from "../providers/provider.ts";
+import { replan, normalizePlan, type RoleInfo } from "./planner.ts";
 
 // Orchestration lifecycle events — a higher-level stream than per-agent AgentEvents. The server
 // forwards these over SSE so the TUI/dashboard can draw DAG progress and a completion percentage.
@@ -12,6 +13,8 @@ export type OrchestrationEvent =
   | { type: "task_started"; taskId: string; role: string; time: number }
   | { type: "task_done"; taskId: string; role: string; ok: boolean; completed: number; total: number; time: number }
   | { type: "handoff"; taskId: string; from: string; to: string[]; time: number }
+  | { type: "replan"; taskId: string; role: string; action: "retry" | "redirect" | "inject" | "accept"; reason?: string; time: number }
+  | { type: "review"; taskId: string; reviewer: string; phase: "requested" | "approved" | "changes_requested"; time: number }
   | { type: "integrate"; summary: string; time: number }
   | { type: "complete"; completed: number; total: number; time: number };
 
@@ -26,6 +29,8 @@ export interface SchedulerDeps {
 }
 
 const MAX_ATTEMPTS = 3; // same-agent retries (with backoff) before a task is marked failed
+const MAX_REPLAN_ATTEMPTS = 1; // recovery attempts asking the lead to replan a task before giving up on it
+const MAX_REVIEW_ROUNDS = 2; // review→revise cycles before a persistently-rejected task is marked failed
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // DFS cycle check. Returns the offending cycle path (ids) if any, else undefined — so the caller
@@ -58,6 +63,100 @@ export function detectCycle(tasks: TaskNode[]): string[] | undefined {
   return undefined;
 }
 
+// Recovery path for a task that exhausted its retries: ask the lead how to proceed, then act on the
+// decision. Only "retry"/"redirect" can rescue this task's own dependents (they keep referencing its
+// id, reset to "pending" so the ready-queue picks it back up); "inject" adds freestanding remediation
+// tasks alongside it — the original task stays failed. Returns true iff the task itself was rescued.
+async function attemptReplan(
+  t: TaskNode,
+  error: string,
+  tasks: TaskNode[],
+  byId: Map<string, TaskNode>,
+  agentsById: Map<string, Agent>,
+  deps: SchedulerDeps,
+): Promise<boolean> {
+  const { lead, goal = "", bus } = deps;
+  if (!lead) return false;
+  t.replans = (t.replans ?? 0) + 1;
+  const roles: RoleInfo[] = [...agentsById.values()].map((a) => ({ id: a.config.id, role: a.config.role }));
+  const board = tasks.map((x) => `${x.id} [${x.status}] ${x.assignedTo ?? x.role}: ${x.description}`).join("\n");
+  const plan = await replan(lead, { goal, roles, board, failed: t, error });
+  deps.onOrchestration?.({ type: "replan", taskId: t.id, role: t.role, action: plan.action, reason: plan.reason, time: Date.now() });
+  bus?.publish({ agentId: lead.config.id, type: "thought", payload: `replan ${t.id}: ${plan.action}${plan.reason ? ` — ${plan.reason}` : ""}`, time: Date.now() });
+
+  if (plan.action === "retry") {
+    t.description = plan.description ?? t.description;
+    t.attempts = 0;
+    t.status = "pending";
+    t.assignedTo = undefined;
+    return true;
+  }
+  if (plan.action === "redirect") {
+    if (!plan.role || !agentsById.has(plan.role)) return false; // unknown target — decline, don't silently default
+    t.role = plan.role;
+    t.description = plan.description ?? t.description;
+    t.attempts = 0;
+    t.status = "pending";
+    t.assignedTo = undefined;
+    return true;
+  }
+  if (plan.action === "inject" && plan.tasks?.length) {
+    // Resolve the remediation batch as a self-consistent little plan (own t1..tn ids/deps), then
+    // remap those ids so they can't collide with anything already in the DAG.
+    const sub = normalizePlan(goal, plan.tasks, roles);
+    const idMap = new Map<string, string>(sub.tasks.map((s, i) => [s.id, `${t.id}-r${t.replans}-${i + 1}`]));
+    const injected: TaskNode[] = sub.tasks.map((s) => ({
+      ...s,
+      id: idMap.get(s.id)!,
+      dependsOn: s.dependsOn.map((d) => idMap.get(d)).filter((d): d is string => Boolean(d)),
+    }));
+    if (detectCycle([...tasks, ...injected])) {
+      bus?.publish({ agentId: lead.config.id, type: "warning", payload: `replan for ${t.id} would create a cycle — discarded`, time: Date.now() });
+      return false;
+    }
+    for (const nt of injected) {
+      tasks.push(nt);
+      byId.set(nt.id, nt);
+    }
+  }
+  return false; // "inject" and "accept" both leave the original task failed
+}
+
+// Gate a "done" task on review, when its assignee's role has a `reviewer:` configured (agents.yaml)
+// and that reviewer isn't itself — an opt-in check, invisible when no reviewer is set. The reviewer
+// gets the full agentic loop via reviewer.run() (so it can `shell` a git diff, read files, or call
+// LSP diagnostics through its own allowedTools) rather than a bespoke tool-free call. Feedback is
+// posted through the existing "review" MessageKind — already agent-invokable as a tool, previously
+// just advisory; this is what turns it into an actual gate. Returns the reviewer's final feedback if
+// the task is still rejected after MAX_REVIEW_ROUNDS (caller flips status to "failed"), else undefined.
+async function runReviewGate(t: TaskNode, prompt: string, runner: Agent, agentsById: Map<string, Agent>, deps: SchedulerDeps): Promise<string | undefined> {
+  const reviewer = runner.config.reviewer ? agentsById.get(runner.config.reviewer) : undefined;
+  if (!reviewer || reviewer.config.id === t.assignedTo) return undefined;
+  const { bus, messageBus, onOrchestration: emit } = deps;
+
+  for (let round = 1; round <= MAX_REVIEW_ROUNDS; round++) {
+    emit?.({ type: "review", taskId: t.id, reviewer: reviewer.config.id, phase: "requested", time: Date.now() });
+    const outcome = await reviewer.run(
+      `Review the work for task ${t.id}: ${t.description}${t.acceptance ? `\nAcceptance: ${t.acceptance}` : ""}\n\n` +
+        `Reported output:\n${t.output}\n\nInspect the actual changes (shell "git diff", read_file, diagnostics tools) as needed. ` +
+        `End with exactly one line: "VERDICT: approve" or "VERDICT: changes_requested" followed by why.`,
+      { taskId: t.id },
+    );
+    const feedback = reviewer.output;
+    const approved = outcome === "done" && !/VERDICT:\s*changes_requested/i.test(feedback);
+    messageBus?.post({ from: reviewer.config.id, to: t.assignedTo!, kind: "review", subject: `review of ${t.id}`, body: feedback, refs: [t.id] });
+    emit?.({ type: "review", taskId: t.id, reviewer: reviewer.config.id, phase: approved ? "approved" : "changes_requested", time: Date.now() });
+    if (approved) return undefined;
+    if (round === MAX_REVIEW_ROUNDS) return feedback || "changes requested (no reviewer feedback given)";
+
+    bus?.publish({ agentId: t.assignedTo!, type: "thought", payload: `revising ${t.id} after review feedback`, time: Date.now() });
+    const revised = await runner.run(`${prompt}\n\nA reviewer requested changes:\n${feedback}\n\nAddress this feedback.`, { taskId: t.id });
+    t.output = runner.output;
+    if (revised !== "done") return runner.error || "revision attempt failed";
+  }
+  return undefined; // unreachable — every loop path above returns
+}
+
 // Execute a task DAG: run tasks in dependency order, independent tasks concurrently (one per
 // agent at a time), deliver each task's output to its dependents (as context) and handoffTo
 // teammates (as artifact messages), then run an orchestrator integrate pass. Rejects cycles.
@@ -68,7 +167,8 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
 
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const agentsById = new Map(agents.map((a) => [a.config.id, a]));
-  const total = tasks.length;
+  // Read live, not captured once: a replan's "inject" action can grow `tasks` mid-run, and progress
+  // totals should reflect that.
   const settled = () => tasks.filter((t) => t.status === "done" || t.status === "failed").length;
 
   emit?.({ type: "plan", goal, tasks: tasks.map((t) => ({ id: t.id, description: t.description, role: t.role, dependsOn: t.dependsOn })), time: Date.now() });
@@ -86,7 +186,7 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     if (!runner) {
       t.status = "failed";
       bus?.publish({ agentId: t.role, type: "error", payload: `no agent '${t.role}' for ${t.id}`, time: Date.now() });
-      emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total, time: Date.now() });
+      emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total: tasks.length, time: Date.now() });
       return;
     }
     t.status = "in_progress";
@@ -116,7 +216,26 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
 
     t.output = runner.output;
     t.status = outcome === "done" ? "done" : "failed";
-    emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: t.status === "done", completed: settled(), total, time: Date.now() });
+    let failureReason = outcome === "done" ? "" : runner.error;
+
+    if (t.status === "done") {
+      const rejection = await runReviewGate(t, prompt, runner, agentsById, deps);
+      if (rejection) {
+        t.status = "failed";
+        failureReason = rejection;
+      }
+    }
+    // Give the lead one shot at recovering before the failure cascades to dependents — whether the
+    // failure came from the run itself or from a rejected review. Skipped on cancel — like the
+    // integrate pass, a replan is a fresh, unabortable model call. attemptReplan itself flips status
+    // back to "pending" on a successful retry/redirect; otherwise t.status is already "failed".
+    if (t.status === "failed" && (t.replans ?? 0) < MAX_REPLAN_ATTEMPTS && !(deps.shouldStop?.() ?? false)) {
+      await attemptReplan(t, failureReason, tasks, byId, agentsById, deps);
+    }
+    // A recovered task isn't finished — no task_done event, and it stays out of the handoff block below.
+    if (t.status === "done" || t.status === "failed") {
+      emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: t.status === "done", completed: settled(), total: tasks.length, time: Date.now() });
+    }
 
     if (t.status === "done" && t.handoffTo?.length && messageBus) {
       for (const to of t.handoffTo) {
@@ -135,7 +254,7 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
       if (t.status === "pending" && depFailed(t)) {
         t.status = "failed";
         bus?.publish({ agentId: t.role, type: "error", payload: `${t.id} skipped — a prerequisite failed`, time: Date.now() });
-        emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total, time: Date.now() });
+        emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total: tasks.length, time: Date.now() });
       }
     }
 
@@ -145,8 +264,11 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
       for (const t of tasks) {
         if (t.status !== "pending" || !depsDone(t) || running.has(t.role)) continue;
         emit?.({ type: "task_ready", taskId: t.id, role: t.role, time: Date.now() });
-        const p = runTask(t).finally(() => running.delete(t.role));
-        running.set(t.role, p);
+        // Captured up front: a "redirect" replan can change t.role while this task is in flight, and
+        // the slot must be freed under the role it was claimed under, not whatever role it ends on.
+        const startRole = t.role;
+        const p = runTask(t).finally(() => running.delete(startRole));
+        running.set(startRole, p);
       }
 
     if (running.size === 0) {
@@ -154,7 +276,7 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
       const stuck = tasks.filter((t) => t.status === "pending");
       for (const t of stuck) {
         t.status = "failed";
-        emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total, time: Date.now() });
+        emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total: tasks.length, time: Date.now() });
       }
       break;
     }
@@ -181,5 +303,5 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     }
   }
 
-  emit?.({ type: "complete", completed: settled(), total, time: Date.now() });
+  emit?.({ type: "complete", completed: settled(), total: tasks.length, time: Date.now() });
 }

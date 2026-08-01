@@ -79,6 +79,7 @@ export interface AgentConfig {
   systemPrompt: string;
   allowedTools?: string[]; // "read_file" | "write_file" | "shell"
   lead?: boolean; // true = plans + integrates (the orchestrator)
+  reviewer?: string; // agent id that reviews this role's completed task output before it's accepted
   baseURL?: string; // for provider "custom" (any OpenAI-compatible endpoint)
   autoApprove?: string[]; // tool names pre-granted for this agent, no prompt (still gated for dangerous shell calls)
   permissions?: PermissionRules; // per-agent tool policy; overrides the project-level block
@@ -125,6 +126,7 @@ export class Agent {
   private onWrite?: (relPath: string) => void;
   private maxTurns: number;
   private lastText = "";
+  private lastError = "";
   // A counter, not a boolean: run() and respond() can be concurrently in-flight on the same Agent
   // (ask_agent lets a peer answer while its own task is still running) — a boolean would let one
   // finishing clear "busy" while the other is still active.
@@ -152,6 +154,12 @@ export class Agent {
   // Final assistant text of the most recent run/respond — the scheduler uses it for hand-offs.
   get output(): string {
     return this.lastText;
+  }
+
+  // Last error from run() — empty until a run() actually throws. The scheduler reads this to give
+  // the replanning lead a concrete reason for a task's failure/exhaustion, not just a status code.
+  get error(): string {
+    return this.lastError;
   }
 
   // True while run()/respond() has a model call in flight. reconfigure() checks this — swapping
@@ -236,8 +244,9 @@ export class Agent {
       return "done";
     } catch (err) {
       const outcome: RunOutcome = isExhaustion(err) ? "exhausted" : "failed";
+      this.lastError = summarizeError(err);
       if (sessionId) this.store?.setStatus(sessionId, outcome);
-      this.bus.publish({ agentId: id, type: "error", payload: summarizeError(err), time: Date.now() });
+      this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
       return outcome;
     } finally {
       this.inFlightCount--;
@@ -319,6 +328,12 @@ export class Agent {
   async ask(prompt: string): Promise<string> {
     const reply = await this.provider.send(this.config.systemPrompt, [{ role: "user", text: prompt }], []);
     return reply.text;
+  }
+
+  // Repoint this agent's sandbox root (worktree isolation) — a plain field, same shape as
+  // reconfigure(). The caller (Engine) only calls this between runs, never mid-flight.
+  setRoot(path: string): void {
+    this.root = path;
   }
 
   // Swap this agent's provider/model live (used by the interactive model selector).

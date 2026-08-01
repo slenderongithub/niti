@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { extractJson, normalizePlan, makePlan, type RoleInfo, type PlannerAgent } from "./planner.ts";
+import { extractJson, normalizePlan, makePlan, replan, type RoleInfo, type PlannerAgent } from "./planner.ts";
 
 const roles: RoleInfo[] = [
   { id: "frontend", role: "Frontend Designer" },
@@ -88,4 +88,18 @@ test("makePlan falls back to a single whole-goal task after repeated invalid out
   const plan = await makePlan(lead, "the whole goal", roles);
   expect(plan.tasks.length).toBe(1);
   expect(plan.tasks[0]).toMatchObject({ id: "t1", description: "the whole goal", role: "orchestrator" });
+});
+
+test("replan returns a parsed action from the lead", async () => {
+  const lead = fakeLead(['{"action":"retry","description":"try again with more context"}']);
+  const failed = { id: "t1", role: "backend", description: "build the API" } as any;
+  const plan = await replan(lead, { goal: "build a store", roles, board: "t1 [failed] backend: build the API", failed, error: "connection refused" });
+  expect(plan).toMatchObject({ action: "retry", description: "try again with more context" });
+});
+
+test("replan falls back to accept after repeated invalid output", async () => {
+  const lead = fakeLead(["not json"]);
+  const failed = { id: "t1", role: "backend", description: "x" } as any;
+  const plan = await replan(lead, { goal: "goal", roles, board: "", failed, error: "boom" });
+  expect(plan).toEqual({ action: "accept" });
 });

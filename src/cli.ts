@@ -6,6 +6,7 @@
 //     amux-core "<task>"           → run one task headlessly and exit (plain-text progress)
 //     amux-core resume             → continue the last session's unfinished tasks (with their history)
 //     ... --auto                   → approve anything not explicitly denied in agents.yaml
+//     ... --worktree               → isolate this run's writes in a fresh git worktree (manual merge)
 //     amux-core init               → setup wizard: add providers, assign models to roles, pick orchestrator
 //     amux-core serve [--port=N]   → start the local core server (what the Go TUI connects to)
 //     amux-core --web ["<task>"]   → start the server + open the live web dashboard
@@ -81,7 +82,7 @@ if (args[0] === "auth") {
 if (args[0] === "serve") {
   const portArg = args.find((a) => a.startsWith("--port="));
   try {
-    const { server } = await serveMain({ port: portArg ? Number(portArg.slice(7)) : undefined, auto: args.includes("--auto") });
+    const { server } = await serveMain({ port: portArg ? Number(portArg.slice(7)) : undefined, auto: args.includes("--auto"), worktree: args.includes("--worktree") });
     console.error(`amux core server running at ${server.url} — Ctrl-C to stop`);
     process.on("SIGINT", () => {
       server.stop();
@@ -182,6 +183,7 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
     lsp: new LspRegistry(loadLspServers()),
     watch: options.watch,
     maxTurns: options.maxTurns,
+    worktree: args.includes("--worktree") || options.worktree,
   });
 }
 

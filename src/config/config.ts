@@ -31,6 +31,7 @@ export interface AmuxOptions {
   instructions?: string[]; // files (AGENTS.md, CLAUDE.md, …) appended to every agent's system prompt
   maxTurns?: number; // tool-loop cap per agent turn; the built-in default is 12
   maxAgents?: number; // ceiling on team size, enforced when agents.yaml is loaded
+  worktree?: boolean; // isolate each run's file writes in a fresh git worktree (same as --worktree)
 }
 
 export function loadOptions(path = ".amux/agents.yaml"): AmuxOptions {
@@ -44,6 +45,7 @@ export function loadOptions(path = ".amux/agents.yaml"): AmuxOptions {
     instructions: Array.isArray(raw.instructions) ? raw.instructions.filter((i): i is string => typeof i === "string") : undefined,
     maxTurns: num(raw.maxTurns),
     maxAgents: num(raw.maxAgents),
+    worktree: raw.worktree === true,
   };
 }
 
@@ -120,6 +122,7 @@ export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): v
       ...(a.baseURL ? { baseURL: a.baseURL } : {}),
       ...(a.autoApprove ? { autoApprove: a.autoApprove } : {}),
       ...(a.permissions ? { permissions: a.permissions } : {}),
+      ...(a.reviewer ? { reviewer: a.reviewer } : {}),
     })),
   };
   writeFileSync(path, stringify(doc));
@@ -151,5 +154,6 @@ function validate(a: unknown, i: number, path: string): AgentConfig {
     baseURL,
     autoApprove: Array.isArray(rec.autoApprove) ? (rec.autoApprove as string[]) : undefined,
     permissions: parsePermissions(rec.permissions, `${path} agent[${i}]`),
+    reviewer: typeof rec.reviewer === "string" ? rec.reviewer : undefined,
   };
 }

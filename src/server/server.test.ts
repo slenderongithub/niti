@@ -99,6 +99,14 @@ test("sessions are listable once a store is wired (empty without one)", async ()
   expect(await (await fetch(`${h.url}/sessions?token=${h.token}`)).json()).toEqual({ sessions: [] });
 });
 
+test("worktree routes are gated by the token and report idle when no run is isolated", async () => {
+  const { h } = setup();
+  track(h);
+  expect((await fetch(`${h.url}/worktree`)).status).toBe(401);
+  expect(await (await fetch(`${h.url}/worktree?token=${h.token}`)).json()).toEqual({ active: false });
+  expect(await (await fetch(`${h.url}/worktree/merge?token=${h.token}`, { method: "POST" })).json()).toEqual({ ok: false, message: "no active worktree" });
+});
+
 test("providers and models routes serve the catalog", async () => {
   const { h } = setup();
   track(h);

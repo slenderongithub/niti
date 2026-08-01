@@ -1,4 +1,8 @@
 import { test, expect } from "bun:test";
+import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Engine } from "./engine.ts";
 import { openDb } from "./store/db.ts";
 import { SessionStore } from "./store/session-store.ts";
@@ -175,4 +179,50 @@ test("plan mode publishes the DAG and runs nothing", async () => {
   // The same goal in build mode does run the tasks the plan produced.
   await engine.submit("build a parser");
   expect(seen.length).toBeGreaterThan(1);
+});
+
+test("worktree isolation writes into a throwaway git worktree until explicitly merged", async () => {
+  const repo = mkdtempSync(join(tmpdir(), "amux-engine-worktree-"));
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  writeFileSync(join(repo, "README.md"), "hi\n");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repo });
+
+  let wrote = false;
+  const provider: Provider = {
+    async send(_sys, turns) {
+      const lastUser = [...turns].reverse().find((t) => t.role === "user");
+      const text = lastUser && "text" in lastUser ? lastUser.text : "";
+      if (text.includes("orchestrator of a team")) return { text: '[{"description":"write a file","role":"a"}]', toolCalls: [] };
+      if (!wrote) {
+        wrote = true;
+        return { text: "", toolCalls: [{ id: "c1", name: "write_file", input: { path: "out.txt", content: "hello" } }] };
+      }
+      return { text: "done writing", toolCalls: [] };
+    },
+  };
+  const single: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: ["write_file"] }];
+  const engine = new Engine({ configs: single, makeProvider: () => provider, interactive: false, root: repo, worktree: true });
+
+  await engine.submit("add a file");
+
+  // The write landed in the worktree, never the real root.
+  expect(existsSync(join(repo, "out.txt"))).toBe(false);
+  expect(engine.worktreeHandle).toBeDefined();
+  expect(existsSync(join(engine.worktreeHandle!.path, "out.txt"))).toBe(true);
+
+  const status = await engine.worktreeStatus();
+  expect(status?.diffStat).toContain("out.txt");
+
+  // A pending worktree blocks a second worktree-mode run rather than silently starting another.
+  await expect(engine.submit("another run")).rejects.toThrow(/hasn't been merged/);
+
+  const worktreePath = engine.worktreeHandle!.path;
+  const result = await engine.mergeWorktree();
+  expect(result.ok).toBe(true);
+  expect(engine.worktreeHandle).toBeUndefined();
+  expect(existsSync(join(repo, "out.txt"))).toBe(true); // now merged into the real root
+  expect(existsSync(worktreePath)).toBe(false); // cleaned up after a successful merge
 });

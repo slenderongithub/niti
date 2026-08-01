@@ -235,6 +235,13 @@ export function startServer(
         return json({ ok: true });
       }
 
+      if (p === "/worktree" && method === "GET") {
+        return json((await engine.worktreeStatus()) ?? { active: false });
+      }
+      if (p === "/worktree/merge" && method === "POST") {
+        return json(await engine.mergeWorktree());
+      }
+
       if (p === "/approval" && method === "POST") {
         const { ok, scope } = (await req.json().catch(() => ({}))) as { ok?: boolean; scope?: "agent" | "path" };
         engine.approvals.answer(Boolean(ok), scope);

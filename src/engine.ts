@@ -17,6 +17,7 @@ import { costOf } from "./providers/pricing.ts";
 import { watchProject, type ProjectWatcher } from "./watch.ts";
 import { TOOL_GUIDANCE } from "./tools/tools.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
+import { isGitRepo, createWorktree, diffStat, commitPending, mergeBack, removeWorktree, type WorktreeHandle } from "./orchestrator/worktree.ts";
 
 export interface EngineOptions {
   configs: AgentConfig[];
@@ -31,6 +32,7 @@ export interface EngineOptions {
   lsp?: LspRegistry; // present → diagnostics/hover available to every agent, alongside MCP
   watch?: boolean; // true → emit external_change events for edits made outside amux
   maxTurns?: number; // `maxTurns:` from agents.yaml — tool-loop cap per agent turn
+  worktree?: boolean; // isolate each run's file writes in a fresh git worktree instead of the real root
 }
 
 // The Engine wires the whole multi-agent runtime: agents (with a live messenger so they can talk to
@@ -50,12 +52,17 @@ export class Engine {
   // Public so the server can report what the project is wired to (the TUI sidebar lists both).
   readonly lsp?: LspRegistry;
   readonly mcp?: McpTools;
+  // The run currently isolated in a worktree, if any — public so the server can report it over
+  // GET /worktree. Persists across a run's end (manual merge, not auto-cleanup); a new worktree-mode
+  // run refuses to start while one is still pending, so it's never silently orphaned.
+  worktreeHandle?: WorktreeHandle;
 
   private makeProvider: (cfg: AgentConfig) => Provider;
   private byId = new Map<string, Agent>();
   private busy = false;
   private cancelled = false;
   private watcher?: ProjectWatcher;
+  private readonly worktreeEnabled: boolean;
 
   constructor(opts: EngineOptions) {
     this.makeProvider = opts.makeProvider;
@@ -63,6 +70,7 @@ export class Engine {
     this.root = opts.root ?? process.cwd();
     this.lsp = opts.lsp;
     this.mcp = opts.mcp;
+    this.worktreeEnabled = opts.worktree ?? false;
     this.locks = new LockRegistry(this.bus);
     if (opts.watch) {
       this.watcher = watchProject(this.root, (path) =>
@@ -167,6 +175,17 @@ export class Engine {
 
   private async runSession(goal: string, run: (deps: RunnerDeps) => Promise<void>): Promise<void> {
     if (this.busy) throw new Error("a task is already running");
+    if (this.worktreeEnabled) {
+      if (this.worktreeHandle) {
+        throw new Error(`a previous run's worktree (${this.worktreeHandle.branch}) hasn't been merged yet — merge or discard it first`);
+      }
+      if (!(await isGitRepo(this.root))) throw new Error("worktree isolation requires a git repository");
+      // ponytail: a fresh worktree per run, off current HEAD — a run started before an earlier
+      // worktree's work is merged won't see it. Upgrade to stacking/rebasing onto the pending
+      // worktree's branch if that gap matters in practice.
+      this.worktreeHandle = await createWorktree(this.root, crypto.randomUUID().slice(0, 8));
+      for (const a of this.agents) a.setRoot(this.worktreeHandle.path);
+    }
     this.busy = true;
     this.cancelled = false;
     this.hub.publish({ kind: "session", state: "started", goal });
@@ -183,9 +202,30 @@ export class Engine {
       saveTasks(this.orch.all); // persist so `amux resume` can reload
     } finally {
       this.busy = false;
+      if (this.worktreeEnabled) for (const a of this.agents) a.setRoot(this.root); // LSP/watcher never left the real root
       this.emitUsage();
       this.hub.publish({ kind: "session", state: this.cancelled ? "cancelled" : "ended" });
     }
+  }
+
+  // Status for GET /worktree — undefined when no run is currently isolated.
+  async worktreeStatus(): Promise<{ path: string; branch: string; diffStat: string } | undefined> {
+    if (!this.worktreeHandle) return undefined;
+    return { path: this.worktreeHandle.path, branch: this.worktreeHandle.branch, diffStat: await diffStat(this.worktreeHandle) };
+  }
+
+  // POST /worktree/merge — explicit user action, never automatic. Cleans up the worktree only on a
+  // successful merge; a conflict leaves it in place so the user can resolve it themselves (via the
+  // branch directly) and retry.
+  async mergeWorktree(): Promise<{ ok: boolean; message: string }> {
+    if (!this.worktreeHandle) return { ok: false, message: "no active worktree" };
+    await commitPending(this.worktreeHandle); // agents write files directly, never commit as they go
+    const result = await mergeBack(this.root, this.worktreeHandle.branch);
+    if (result.ok) {
+      await removeWorktree(this.root, this.worktreeHandle.path);
+      this.worktreeHandle = undefined;
+    }
+    return result;
   }
 
   cancel(): void {

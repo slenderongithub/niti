@@ -18,7 +18,7 @@ export interface ServeResult {
 // Boot the headless core: build the engine from .amux/agents.yaml, start the local server, and
 // print the handshake line the Go TUI parses from stdout. Everything else logs to stderr so the
 // first stdout line is always the handshake.
-export async function serveMain(opts: { port?: number; interactive?: boolean; auto?: boolean } = {}): Promise<ServeResult> {
+export async function serveMain(opts: { port?: number; interactive?: boolean; auto?: boolean; worktree?: boolean } = {}): Promise<ServeResult> {
   // Setup mode: with no config yet, start empty so the onboarding wizard can drive /auth and
   // /agents against a live server. Once agents.yaml exists we load it (invalid files still throw).
   const configs = existsSync(".amux/agents.yaml") ? loadAgents() : [];
@@ -47,6 +47,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
     // unless agents.yaml explicitly says otherwise.
     watch: options.watch ?? true,
     maxTurns: options.maxTurns,
+    worktree: opts.worktree || options.worktree,
   });
   engine.orch.load(loadTasks()); // show any prior tasks on connect
 
