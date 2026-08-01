@@ -1,10 +1,21 @@
 agents:
-  - id: s
-    provider: anyapi
-    model: cohere/command-r-plus-08-2024
-    role: s
+  - id: a
+    provider: zai-coding-plan
+    model: glm-5-turbo
+    role: a
+    systemPrompt: You are the a. a Implement your assigned tasks directly and keep
+      responses concise.
+    allowedTools:
+      - read_file
+      - write_file
+      - edit
+      - shell
+  - id: b
+    provider: google
+    model: gemini-1.5-pro
+    role: b
     lead: true
-    systemPrompt: You are the s. s Implement your assigned tasks directly and keep
+    systemPrompt: You are the b. b Implement your assigned tasks directly and keep
       responses concise.
     allowedTools:
       - read_file
