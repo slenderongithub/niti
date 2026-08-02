@@ -34,7 +34,6 @@ const view = (name: string): Command => ({
 });
 
 export const BUILTIN_COMMANDS: Command[] = [
-  view("panes"),
   view("usage"),
   {
     name: "cancel",

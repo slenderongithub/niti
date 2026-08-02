@@ -30,7 +30,8 @@ const sim = { link: 42, charge: 30, gravity: 6, alpha: 1, alphaDecay: 0.021, alp
 
 // camera in world space: looks at (cx,cy) with scale k
 const cam = { cx: 0, cy: 0, k: 1, tcx: 0, tcy: 0, tk: 1 }; // t* = eased targets
-let autoFit = false;  // while set, the fit target is recomputed every frame (see fitTarget)
+let autoFit = false;    // while set, the fit target is recomputed every frame (see fitTarget)
+let autoCentre = false; // like autoFit, but for recenter() — keeps k fixed, only moves cx/cy
 let glide = null;     // {x,y} world-units/ms while a flicked pan coasts to a stop
 let overMini = false; // pointer is over the minimap
 
@@ -336,7 +337,7 @@ function updateFades(dt) {
 // so any change self-heals on the next frame; models mode is live, so it never idles.
 function still() {
   if (mode !== "project") return false;
-  if (sim.alpha !== 0 || dragging >= 0 || autoFit || fading || pulses.length || !camSettled()) return false;
+  if (sim.alpha !== 0 || dragging >= 0 || autoFit || autoCentre || fading || pulses.length || !camSettled()) return false;
   // the camera goes in the key, not just camSettled(): a drag-pan moves cam and target together, so
   // it stays "settled" the whole way and rendering would freeze mid-gesture.
   const key = `${hover}|${selected}|${searchTerm}|${showLabels}|${W}|${H}|${nodes.length}|${cam.cx},${cam.cy},${cam.k}|${overMini}`;
@@ -352,6 +353,7 @@ function draw(now) {
   if (steps === 4) physAcc = 0; // long frame / backgrounded tab: drop the backlog, don't spiral
   glideStep(dt); easeCam(dt);
   if (autoFit && nodes.length) { fitTarget(); if (sim.alpha === 0 && camSettled()) autoFit = false; }
+  if (autoCentre && nodes.length) { recenterTarget(); if (sim.alpha === 0 && camSettled()) autoCentre = false; }
   updateFades(dt);
   if (!still()) render();
   requestAnimationFrame(draw);
@@ -536,6 +538,18 @@ function fit(animate = true) {
   measureFree(); fitTarget(); autoFit = true;
   if (!animate) { cam.cx = cam.tcx; cam.cy = cam.tcy; cam.k = cam.tk; }
 }
+// Same idea as fitTarget, but holds the zoom the user already set — only the centre moves.
+function recenterTarget() {
+  let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+  for (const n of nodes) { a = Math.min(a, n.x - n.r); b = Math.min(b, n.y - n.r); c = Math.max(c, n.x + n.r); d = Math.max(d, n.y + n.r); }
+  centreOn((a + c) / 2, (b + d) / 2, cam.k);
+}
+function recenter(animate = true) {
+  if (!nodes.length) return;
+  glide = null;
+  measureFree(); recenterTarget(); autoCentre = true;
+  if (!animate) { cam.cx = cam.tcx; cam.cy = cam.tcy; cam.k = cam.tk; }
+}
 function pickNode(sx, sy) {
   const w = toWorld(sx, sy); let best = -1, bd = Infinity;
   for (let i = 0; i < nodes.length; i++) {
@@ -554,7 +568,7 @@ let panT = 0;
 canvas.addEventListener("pointerdown", (e) => {
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  autoFit = false; glide = null; // any manual camera move cancels an in-flight fit or coast
+  autoFit = autoCentre = false; glide = null; // any manual camera move cancels an in-flight fit or coast
   if (pointers.size === 2) { pinchDist = twoDist(); dragging = -1; panLast = null; miniDrag = false; return; }
   const m = miniRect();
   if (inMini(m, e.clientX, e.clientY)) { // jump to where you clicked on the map, then track 1:1
@@ -632,7 +646,7 @@ canvas.addEventListener("wheel", (e) => {
 // Anchors the zoom on the *target* camera, so repeated wheel notches compose into one smooth eased
 // zoom that still lands with the cursor over the same point.
 function zoomAt(sx, sy, factor, snap) {
-  autoFit = false; glide = null;
+  autoFit = autoCentre = false; glide = null;
   const k0 = cam.tk, k1 = Math.min(8, Math.max(0.04, k0 * factor));
   if (k1 === k0) return;
   const wx = cam.tcx + (sx - W / 2) / k0, wy = cam.tcy + (sy - H / 2) / k0;
@@ -665,7 +679,7 @@ function flyToSearch() {
   if (!searchHits.size) return;
   let best = -1, bd = -1;
   for (const i of searchHits) if (nodes[i].deg > bd) { bd = nodes[i].deg; best = i; }
-  if (best >= 0) { selected = best; autoFit = false; glide = null; centreOn(nodes[best].x, nodes[best].y, Math.max(cam.k, 1.4)); }
+  if (best >= 0) { selected = best; autoFit = autoCentre = false; glide = null; centreOn(nodes[best].x, nodes[best].y, Math.max(cam.k, 1.4)); }
 }
 
 // ---------- UI wiring ----------
@@ -687,7 +701,7 @@ document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("cli
 q("fit").addEventListener("click", () => fit(true));
 // unpin everything and let the layout relax back — a partial reheat, since a full one throws the
 // graph across the screen and then makes you wait for it to settle again.
-q("reset").addEventListener("click", () => { for (const n of nodes) n.pinned = false; reheat(0.5); fit(true); });
+q("reset").addEventListener("click", () => { for (const n of nodes) n.pinned = false; reheat(0.5); recenter(true); });
 q("search").addEventListener("input", (e) => applySearch(e.target.value));
 q("search").addEventListener("keydown", (e) => { if (e.key === "Enter") flyToSearch(); if (e.key === "Escape") { e.target.value = ""; applySearch(""); e.target.blur(); } });
 q("t-labels").addEventListener("change", (e) => { showLabels = e.target.checked; });

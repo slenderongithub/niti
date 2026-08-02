@@ -522,12 +522,15 @@ func (m Model) footer(w int) string {
 	if m.mode == "plan" {
 		next = "build"
 	}
-	line := fmt.Sprintf(" tab: %s · ctrl+p: models · shift+tab: %s · ctrl+t: %s · /help for commands",
+	hints := fmt.Sprintf("tab: %s · ctrl+p: models · shift+tab: %s · ctrl+t: %s · /help for commands",
 		m.view, next, theme.Current())
-	// The status is the only part that changes, so it goes last and only when there is one — a
-	// trailing "· " with nothing after it is what an empty status used to leave behind.
+	// The status is what a one-line command result (e.g. /agents with a single teammate, /cost,
+	// /export) lands in — see show() in output.go. It goes FIRST: the whole line gets truncated to
+	// the terminal width below, and on a narrow terminal the static hints used to eat the budget,
+	// silently truncating the answer the user just asked for off the end of the line.
+	line := " " + hints
 	if s := strings.TrimSpace(m.status); s != "" {
-		line += " · " + s
+		line = " " + s + " · " + hints
 	}
 	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).
 		Render(txt(theme.Muted, bg).Render(truncate(line, w)))
