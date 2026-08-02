@@ -127,6 +127,18 @@ test("live model switch works through the engine's provider factory", async () =
   expect((await res.json())).toMatchObject({ ok: true });
 });
 
+test("mid-task agent messaging: 400 on an empty body, 409 for an idle agent (nothing to interrupt)", async () => {
+  const { h } = setup();
+  track(h);
+  const send = (agentId: string, body: unknown) =>
+    fetch(`${h.url}/agents/${agentId}/message?token=${h.token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  expect((await send("frontend", { text: "" })).status).toBe(400);
+  const idle = await send("frontend", { text: "actually use approach B" });
+  expect(idle.status).toBe(409);
+  expect((await idle.json()).error).toContain("isn't running");
+});
+
 test("auth store round-trips through the API (redacted on read)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "amux-srv-"));
   process.env.AMUX_AUTH_FILE = join(dir, "auth.json");

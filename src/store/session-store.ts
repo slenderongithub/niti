@@ -268,4 +268,30 @@ export class SessionStore {
     writeFileSync(row.path, row.content);
     return { path: row.path, action: "restored" };
   }
+
+  // Read-only preview of what a rewind would touch, most-recent write first.
+  listCheckpoints(sessionId?: string, limit = 20): { id: number; path: string; createdAt: number }[] {
+    const rows = (
+      sessionId
+        ? this.db.query("SELECT id, path, created_at FROM checkpoints WHERE session_id = ? ORDER BY id DESC LIMIT ?").all(sessionId, limit)
+        : this.db.query("SELECT id, path, created_at FROM checkpoints ORDER BY id DESC LIMIT ?").all(limit)
+    ) as { id: number; path: string; created_at: number }[];
+    return rows.map((r) => ({ id: r.id, path: r.path, createdAt: r.created_at }));
+  }
+
+  // /rewind: the same restore-then-delete undoLast does, n times, in one transaction — either the
+  // whole rewind applies or (on a DB error) none of it does. Stops early if there are fewer than n
+  // checkpoints to pop.
+  rewindN(n: number, sessionId?: string): { path: string; action: "restored" | "deleted" }[] {
+    const results: { path: string; action: "restored" | "deleted" }[] = [];
+    const run = this.db.transaction(() => {
+      for (let i = 0; i < n; i++) {
+        const r = this.undoLast(sessionId);
+        if (!r) break;
+        results.push(r);
+      }
+    });
+    run();
+    return results;
+  }
 }

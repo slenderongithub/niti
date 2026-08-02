@@ -1,7 +1,7 @@
 agents:
   - id: a
-    provider: zai-coding-plan
-    model: glm-5-turbo
+    provider: anyapi
+    model: cohere/command-r-plus-08-2024
     role: a
     systemPrompt: You are the a. a Implement your assigned tasks directly and keep
       responses concise.
@@ -11,10 +11,9 @@ agents:
       - edit
       - shell
   - id: b
-    provider: google
-    model: gemini-1.5-pro
+    provider: nvidia
+    model: microsoft/phi-4-mini-instruct
     role: b
-    lead: true
     systemPrompt: You are the b. b Implement your assigned tasks directly and keep
       responses concise.
     allowedTools:
@@ -22,3 +21,49 @@ agents:
       - write_file
       - edit
       - shell
+  - id: c
+    provider: zhipuai-coding-plan
+    model: glm-5.1
+    role: c
+    systemPrompt: You are the c. c Implement your assigned tasks directly and keep
+      responses concise.
+    allowedTools:
+      - read_file
+      - write_file
+      - edit
+      - shell
+  - id: d
+    provider: zai-coding-plan
+    model: glm-4.5-air
+    role: d
+    lead: true
+    systemPrompt: You are the d. d Implement your assigned tasks directly and keep
+      responses concise.
+    allowedTools:
+      - read_file
+      - write_file
+      - edit
+      - shell
+  - id: e
+    provider: google
+    model: gemini-2.0-flash
+    role: e
+    systemPrompt: You are the e. e Implement your assigned tasks directly and keep
+      responses concise.
+    allowedTools:
+      - read_file
+      - write_file
+      - edit
+      - shell
+  - id: f
+    provider: zhipuai-coding-plan
+    model: glm-4.7
+    role: f
+    systemPrompt: You are the f. f Implement your assigned tasks directly and keep
+      responses concise.
+    allowedTools:
+      - read_file
+      - write_file
+      - edit
+      - shell
+theme: neon graveyard

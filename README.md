@@ -30,7 +30,7 @@ core itself is pure Bun/TypeScript).
 bun install
 bun run build:tui                          # builds ./amux (the Go TUI) — do this once, or after tui/ changes
 
-./amux                                     # every launch: pick the team (1–5 models, one prompt each), then the live session
+./amux                                     # every launch: pick the team (1–6 models, one prompt each), then the live session
                                             #   type a goal, watch the agents plan + build + talk to each other
                                             #   "/" for commands · ctrl+p switches models · Tab cycles views · y/a/n answers approvals
 ```
@@ -43,6 +43,7 @@ bun run src/cli.ts "Build a clothing website for gen-z."           # one-shot, p
 bun run src/cli.ts --web "Build a clothing website for gen-z."     # + live web dashboard (localhost)
 bun run src/cli.ts login copilot           # sign in with a GitHub Copilot subscription (no API key)
 bun run src/server/main.ts                 # headless core server (prints a handshake; what `amux` connects to)
+                                            #   swap /dashboard for /graph/view in the printed URL to open the graph page instead
 ```
 
 ### Picking the team
@@ -50,7 +51,7 @@ bun run src/server/main.ts                 # headless core server (prints a hand
 `./amux` opens the picker on every launch, centred on screen — a static `agents.yaml` stops being
 useful the moment you want to try a different model. It asks:
 
-1. **how many teammates** (1–5),
+1. **how many teammates** (1–6 — each gets its own pixel-avatar color: blue, yellow, red, purple, green, pink),
 2. then, per teammate: **provider** → **model** → **name** → **what it does**.
 
 The provider list is the whole catalog, not just the ones you've set up: pick one without a key and
@@ -109,12 +110,12 @@ mcpServers:                             # optional MCP servers, merged into the 
     args: [--stdio]
 
 # --- options: everything else is optional and has a working default ---
-theme: amux                             # TUI colours at launch (ctrl+t still cycles live)
+theme: amux                             # TUI colours at launch (ctrl+t or /theme opens a carousel; synced live to the web dashboard/graph)
 auto: false                             # approve anything not explicitly denied (same as --auto)
 watch: true                             # announce edits made outside amux as external_change events
 instructions: [AGENTS.md, CLAUDE.md]    # appended to every agent's system prompt (missing files are skipped)
 maxTurns: 12                            # tool-loop iterations per agent turn
-maxAgents: 5                            # refuse to load a bigger team than this
+maxAgents: 6                            # refuse to load a bigger team than this (the picker itself caps at 6 — one per avatar color)
 ```
 
 The team picker rewrites only the `agents:` block — everything above survives a relaunch.
@@ -148,8 +149,10 @@ the config says — including under `--auto` (approve anything not explicitly de
 - **Persistence** — every turn is decomposed into parts and written to SQLite at `.amux/amux.db` (`src/store/`), so conversations survive a restart: `amux-core resume` re-runs unfinished tasks with their history seeded. Each file write is checkpointed first, which is what `/undo` reverts.
 - **LSP + MCP together** — MCP servers and language servers are two independent tool sources merged into the same loop. LSP adds `diagnostics(path)` and `hover(path,line,col)` over hand-rolled JSON-RPC (`src/lsp/`); a missing server is a message, never a crash.
 - **Sub-agent forking** — `spawn_fork` runs a child loop on the same model, tools, and permissions, and returns just its findings. It's a child *session*, invisible to the DAG scheduler, capped by `MAX_FORK_DEPTH`.
-- **Slash commands** — defined server-side (`src/commands/registry.ts`) so the TUI and the web dashboard share one implementation. Typing `/` opens a filtered menu above the prompt with a description per command, so nothing has to be memorised: `/help /status /agents /tasks /model /sessions /resume /clear /cancel /undo /cost /mcp /lsp /permissions /init /panes /graph /usage`, plus `/theme` and `/quit` (client-side), plus your own in `.amux/commands/<name>.md` (frontmatter + a prompt body, `$ARGUMENTS` interpolated).
+- **Slash commands** — defined server-side (`src/commands/registry.ts`) so the TUI and the web dashboard share one implementation. Typing `/` opens a filtered menu above the prompt with a description per command, so nothing has to be memorised: `/help /status /agents /tasks /model /sessions /resume /clear /cancel /undo /cost /mcp /lsp /permissions /init /panes /graph /usage`, plus `/theme`, `/dashboard`, and `/quit` (client-side), plus your own in `.amux/commands/<name>.md` (frontmatter + a prompt body, `$ARGUMENTS` interpolated).
 - **Model carousel** — `ctrl+p` pops a picker in the middle of the screen: choose the teammate, then its model, with type-to-filter over every model on a provider you have a key for. `/model <agentId> <provider/model>` still works for scripting.
+- **Theme carousel** — `ctrl+t` or `/theme` pops a centred carousel: `←→`/`hjkl` slides between palettes with a live preview before you commit, `esc` reverts. The choice persists to `.amux/agents.yaml` and syncs live (over the same SSE stream) to any open web dashboard or graph page — pick a theme in the TUI and an open browser tab updates without a reload.
+- **Pixel-art agent avatars** — every agent in the web dashboard and the graph page's Models view renders as a small pixel mascot, one of 6 fixed identity colors by team position (blue, yellow, red, purple, green, pink — wraps past 6), each with its own face. Status (idle/working/done/failed) is a small corner dot, not the sprite's fill, so identity and status never fight for the same pixel.
 - **File watching** — edits made outside amux (your editor, a `git checkout`) surface as `external_change` events; an agent's own writes are suppressed so it never hears its own echo.
 
 ## Status

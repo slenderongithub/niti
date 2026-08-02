@@ -13,7 +13,8 @@ export type ServerEventBody =
   | { kind: "usage"; agents: { agentId: string; usage: AgentUsage }[]; totals: { inputTokens: number; outputTokens: number; calls: number }; rateLimits: RateLimitSnapshot[]; cost: number; costKnown: boolean }
   | { kind: "approval_request"; requests: { agentId: string; tool: string; input: Record<string, unknown> }[] }
   | { kind: "lock"; holders: { path: string; holder: string }[] }
-  | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string };
+  | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
+  | { kind: "theme"; theme: string };
 
 export type ServerEvent = ServerEventBody & { seq: number; time: number };
 

@@ -56,6 +56,13 @@ func (m Model) View() string {
 	if m.sett.open {
 		return m.settingsView(w, h)
 	}
+	// A diff on the head of the approval queue gets the same full-screen treatment — there's no
+	// reading a real patch (or editing one) inside a one-line bar.
+	if len(m.approvals) > 0 {
+		if _, ok := approvalDiff(m.approvals[0]); ok {
+			return m.diffView(w, h)
+		}
+	}
 
 	// Fixed chrome is budgeted first; the body absorbs whatever is left. The optional strips (tasks,
 	// agent-to-agent feed) are the first thing given up on a short terminal.
@@ -123,6 +130,8 @@ func (m Model) View() string {
 		out = ui.Overlay(out, m.outputView(w, h), w, h)
 	case m.car.open:
 		out = ui.Overlay(out, m.carouselView(w, h), w, h)
+	case m.tp.open:
+		out = ui.Overlay(out, m.themePickerView(w, h), w, h)
 	}
 	return out
 }

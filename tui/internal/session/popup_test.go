@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/amux/tui/internal/api"
+	"github.com/amux/tui/internal/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -48,7 +49,9 @@ func TestOverlayKeepsTheSidebarPainted(t *testing.T) {
 
 	m := sized(2, 120, 34)
 	m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
-	sidebarBg := "\x1b[48;2;17;20;31m" // BgPane of the default theme
+	// Derived from the live theme rather than hardcoded, so a palette change can't silently break
+	// this test's expectation out from under it.
+	sidebarBg := strings.SplitN(lipgloss.NewStyle().Background(theme.BgPane).Render("x"), "x", 2)[0]
 
 	frame := strings.Split(m.View(), "\n")
 	covered := 0

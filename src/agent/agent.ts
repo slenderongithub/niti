@@ -10,7 +10,7 @@ import { MAX_ASK_DEPTH } from "../messaging/message-bus.ts";
 import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import { resolve as resolvePermission, DEFAULT_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, safePath, editDiff, WRITE_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, safePath, editDiff, writeFileDiff, WRITE_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile } from "node:fs/promises";
@@ -231,12 +231,13 @@ export class Agent {
           this.bus.publish({ agentId: id, type: "done", payload: "", time: Date.now() });
           return "done";
         }
-        this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
-
         const results: ToolResult[] = [];
         for (const call of reply.toolCalls) {
           results.push({ id: call.id, name: call.name, output: await this.execTool(call, allowed, ctx) });
         }
+        // Pushed after execution (not before): execTool can mutate a call's input in place (e.g.
+        // attaching the approval-time diff) — persisting first would silently drop that from history.
+        this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
         this.push(turns, { role: "tool", results }, sessionId);
       }
       if (sessionId) this.store?.setStatus(sessionId, "done");
@@ -309,9 +310,10 @@ export class Agent {
           if (reply.text) this.push(turns, { role: "assistant", text: reply.text, toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
           break;
         }
-        this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
         const results: ToolResult[] = [];
         for (const call of reply.toolCalls) results.push({ id: call.id, name: call.name, output: await this.execTool(call, allowed, ctx) });
+        // See run(): pushed after execution so any input mutation from execTool (e.g. the diff) persists.
+        this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
         this.push(turns, { role: "tool", results }, sessionId);
       }
       if (sessionId) this.store?.setStatus(sessionId, "done");
@@ -430,6 +432,9 @@ export class Agent {
       // Additive: the TUI/dashboard render input.diff when it's there, and fall back to the raw
       // input display when it isn't.
       call.input.diff = editDiff(before, String(call.input.oldString ?? ""), String(call.input.newString ?? ""));
+    }
+    if (call.name === "write_file") {
+      call.input.diff = writeFileDiff(before ?? null, String(call.input.content ?? ""));
     }
     // agent config → project config (+ --auto) → built-in defaults → "ask".
     const decision = resolvePermission([this.config.permissions, ...this.permissionLayers, DEFAULT_RULES], call.name, call.input);

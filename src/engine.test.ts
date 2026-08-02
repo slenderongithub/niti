@@ -150,6 +150,48 @@ test("switchModel rejects a live swap while the target agent is mid-task", async
   expect(engine.switchModel("a", "anthropic", "claude-haiku-4-5")).toBeUndefined(); // fine once idle
 });
 
+test("messageAgent rejects an unknown or idle agent, and injects into a running one's inbox", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let taskCalls = 0;
+  let secondCallTurns: { role: string; text?: string }[] = [];
+  const slow: Provider = {
+    async send(_sys, turns) {
+      const lastUser = [...turns].reverse().find((t) => t.role === "user");
+      const text = lastUser && "text" in lastUser ? lastUser.text : "";
+      if (text.includes("orchestrator of a team")) {
+        return { text: '[{"description":"do it","role":"a"}]', toolCalls: [] }; // plan immediately
+      }
+      taskCalls++;
+      if (taskCalls === 1) {
+        await gate;
+        return { text: "", toolCalls: [{ id: "1", name: "read_file", input: { path: "nope.txt" } }] };
+      }
+      if (taskCalls === 2) {
+        secondCallTurns = turns.map((t) => (t.role === "user" ? { role: t.role, text: t.text } : { role: t.role }));
+        return { text: "done", toolCalls: [] };
+      }
+      return { text: "ok", toolCalls: [] }; // any further calls (e.g. an integrate pass) just finish quietly
+    },
+  };
+  const single: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: ["read_file"] }];
+  const engine = new Engine({ configs: single, makeProvider: () => slow, interactive: false });
+
+  expect(engine.messageAgent("ghost", "hi")).toBe("no such agent: ghost");
+  expect(engine.messageAgent("a", "too early")).toBe("a isn't running — nothing to interrupt");
+
+  const running = engine.submit("do something");
+  await new Promise((r) => setTimeout(r, 20)); // let the plan-fallback path start the task's run()
+
+  expect(engine.messageAgent("a", "actually use approach B")).toBeUndefined();
+
+  release();
+  await running;
+
+  const injected = secondCallTurns.find((t) => t.role === "user" && t.text?.includes("actually use approach B"));
+  expect(injected?.text).toContain("from user");
+});
+
 test("plan mode publishes the DAG and runs nothing", async () => {
   const seen: string[] = [];
   const planner: Provider = {

@@ -56,6 +56,9 @@ export class Engine {
   // GET /worktree. Persists across a run's end (manual merge, not auto-cleanup); a new worktree-mode
   // run refuses to start while one is still pending, so it's never silently orphaned.
   worktreeHandle?: WorktreeHandle;
+  // Most recent goal submit()/resume() ran — /export's report header. Not persisted; a restart
+  // loses it the same way the rest of the live session state does.
+  lastGoal = "";
 
   private makeProvider: (cfg: AgentConfig) => Provider;
   private byId = new Map<string, Agent>();
@@ -188,6 +191,7 @@ export class Engine {
     }
     this.busy = true;
     this.cancelled = false;
+    this.lastGoal = goal;
     this.hub.publish({ kind: "session", state: "started", goal });
     try {
       await run({
@@ -241,6 +245,79 @@ export class Engine {
     const message = `${result.action} ${shown}`;
     this.bus.publish({ agentId: "orchestrator", type: "file_edit", payload: `undo: ${message}`, time: Date.now() });
     return message;
+  }
+
+  // /rewind [n]: undo() extended to n steps, applied atomically (see SessionStore.rewindN). n=1
+  // behaves exactly like undo().
+  rewind(n: number): string {
+    const results = this.store?.rewindN(n);
+    if (!results) return "rewind needs a session store (run through the CLI or server)";
+    if (results.length === 0) return "nothing to rewind";
+    for (const r of results) {
+      const shown = relative(this.root, r.path) || r.path;
+      this.bus.publish({ agentId: "orchestrator", type: "file_edit", payload: `rewind: ${r.action} ${shown}`, time: Date.now() });
+    }
+    const summary = results.map((r) => `${r.action} ${relative(this.root, r.path) || r.path}`).join(", ");
+    return `rewound ${results.length} step(s): ${summary}`;
+  }
+
+  // /debate: two agents (each already carrying its own provider/model, so this works cross-provider
+  // for free) alternate no-tools, read-only turns (Agent.ask — no side effects, this is a
+  // discussion, not agents editing files) responding to each other, then one of them synthesizes a
+  // consensus recommendation. Each turn is published to the bus so it streams live in both the TUI
+  // and the web dashboard, same as any agent message. Explicit agent ids only — no auto-selection
+  // heuristic, since the caller (the /debate command) already knows the roster.
+  async debate(agentAId: string, agentBId: string, question: string, rounds = 3): Promise<string> {
+    const a = this.byId.get(agentAId);
+    const b = this.byId.get(agentBId);
+    if (!a || !b) return `no such agent: ${!a ? agentAId : agentBId}`;
+    if (a === b) return "debate needs two different agents";
+
+    const turns: string[] = [];
+    for (let i = 0; i < rounds * 2; i++) {
+      const [speaker, speakerId, otherId] = i % 2 === 0 ? ([a, agentAId, agentBId] as const) : ([b, agentBId, agentAId] as const);
+      const prompt = [
+        `You are ${speakerId}, debating this question with ${otherId}:`,
+        question,
+        "",
+        turns.length ? `Conversation so far:\n${turns.join("\n\n")}` : "You go first.",
+        "",
+        "Respond to the other side's last point — agree or push back, with a reason. A few sentences, no tools.",
+      ].join("\n");
+      const reply = await speaker.ask(prompt);
+      turns.push(`${speakerId}: ${reply}`);
+      this.bus.publish({ agentId: speakerId, type: "message", payload: reply, time: Date.now() });
+    }
+
+    const synthesis = await a.ask(
+      [`Debate transcript on: ${question}`, "", turns.join("\n\n"), "", "Synthesize a consensus recommendation from this exchange — what should actually be done, and why."].join("\n"),
+    );
+    this.bus.publish({ agentId: agentAId, type: "message", payload: `[debate synthesis] ${synthesis}`, time: Date.now() });
+
+    // The full exchange, not just the verdict — seeing how the two sides got there is the point of
+    // a debate. Also guarantees a multi-line result, so it opens the TUI's pager rather than being
+    // squeezed into the one-line footer.
+    return [`## Debate: ${agentAId} vs ${agentBId}`, "", turns.join("\n\n"), "", "## Synthesis", "", synthesis].join("\n");
+  }
+
+  // Web control center: inject a message into one specific already-running agent, so it's picked
+  // up on that agent's next loop iteration — no new agent-side plumbing needed, this reuses the
+  // same inbox mechanism send_message/ask_agent already deliver through (Agent.injectInbox drains
+  // messageBus and pushes it as a user turn), just posted by "user" instead of a peer agent. Only
+  // valid while the agent is actually running: posting to an idle one would just sit in its inbox
+  // until its next unrelated run, which isn't what "mid-task" means. Returns an error string, or
+  // undefined on success.
+  messageAgent(agentId: string, text: string): string | undefined {
+    const agent = this.byId.get(agentId);
+    if (!agent) return `no such agent: ${agentId}`;
+    if (!agent.busy) return `${agentId} isn't running — nothing to interrupt`;
+    const result = this.messageBus.post({ from: "user", to: agentId, kind: "handoff", subject: text.slice(0, 70), body: text });
+    if (!result.ok) return result.reason;
+    // messageBus.post already fans out an `agent_message` SSE event (so it shows in the Messages
+    // tab / feed); this additionally puts it in the agent's own transcript, matching how the
+    // agent's own tool calls and thoughts appear there.
+    this.bus.publish({ agentId, type: "message", payload: `[from user] ${text}`, time: Date.now() });
+    return undefined;
   }
 
   // Live model switch for the focused agent (drives /model + POST /model). Returns an error string

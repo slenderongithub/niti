@@ -6,6 +6,8 @@ import { splitModelId } from "../providers/catalog.ts";
 import { costOf } from "../providers/pricing.ts";
 import { saveTasks } from "../session.ts";
 import { loadSkills } from "../skills/skills.ts";
+import { isGitRepo, snapshotBranch } from "../orchestrator/worktree.ts";
+import { buildExportReport } from "./export.ts";
 
 // Slash commands live here, on the server, rather than in the Go TUI's key handler — otherwise the
 // web dashboard needs an identical second implementation of every one of them. Clients fetch the
@@ -47,6 +49,25 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: "Revert the most recent file write an agent made",
     async run(engine) {
       return { ok: true, message: engine.undo() };
+    },
+  },
+  {
+    name: "rewind",
+    description: "Revert the last N file writes at once (default 1): /rewind [n]",
+    async run(engine, args) {
+      const n = Math.max(1, parseInt(args.trim(), 10) || 1);
+      return { ok: true, message: engine.rewind(n) };
+    },
+  },
+  {
+    name: "branch",
+    description: "Snapshot the current working tree to a git branch, e.g. before a /rewind: /branch <name>",
+    async run(engine, args) {
+      const name = args.trim();
+      if (!name) return { ok: false, message: "usage: /branch <name>" };
+      if (!(await isGitRepo(engine.root))) return { ok: false, message: "not a git repository" };
+      const r = await snapshotBranch(engine.root, name);
+      return { ok: r.ok, message: r.message };
     },
   },
   {
@@ -183,6 +204,26 @@ export const BUILTIN_COMMANDS: Command[] = [
           `wired to  ${engine.lsp?.list().length ?? 0} LSP · ${engine.mcp?.servers?.().length ?? 0} MCP · history ${engine.store ? "on" : "off"}`,
         ].join("\n"),
       };
+    },
+  },
+  {
+    name: "debate",
+    description: "Have two agents debate a question and return a synthesis: /debate <agentA> <agentB> <question>",
+    async run(engine, args) {
+      const m = args.trim().match(/^(\S+)\s+(\S+)\s+(.+)$/s);
+      if (!m) return { ok: false, message: "usage: /debate <agentA> <agentB> <question>" };
+      const [, a, b, question] = m;
+      if (!engine.configs.some((c) => c.id === a)) return { ok: false, message: `no such agent: ${a}` };
+      if (!engine.configs.some((c) => c.id === b)) return { ok: false, message: `no such agent: ${b}` };
+      return { ok: true, message: await engine.debate(a, b, question) };
+    },
+  },
+  {
+    name: "export",
+    description: "Write a session audit report (tasks, transcripts, cost, diff) to .amux/reports/",
+    async run(engine) {
+      const { message } = await buildExportReport(engine);
+      return { ok: true, message };
     },
   },
   {

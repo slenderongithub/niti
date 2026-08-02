@@ -128,6 +128,15 @@ export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): v
   writeFileSync(path, stringify(doc));
 }
 
+// Persist the active theme name back to .amux/agents.yaml (written by the TUI's theme carousel so
+// the choice survives a restart and the web dashboard can read it back via loadOptions()). Same
+// read-merge-write shape as saveAgents — only the `theme` key is touched.
+export function setTheme(theme: string, path = ".amux/agents.yaml"): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const existing = existsSync(path) ? ((parse(readFileSync(path, "utf8")) ?? {}) as Record<string, unknown>) : {};
+  writeFileSync(path, stringify({ ...existing, theme }));
+}
+
 function validate(a: unknown, i: number, path: string): AgentConfig {
   const rec = (a ?? {}) as Record<string, unknown>;
   const str = (k: string): string => {

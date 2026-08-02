@@ -22,7 +22,8 @@ function load() {
   const src = readFileSync(new URL("./graph.js", import.meta.url), "utf8");
   return new Function("window", "document", "location", "requestAnimationFrame", "fetch", "EventSource", "performance", "URLSearchParams",
     `${src}\nreturn { tick, fit, setGraph, sim, cam, free: () => free, nodes: () => nodes,
-       glideStep, miniRect, inMini, miniToWorld, centreOn, setGlide: (g) => { glide = g; }, getGlide: () => glide };`,
+       glideStep, miniRect, inMini, miniToWorld, centreOn, setGlide: (g) => { glide = g; }, getGlide: () => glide,
+       setMode: (m) => { mode = m; }, realSetMode: setMode, onEvent, ensureM, mnodes };`,
   )(win, doc, win.location, win.requestAnimationFrame, win.fetch, win.EventSource, performance, URLSearchParams);
 }
 
@@ -95,6 +96,120 @@ test("clicking the minimap centres that world point in the visible area", () => 
   const sx = (target.x - g.cam.cx) * k + 1470 / 2, sy = (target.y - g.cam.cy) * k + 780 / 2;
   expect(Math.abs(sx - (free.x0 + free.x1) / 2)).toBeLessThan(0.001);
   expect(Math.abs(sy - (free.y0 + free.y1) / 2)).toBeLessThan(0.001);
+});
+
+test("models mode lays agents out on an even ring with fixed, readable avatar sizes", () => {
+  const g = load();
+  g.setMode("models");
+  const agents = [
+    { id: "a", label: "a", lead: true, status: "idle", tokens: 0, group: "agent", colorIndex: 0 },
+    { id: "b", label: "b", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 1 },
+    { id: "c", label: "c", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 2 },
+  ];
+  g.setGraph(agents, []);
+  const ns = g.nodes();
+
+  // fixed size, not degree-derived (no links yet, so a degree-based radius would've collapsed to 4)
+  // and the SAME size for every node including lead — a bigger lead sprite is what made same-shaped
+  // avatars look inconsistent side by side; lead is a ring drawn in render(), not a size change.
+  expect(ns[0].r).toBe(20); // lead
+  expect(ns[1].r).toBe(20);
+  expect(ns[2].r).toBe(20);
+
+  // evenly spaced on a ring around the origin, not a spiral at three different radii
+  const dists = ns.map((n: any) => Math.hypot(n.x, n.y));
+  expect(Math.abs(dists[0] - dists[1])).toBeLessThan(0.01);
+  expect(Math.abs(dists[1] - dists[2])).toBeLessThan(0.01);
+});
+
+test("models mode holds its ring layout still — no file-graph physics tugging it around", () => {
+  const g = load();
+  g.setMode("models");
+  const agents = [
+    { id: "a", label: "a", lead: true, status: "idle", tokens: 0, group: "agent", colorIndex: 0 },
+    { id: "b", label: "b", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 1 },
+  ];
+  g.setGraph(agents, [{ from: "a", to: "b" }]); // a link, which would pull nodes together under physics
+  const before = g.nodes().map((n: any) => [n.x, n.y]);
+  for (let i = 0; i < 200; i++) g.tick();
+  const after = g.nodes().map((n: any) => [n.x, n.y]);
+  expect(after).toEqual(before);
+  expect(g.sim.alpha).toBe(0);
+});
+
+// Regression: switching modes kicks off an async fetch for the new mode's data. Before this fix,
+// `mode` flipped synchronously but `nodes`/`links` kept the OLD mode's data until that fetch
+// resolved — so a frame in between rendered plain file nodes (no colorIndex) through the pixel-
+// avatar path. Real browsers hit this: the fetch is faster than a human clicking, but not always
+// faster than the very next animation frame. setMode must clear the old data immediately.
+test("switching modes clears the old mode's nodes immediately, not after the fetch resolves", () => {
+  const g = load();
+  g.setGraph(
+    [{ id: "f1", label: "f1", group: "g" }], // a plain file node — no colorIndex, no group:"agent"
+    [],
+  );
+  expect(g.nodes()).toHaveLength(1);
+  g.realSetMode("models"); // fetch('/session') rejects in this stub, but nodes must clear synchronously regardless
+  expect(g.nodes()).toHaveLength(0);
+});
+
+test("\"system\" and \"orchestrator\" pseudo-senders never become graph nodes", () => {
+  const g = load();
+  g.setMode("models");
+  g.onEvent({ kind: "agent_event", event: { agentId: "system", type: "external_change", payload: "x.ts" } });
+  g.onEvent({ kind: "agent_event", event: { agentId: "orchestrator", type: "file_edit", payload: "undo: y" } });
+  g.onEvent({ kind: "agent_message", message: { from: "a", to: "system", kind: "handoff" } });
+  expect([...g.mnodes.keys()]).not.toContain("system");
+  expect([...g.mnodes.keys()]).not.toContain("orchestrator");
+});
+
+test("the ring recomputes for every node when the roster grows, so nobody overlaps", () => {
+  const g = load();
+  g.setMode("models");
+  g.setGraph(
+    [
+      { id: "a", label: "a", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 0 },
+      { id: "b", label: "b", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 1 },
+    ],
+    [],
+  );
+  // add a third member — a's and b's ring slots were computed for a 2-node ring; if they don't
+  // get recomputed for the new 3-node ring, their angles fall out of step with c's fresh one.
+  g.setGraph(
+    [
+      { id: "a", label: "a", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 0 },
+      { id: "b", label: "b", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 1 },
+      { id: "c", label: "c", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 2 },
+    ],
+    [],
+  );
+  const ns = g.nodes();
+  const dist = (i, j) => Math.hypot(ns[i].x - ns[j].x, ns[i].y - ns[j].y);
+  const d01 = dist(0, 1), d12 = dist(1, 2), d20 = dist(2, 0);
+  // an even 3-node ring has every pair equidistant; a stale 2-node position for a/b would not.
+  expect(Math.abs(d01 - d12)).toBeLessThan(0.01);
+  expect(Math.abs(d12 - d20)).toBeLessThan(0.01);
+});
+
+test("a pinned models-mode node keeps its dragged position across a roster change", () => {
+  const g = load();
+  g.setMode("models");
+  g.setGraph(
+    [{ id: "a", label: "a", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 0 }],
+    [],
+  );
+  g.nodes()[0].pinned = true;
+  g.nodes()[0].x = 999;
+  g.nodes()[0].y = -999;
+  g.setGraph(
+    [
+      { id: "a", label: "a", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 0 },
+      { id: "b", label: "b", lead: false, status: "idle", tokens: 0, group: "agent", colorIndex: 1 },
+    ],
+    [],
+  );
+  expect(g.nodes()[0].x).toBe(999);
+  expect(g.nodes()[0].y).toBe(-999);
 });
 
 test("fit frames the graph inside the free area, centred and un-clipped", () => {

@@ -12,6 +12,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// MaxAgents must match the web dashboard's pixel-avatar palette (web/avatar.js's AVATAR_COLORS) —
+// a team size the avatar system can't give a distinct color, so bumping one without the other
+// silently reuses a color for two teammates.
+func TestMaxAgentsMatchesAvatarPaletteSize(t *testing.T) {
+	if MaxAgents != 6 {
+		t.Errorf("MaxAgents is %d, want 6 to match web/avatar.js's AVATAR_COLORS (blue/yellow/red/purple/green/pink)", MaxAgents)
+	}
+}
+
 // A fake core server: /agents and /auth record what was posted so tests can assert on them.
 func fakeCore(t *testing.T) (client *api.Client, saved func() []api.AgentConfig, authed func() []string) {
 	var savedAgents []api.AgentConfig

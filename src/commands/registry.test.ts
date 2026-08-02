@@ -29,6 +29,62 @@ test("/undo reports what it reverted (or that there's nothing to revert)", async
   expect(await r.run(engine(store), "undo")).toEqual({ ok: true, message: "nothing to undo" });
 });
 
+test("/rewind defaults to one step and reports nothing to rewind when the queue is empty", async () => {
+  const store = new SessionStore(openDb(":memory:"));
+  const r = new CommandRegistry(BUILTIN_COMMANDS);
+  expect(await r.run(engine(store), "rewind")).toEqual({ ok: true, message: "nothing to rewind" });
+});
+
+test("/rewind n pops n checkpoints in one call", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "amux-rewind-cmd-"));
+  const file = join(dir, "f.txt");
+  writeFileSync(file, "v2");
+  const store = new SessionStore(openDb(":memory:"));
+  const sid = store.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  store.checkpoint(sid, file, "v1");
+  const r = new CommandRegistry(BUILTIN_COMMANDS);
+  const res = await r.run(engine(store), "rewind", "1");
+  expect(res.ok).toBe(true);
+  expect(res.message).toContain("rewound 1 step");
+});
+
+test("/branch requires a name and a git repo", async () => {
+  const r = new CommandRegistry(BUILTIN_COMMANDS);
+  expect(await r.run(engine(), "branch", "")).toEqual({ ok: false, message: "usage: /branch <name>" });
+
+  const nonGitRoot = mkdtempSync(join(tmpdir(), "amux-branch-nongit-"));
+  const notGit = await r.run(new Engine({ configs: [], makeProvider: () => stub, root: nonGitRoot }), "branch", "my-snapshot");
+  expect(notGit).toEqual({ ok: false, message: "not a git repository" });
+});
+
+test("/debate requires two known agents and a question", async () => {
+  const r = new CommandRegistry(BUILTIN_COMMANDS);
+  expect(await r.run(engine(), "debate", "")).toEqual({ ok: false, message: "usage: /debate <agentA> <agentB> <question>" });
+  expect(await r.run(engine(), "debate", "a ghost is this a good idea?")).toEqual({ ok: false, message: "no such agent: ghost" });
+});
+
+test("/debate alternates two agents and returns the full exchange plus a synthesis", async () => {
+  let n = 0;
+  const replies = ["point 1", "point 2", "point 3", "point 4", "point 5", "point 6", "final synthesis"];
+  const twoAgentStub: Provider = { async send() { return { text: replies[n++] ?? "done", toolCalls: [] }; } };
+  const twoAgentEngine = new Engine({
+    configs: [
+      { id: "a", provider: "anthropic", model: "m", role: "r", systemPrompt: "s" },
+      { id: "b", provider: "openai", model: "m", role: "r", systemPrompt: "s" },
+    ],
+    makeProvider: () => twoAgentStub,
+  });
+
+  const r = new CommandRegistry(BUILTIN_COMMANDS);
+  const res = await r.run(twoAgentEngine, "debate", "a b should we use REST or gRPC?");
+  expect(res.ok).toBe(true);
+  expect(res.message).toContain("## Debate: a vs b");
+  expect(res.message).toContain("point 1");
+  expect(res.message).toContain("point 6");
+  expect(res.message).toContain("## Synthesis");
+  expect(res.message).toContain("final synthesis");
+});
+
 test("/model validates its arguments before touching the engine", async () => {
   const r = new CommandRegistry(BUILTIN_COMMANDS);
   expect(await r.run(engine(), "model", "")).toEqual({ ok: false, message: "usage: /model <agentId> <provider/model>" });
@@ -85,8 +141,8 @@ test("list() is what a client renders for autocomplete", () => {
   const names = new CommandRegistry(BUILTIN_COMMANDS).list().map((c) => c.name);
   // Order matters: it's the order the TUI's "/" menu offers them in, and /help is appended last.
   expect(names).toEqual([
-    "panes", "usage", "cancel", "undo", "model", "sessions",
-    "agents", "tasks", "skills", "mcp", "lsp", "permissions", "cost", "status", "resume", "clear", "init",
+    "panes", "usage", "cancel", "undo", "rewind", "branch", "model", "sessions",
+    "agents", "tasks", "skills", "mcp", "lsp", "permissions", "cost", "status", "debate", "export", "resume", "clear", "init",
     "help",
   ]);
   expect(new Set(names).size).toBe(names.length); // every name unique — one keystroke, one command

@@ -1,4 +1,4 @@
-// Picker is the every-launch team selection flow: choose how many teammates you want (1–5), then
+// Picker is the every-launch team selection flow: choose how many teammates you want (1–6), then
 // for each one pick a provider and model from the full catalog, name it, and say what it does.
 // Unlike Model (the first-run onboarding wizard) it doesn't insist on collecting credentials up
 // front — a provider without a stored key simply asks for one at the moment you choose it, which
@@ -18,7 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const MaxAgents = 5
+const MaxAgents = 6 // matches web/avatar.js's 6 pixel-avatar colors (blue/yellow/red/purple/green/pink) — a 7th teammate would just wrap and reuse blue
 
 type providersMsg struct {
 	creds     []api.Credential

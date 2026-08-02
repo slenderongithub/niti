@@ -166,13 +166,13 @@ func TestPlanModeTogglesAndIsSubmitted(t *testing.T) {
 // name must not blank the UI.
 func TestThemeCommandIsLocal(t *testing.T) {
 	m := model(1)
-	if cmd := m.submit("/theme nord"); cmd != nil || theme.Current() != "nord" {
+	if cmd := m.submit("/theme desert static"); cmd != nil || theme.Current() != "desert static" {
 		t.Errorf("/theme should switch locally, current=%q cmd=%v", theme.Current(), cmd)
 	}
-	if cmd := m.submit("/theme nonsense"); cmd != nil || theme.Current() != "nord" {
+	if cmd := m.submit("/theme nonsense"); cmd != nil || theme.Current() != "desert static" {
 		t.Errorf("an unknown theme must be refused and leave the current one, got %q", theme.Current())
 	}
-	theme.Use("amux")
+	theme.Use("neon graveyard")
 }
 
 // Slash commands are dispatched against the server's registry, not a hardcoded switch.
@@ -207,7 +207,7 @@ func TestSlashMenuFiltersAndCompletes(t *testing.T) {
 		t.Fatal("the menu must stay closed until a / is typed")
 	}
 	m = typing(m, "/")
-	if !m.menuOpen || m.menu.Len() != 10 { // /help + 3 server commands + /graph /settings /config /stats /theme /quit
+	if !m.menuOpen || m.menu.Len() != 11 { // /help + 3 server commands + /graph /dashboard /settings /config /stats /theme /quit
 		t.Fatalf("expected all commands offered on /, open=%v len=%d", m.menuOpen, m.menu.Len())
 	}
 	m = typing(m, "m")

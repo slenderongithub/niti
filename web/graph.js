@@ -71,10 +71,14 @@ async function loadProject() {
 let es = null;
 const mnodes = new Map(); // id -> node record (persists across toggles within models mode)
 const medges = new Map(); // "a\0b" -> {from,to}
+// Pseudo-senders, not teammates: "system" announces file edits made outside amux (engine.ts's
+// watcher), "orchestrator" announces undo/rewind — neither is a configured agent, and treating
+// either as a graph node put phantom extras in what's supposed to be a fixed, small team.
+const NON_AGENT_IDS = new Set(["system", "orchestrator"]);
 function ensureM(id, role, lead) {
-  if (!id || id === "*") return null;
+  if (!id || id === "*" || NON_AGENT_IDS.has(id)) return null;
   let n = mnodes.get(id);
-  if (!n) { n = { id, label: role || id, role: role || id, lead: !!lead, status: "idle", tokens: 0, group: "agent" }; mnodes.set(id, n); }
+  if (!n) { n = { id, label: role || id, role: role || id, lead: !!lead, status: "idle", tokens: 0, group: "agent", colorIndex: mnodes.size }; mnodes.set(id, n); }
   if (role) { n.role = role; n.label = role; } if (lead) n.lead = true;
   return n;
 }
@@ -125,13 +129,25 @@ function onEvent(e) {
 function setGraph(rawNodes, rawEdges) {
   const before = nodes, prevLinks = links.length;
   const prev = new Map(nodes.map((n) => [n.id, n]));
+  // Models mode: a handful of agents laid out on an even ring, not the file graph's degree-spiral —
+  // with so few nodes the spiral put them at wildly different radii (looked scattered/random) and
+  // physics spent every frame fighting to hold that shape. A fixed ring reads as "a team", stays put,
+  // and leaves the pulses (drawn in render()) to carry the actual who's-talking-to-whom information.
+  const ringR = rawNodes.length > 1 ? 70 + rawNodes.length * 22 : 0;
   const spread = Math.max(120, Math.sqrt(rawNodes.length) * 46);
   nodes = rawNodes.map((n, i) => {
     const old = prev.get(n.id);
-    const a = i * 2.399963, R = spread * Math.sqrt(i + 1) / Math.sqrt(rawNodes.length + 1);
+    let x, y;
+    // Models mode always recomputes the ring fresh (unless the user pinned it) — the ring's angle
+    // per node depends on the CURRENT total, so keeping an old position from before the roster's
+    // count last changed puts nodes at angles meant for a different-sized ring, and they collide.
+    if (mode === "models" && !(old && old.pinned)) {
+      const a = (i / rawNodes.length) * Math.PI * 2 - Math.PI / 2; x = Math.cos(a) * ringR; y = Math.sin(a) * ringR;
+    } else if (old) { x = old.x; y = old.y; }
+    else if (mode === "models") { const a = (i / rawNodes.length) * Math.PI * 2 - Math.PI / 2; x = Math.cos(a) * ringR; y = Math.sin(a) * ringR; }
+    else { const a = i * 2.399963, R = spread * Math.sqrt(i + 1) / Math.sqrt(rawNodes.length + 1); x = Math.cos(a) * R; y = Math.sin(a) * R; }
     return {
-      ...n,
-      x: old ? old.x : Math.cos(a) * R, y: old ? old.y : Math.sin(a) * R,
+      ...n, x, y,
       vx: 0, vy: 0, pinned: old ? old.pinned : false, hl: old ? old.hl : 1,
       deg: 0, r: 4,
     };
@@ -141,7 +157,11 @@ function setGraph(rawNodes, rawEdges) {
   for (const e of rawEdges) { const s = byId.get(e.from), t = byId.get(e.to); if (s !== undefined && t !== undefined && s !== t) links.push({ s, t }); }
   adj = nodes.map(() => new Set());
   for (const l of links) { adj[l.s].add(l.t); adj[l.t].add(l.s); nodes[l.s].deg++; nodes[l.t].deg++; }
-  for (const n of nodes) n.r = 4 + Math.sqrt(n.deg) * 2.4 + (n.lead ? 3 : 0);
+  // Models-mode avatars are a fixed, readable size for every agent, lead included — the pixel
+  // mascot isn't meant to shrink to a dot for a quiet agent the way a plain degree-sized circle
+  // was, and a *different* fixed size for lead just made same-shaped sprites look inconsistent
+  // side by side. Lead gets a ring around it instead (drawn in render()).
+  for (const n of nodes) n.r = mode === "models" ? 20 : 4 + Math.sqrt(n.deg) * 2.4 + (n.lead ? 3 : 0);
   labelOrder = nodes.map((_, i) => i).sort((a, b) => nodes[b].r - nodes[a].r); // best-connected labels win collisions
   // every index into `nodes` shifts on a rebuild — re-resolve the live ones by id or drop them.
   const keep = (i) => { const id = i >= 0 && before[i] ? before[i].id : null; return id != null && byId.has(id) ? byId.get(id) : -1; };
@@ -210,6 +230,9 @@ const acc = { x: 0, y: 0 }; // reused: a per-node accumulator object per frame w
 function tick() {
   const n = nodes.length;
   if (n === 0) return;
+  // Models mode keeps its ring layout (see setGraph) — no file-graph physics fighting to hold a
+  // shape that isn't a spring system. Dragging still works: pointermove sets position directly.
+  if (mode === "models") { for (const p of nodes) { p.vx = 0; p.vy = 0; } sim.alpha = 0; return; }
   if (dragging >= 0) sim.alpha = Math.max(sim.alpha, sim.dragAlpha); // warm, not boiling
   if (sim.alpha < sim.alphaMin) { if (sim.alpha > 0) freeze(); return; } // settled — no work
   sim.alpha *= 1 - sim.alphaDecay;
@@ -388,10 +411,19 @@ function render() {
       ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 4 / cam.k, 0, 7);
       ctx.fillStyle = "rgba(167,139,250,0.20)"; ctx.fill();
     }
-    ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7);
-    ctx.fillStyle = n.color || "#7c8299"; ctx.fill();
-    if (n.lead) { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = "#fff"; ctx.stroke(); }
-    else if (n.pinned) { ctx.lineWidth = 1 / cam.k; ctx.strokeStyle = "rgba(231,233,242,0.45)"; ctx.stroke(); }
+    if (mode === "models") {
+      // Agent identity is the pixel avatar's color/face now, not a plain fill — no border, per the
+      // mascot reference art. Status moves to a small dot instead of the old fill color.
+      drawPixelAvatar(ctx, n.x, n.y, n.r * 2, n.colorIndex);
+      if (n.lead) { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = "#a78bfa"; ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 5 / cam.k, 0, 7); ctx.stroke(); }
+      ctx.fillStyle = STATUS_FILL[n.status] || STATUS_FILL.idle;
+      ctx.beginPath(); ctx.arc(n.x + n.r * 0.7, n.y - n.r * 0.7, 4 / cam.k, 0, 7); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7);
+      ctx.fillStyle = n.color || "#7c8299"; ctx.fill();
+      if (n.lead) { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = "#fff"; ctx.stroke(); }
+      else if (n.pinned) { ctx.lineWidth = 1 / cam.k; ctx.strokeStyle = "rgba(231,233,242,0.45)"; ctx.stroke(); }
+    }
     if (n.status === "working") {
       const pw = (now % 1200) / 1200;
       ctx.globalAlpha = (1 - pw) * alpha; ctx.strokeStyle = STATUS_FILL.working; ctx.lineWidth = 2 / cam.k;
@@ -642,6 +674,12 @@ function setMode(m) {
   mode = m;
   document.querySelectorAll("#mode button").forEach((b) => b.classList.toggle("active", b.dataset.mode === m));
   selected = hover = -1; pulses = [];
+  // Fetching the new mode's data is async — clear the old mode's nodes/links right away instead of
+  // leaving them in place until the fetch resolves. Otherwise render() draws for a frame or two with
+  // `mode` already flipped but `nodes` still holding the OTHER mode's data (e.g. plain file nodes
+  // with no colorIndex, drawn through the pixel-avatar path) — a real race that only shows up when
+  // the switch is fast, which crashed the render loop and froze the canvas on a stale frame.
+  setGraph([], []);
   if (m === "project") { if (es) { es.close(); es = null; } loadProject().then(() => fit(false)); }
   else { loadModels(); setTimeout(() => fit(false), 60); }
 }

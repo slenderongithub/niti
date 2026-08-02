@@ -54,6 +54,14 @@ export async function diffStat(handle: WorktreeHandle): Promise<string> {
   return r.stdout.trim();
 }
 
+// The full patch (not just the stat summary) for /export's report — same staging as diffStat, so
+// new/untracked files show up too.
+export async function diffPatch(handle: WorktreeHandle): Promise<string> {
+  await git(handle.path, ["add", "-A"]);
+  const r = await git(handle.path, ["diff", "--cached", handle.baseSha]);
+  return r.stdout.trim();
+}
+
 // Commit whatever's pending in the worktree so mergeBack has something to bring across — a no-op
 // (not an error) when there's nothing staged, e.g. a task run that made no file changes.
 export async function commitPending(handle: WorktreeHandle, message = "amux: worktree changes"): Promise<void> {
@@ -62,6 +70,29 @@ export async function commitPending(handle: WorktreeHandle, message = "amux: wor
   if (staged.code === 0) return;
   const r = await git(handle.path, ["commit", "-q", "-m", message]);
   if (r.code !== 0) throw new Error(`git commit failed: ${r.stderr.trim() || r.stdout.trim()}`);
+}
+
+// /branch: snapshot the current working tree onto a new branch, then switch straight back — so
+// the current line of work is preserved before a /rewind discards it going forward. Not
+// multi-timeline branching (there's no per-checkpoint branch model in the schema); just a commit
+// reachable by name if the snapshot is ever wanted back.
+export async function snapshotBranch(root: string, name: string): Promise<{ ok: boolean; message: string }> {
+  const created = await git(root, ["checkout", "-b", name]);
+  if (created.code !== 0) return { ok: false, message: created.stderr.trim() || created.stdout.trim() };
+  await git(root, ["add", "-A"]);
+  const staged = await git(root, ["diff", "--cached", "--quiet"]); // exit 0 = nothing to commit
+  let message = `branch '${name}' created at the current commit (nothing uncommitted to snapshot)`;
+  if (staged.code !== 0) {
+    const commit = await git(root, ["commit", "-q", "-m", `amux: branch snapshot (${name})`]);
+    if (commit.code !== 0) {
+      await git(root, ["checkout", "-"]); // best-effort return before surfacing the failure
+      return { ok: false, message: commit.stderr.trim() || commit.stdout.trim() };
+    }
+    message = `snapshotted current state to branch '${name}'`;
+  }
+  const back = await git(root, ["checkout", "-"]);
+  if (back.code !== 0) return { ok: false, message: `branch created, but couldn't switch back: ${back.stderr.trim()}` };
+  return { ok: true, message };
 }
 
 // Merge the worktree's branch into whatever is currently checked out in `root`. Never automatic —

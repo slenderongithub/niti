@@ -3,21 +3,21 @@ package theme
 import "testing"
 
 func TestUseRejectsUnknownWithoutChangingAnything(t *testing.T) {
-	Use("amux")
+	Use("neon graveyard")
 	before := Accent
 	if Use("no-such-theme") {
 		t.Fatal("an unknown theme must not be accepted")
 	}
-	if Current() != "amux" || Accent != before {
+	if Current() != "neon graveyard" || Accent != before {
 		t.Errorf("a rejected theme must leave the palette alone, got %q/%v", Current(), Accent)
 	}
-	if !Use("nord") || Current() != "nord" {
+	if !Use("desert static") || Current() != "desert static" {
 		t.Fatalf("Use should switch to a known theme, got %q", Current())
 	}
 	if Accent == before {
 		t.Error("switching themes must repoint the palette")
 	}
-	Use("amux")
+	Use("neon graveyard")
 }
 
 // Next walks every theme exactly once and returns to where it started — the ctrl+t contract.
@@ -35,7 +35,7 @@ func TestNextCyclesThroughEveryThemeAndWraps(t *testing.T) {
 	if got := Next(); got != names[0] {
 		t.Errorf("Next should wrap back to %q, got %q", names[0], got)
 	}
-	Use("amux")
+	Use("neon graveyard")
 }
 
 // Every theme must carry a usable agent palette — AgentColor indexes into it with no bounds check
@@ -51,5 +51,26 @@ func TestEveryThemeHasAgentColors(t *testing.T) {
 			t.Errorf("theme %q produced an empty agent color", name)
 		}
 	}
-	Use("amux")
+	Use("neon graveyard")
+}
+
+// The 5 palettes are the single source of truth shared with the web dashboard (server.ts serves
+// the same palettes.json) — this pins the exact set and the semantic-color derivation so a typo in
+// the JSON, or a name collision, fails a test instead of quietly reaching the TUI/web mismatched.
+func TestPalettesJSONIsTheExpectedFiveDistinctThemes(t *testing.T) {
+	want := []string{"deep sea signal", "desert static", "hazard tape", "neon graveyard", "terminal candy"}
+	got := Names()
+	if len(got) != len(want) {
+		t.Fatalf("expected %d palettes, got %d: %v", len(want), len(got), got)
+	}
+	for i, n := range want {
+		if got[i] != n {
+			t.Errorf("palette %d: expected %q, got %q", i, n, got[i])
+		}
+	}
+	for _, th := range Themes {
+		if len(th.Agents) != 7 {
+			t.Errorf("theme %q: expected 7 derived agent colors (the semantic set), got %d", th.Name, len(th.Agents))
+		}
+	}
 }

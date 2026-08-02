@@ -12,7 +12,15 @@
       <div class="goal" id="goal">waiting for a task…</div>
       <div class="progress"><div class="bar" id="bar"></div><span id="pct">0%</span></div>
       <div class="conn" id="conn">connecting…</div>
+      <button class="theme-btn" id="theme-btn" title="theme"><span id="theme-dot"></span></button>
+      <div class="theme-menu hidden" id="theme-menu"></div>
     </header>
+
+    <div class="promptbar">
+      <input id="prompt-input" type="text" placeholder="give the team a new goal…" />
+      <button id="prompt-send">Send</button>
+      <span class="status" id="prompt-status"></span>
+    </div>
 
     <main>
       <section class="graph">
@@ -30,8 +38,40 @@
         <div class="tab hidden" id="tab-messages"></div>
         <div class="tab hidden" id="tab-usage"></div>
       </aside>
+
+      <aside class="agent-panel hidden" id="agent-panel">
+        <div class="ap-head">
+          <span id="ap-title"></span>
+          <button id="ap-close" title="close">×</button>
+        </div>
+        <div class="ap-row">
+          <input id="ap-model-input" type="text" placeholder="provider/model" />
+          <button id="ap-model-apply">Switch</button>
+        </div>
+        <div class="ap-row status" id="ap-model-status"></div>
+        <div class="ap-log" id="ap-log"></div>
+        <div class="ap-row">
+          <input id="ap-msg-input" type="text" placeholder="message this agent mid-task…" disabled />
+          <button id="ap-msg-send" disabled>Send</button>
+        </div>
+        <div class="ap-row status" id="ap-msg-status"></div>
+      </aside>
     </main>
 
+    <div class="overlay hidden" id="approval-overlay">
+      <div class="overlay-box">
+        <div class="overlay-head" id="approval-head"></div>
+        <div class="diff" id="approval-diff"></div>
+        <div class="overlay-actions">
+          <button id="approval-yes">Yes</button>
+          <button id="approval-always">Always</button>
+          <button id="approval-no">No</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/avatar.js"></script>
     <script src="/app.js"></script>
+    <script src="/theme.js"></script>
   </body>
 </html>

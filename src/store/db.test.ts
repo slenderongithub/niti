@@ -91,6 +91,53 @@ test("undoLast with no session id reverts the most recent write by any agent", (
   expect(readFileSync(file, "utf8")).toBe("v2");
 });
 
+test("rewindN reverts the last n writes at once, oldest of the n restored last", () => {
+  const s = store();
+  const dir = mkdtempSync(join(tmpdir(), "amux-rewind-"));
+  const id = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  const file = join(dir, "f.txt");
+  writeFileSync(file, "v1");
+  s.checkpoint(id, file, "v1");
+  writeFileSync(file, "v2");
+  s.checkpoint(id, file, "v2");
+  writeFileSync(file, "v3");
+
+  const results = s.rewindN(2, id);
+  expect(results).toEqual([
+    { path: file, action: "restored" },
+    { path: file, action: "restored" },
+  ]);
+  expect(readFileSync(file, "utf8")).toBe("v1"); // both writes undone, back to the original
+  expect(s.undoLast(id)).toBeUndefined(); // nothing left
+});
+
+test("rewindN stops early (not partially applied past what exists) when fewer than n checkpoints remain", () => {
+  const s = store();
+  const dir = mkdtempSync(join(tmpdir(), "amux-rewind-"));
+  const id = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  const file = join(dir, "only-one.txt");
+  writeFileSync(file, "v1");
+  s.checkpoint(id, file, "v1");
+  writeFileSync(file, "v2");
+
+  expect(s.rewindN(5, id)).toEqual([{ path: file, action: "restored" }]);
+  expect(readFileSync(file, "utf8")).toBe("v1");
+});
+
+test("listCheckpoints previews pending writes, most recent first, without consuming them", () => {
+  const s = store();
+  const dir = mkdtempSync(join(tmpdir(), "amux-list-"));
+  const id = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  const a = join(dir, "a.txt");
+  const b = join(dir, "b.txt");
+  s.checkpoint(id, a, "a1");
+  s.checkpoint(id, b, "b1");
+
+  const preview = s.listCheckpoints(id);
+  expect(preview.map((c) => c.path)).toEqual([b, a]);
+  expect(s.listCheckpoints(id)).toHaveLength(2); // read-only: nothing consumed
+});
+
 test("resumeConversation flattens every session for a task, oldest first", () => {
   const s = store();
   const first = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m", taskId: "t1" });

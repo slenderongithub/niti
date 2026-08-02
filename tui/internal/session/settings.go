@@ -177,7 +177,7 @@ func (m Model) settStatus(w int) []string {
 func (m Model) settConfig(w int) []string {
 	bg := theme.BgDeep
 	lines := []string{
-		kvHint(w, "Theme", theme.Current(), "ctrl+t cycles"),
+		kvHint(w, "Theme", theme.Current(), "ctrl+t picks"),
 		kvHint(w, "Mode", m.mode, "shift+tab toggles"),
 		kvHint(w, "Themes", strings.Join(theme.Names(), " "), "/theme <name>"),
 		"",

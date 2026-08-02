@@ -14,6 +14,7 @@ const KIND_COLORS = {
 };
 const STATUS_FILL = { idle: "#3a3f52", working: "#60a5fa", done: "#4ade80", failed: "#f87171" };
 const PULSE_MS = 2200;
+const AVATAR_R = 20; // every agent's pixel avatar is this size, no exceptions — lead is a ring around it, not a bigger sprite
 
 const $ = (id) => document.getElementById(id);
 const nodes = new Map(); // id -> {id,label,role,lead,x,y,vx,vy,status,activity,tokens}
@@ -23,10 +24,16 @@ let pulses = []; // {from,to,kind,born}
 let totals = { inputTokens: 0, outputTokens: 0, calls: 0 };
 const usageByAgent = new Map();
 let progress = 0;
+let running = false; // session state — gates the "new goal" prompt bar
+let openAgentId = null; // which node's detail panel is open, if any
+let pendingApprovals = []; // the FIFO queue's current snapshot — same one the TUI answers from
 
 // ---------- graph nodes ----------
+// Pseudo-senders, not teammates: "system" announces file edits made outside amux (engine.ts's
+// watcher), "orchestrator" announces undo/rewind — neither is a configured agent.
+const NON_AGENT_IDS = new Set(["system", "orchestrator"]);
 function ensureNode(id, role, lead) {
-  if (id === "*") return null;
+  if (id === "*" || NON_AGENT_IDS.has(id)) return null;
   let n = nodes.get(id);
   if (!n) {
     const angle = nodes.size * 1.3;
@@ -35,6 +42,7 @@ function ensureNode(id, role, lead) {
       label: id,
       role: role || id,
       lead: !!lead,
+      colorIndex: nodes.size, // first-seen roster position — the pixel avatar's stable identity color/face
       x: 0.5 + 0.28 * Math.cos(angle),
       y: 0.5 + 0.28 * Math.sin(angle),
       vx: 0,
@@ -42,6 +50,8 @@ function ensureNode(id, role, lead) {
       status: "idle",
       activity: "",
       tokens: 0,
+      log: [], // full event history for this agent — the click-to-inspect panel's transcript
+      pending: "", // streamed text not yet newline-terminated (see feedDelta)
     };
     nodes.set(id, n);
   }
@@ -71,9 +81,15 @@ function connect() {
 function handle(e) {
   switch (e.kind) {
     case "session":
+      running = e.state === "started";
+      setPromptEnabled();
       if (e.state === "started") { $("goal").textContent = e.goal || "working…"; setProgress(0); }
       if (e.state === "ended") setProgress(100);
       if (e.state === "cancelled") $("conn").textContent = "cancelled";
+      break;
+    case "approval_request":
+      pendingApprovals = e.requests || [];
+      renderApproval();
       break;
     case "orchestration":
       onOrch(e.event);
@@ -107,11 +123,19 @@ function onOrch(ev) {
       for (const t of ev.tasks) ensureNode(t.role);
       renderTasks();
       break;
-    case "task_started": { const n = nodes.get(ev.role); if (n) n.status = "working"; setTaskStatus(ev.taskId, "in_progress"); break; }
+    case "task_started": {
+      const n = nodes.get(ev.role);
+      if (n) n.status = "working";
+      setTaskStatus(ev.taskId, "in_progress");
+      if (openAgentId === ev.role) renderAgentPanel(); // enables the mid-task message box
+      break;
+    }
     case "task_done": {
-      const n = nodes.get(ev.role); if (n) n.status = ev.ok ? "done" : "failed";
+      const n = nodes.get(ev.role);
+      if (n) n.status = ev.ok ? "done" : "failed";
       setTaskStatus(ev.taskId, ev.ok ? "done" : "failed");
       if (ev.total) setProgress(Math.round((ev.completed / ev.total) * 100));
+      if (openAgentId === ev.role) renderAgentPanel(); // disables it again once the task ends
       break;
     }
     case "handoff": pulse(ev.from, ev.to?.[0] ?? "*", "handoff"); break;
@@ -126,6 +150,27 @@ function onAgentEvent(ae) {
   if (ae.type === "done") n.status = n.status === "failed" ? "failed" : (n.status === "done" ? "done" : "idle");
   if (ae.type === "error") n.status = "failed";
   if (ae.payload && ae.type !== "delta") n.activity = ae.payload.slice(0, 60);
+
+  // Full transcript for the click-to-inspect panel — streamed text accumulates until a newline
+  // (mirrors the TUI's feedDelta), everything else is one line per event.
+  if (ae.type === "delta") {
+    feedDelta(n, ae.payload);
+  } else if (ae.payload) {
+    pushLog(n, `[${ae.type}] ${ae.payload}`);
+  }
+  if (openAgentId === ae.agentId) renderAgentPanel();
+}
+
+function pushLog(n, line) {
+  n.log.push(line);
+  if (n.log.length > 300) n.log.shift();
+}
+
+function feedDelta(n, chunk) {
+  n.pending += chunk;
+  const lines = n.pending.split("\n");
+  n.pending = lines.pop();
+  for (const l of lines) if (l) pushLog(n, l);
 }
 
 // ---------- panels ----------
@@ -169,6 +214,114 @@ function renderUsage() {
 
 function esc(s) { return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 
+const authedFetch = (path, body) =>
+  fetch(`${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+
+// ---------- click-to-inspect agent panel ----------
+function openAgentPanel(id) {
+  openAgentId = id;
+  $("agent-panel").classList.remove("hidden");
+  $("ap-model-status").textContent = "";
+  $("ap-msg-status").textContent = "";
+  renderAgentPanel();
+}
+function closeAgentPanel() {
+  openAgentId = null;
+  $("agent-panel").classList.add("hidden");
+}
+function renderAgentPanel() {
+  const n = nodes.get(openAgentId);
+  if (!n) return closeAgentPanel();
+  $("ap-title").textContent = `${n.role} (${n.id}) — ${n.status}`;
+  const lines = n.pending ? [...n.log, n.pending] : n.log;
+  const log = $("ap-log");
+  log.innerHTML = lines.length ? lines.map((l) => `<div>${esc(l)}</div>`).join("") : '<div class="empty">nothing yet</div>';
+  log.scrollTop = log.scrollHeight;
+  // Mid-task messaging only makes sense while the agent is actually running — the server enforces
+  // this too (409 otherwise), this just avoids a click that's guaranteed to fail.
+  const canMessage = n.status === "working";
+  $("ap-msg-input").disabled = !canMessage;
+  $("ap-msg-send").disabled = !canMessage;
+}
+$("ap-close").addEventListener("click", closeAgentPanel);
+
+// ---------- mid-task agent messaging (POST /agents/:id/message) ----------
+async function sendAgentMessage() {
+  const id = openAgentId;
+  const text = $("ap-msg-input").value.trim();
+  if (!id || !text) return;
+  const res = await authedFetch(`/agents/${encodeURIComponent(id)}/message`, { text });
+  if (res.ok) {
+    $("ap-msg-input").value = "";
+    $("ap-msg-status").textContent = "sent";
+  } else {
+    const e = await res.json().catch(() => ({}));
+    $("ap-msg-status").textContent = e.error || "failed";
+  }
+}
+$("ap-msg-send").addEventListener("click", sendAgentMessage);
+$("ap-msg-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendAgentMessage(); });
+
+// ---------- live model swap (POST /model, same route the TUI's ctrl+p carousel uses) ----------
+$("ap-model-apply").addEventListener("click", async () => {
+  const id = openAgentId;
+  const raw = $("ap-model-input").value.trim();
+  if (!id || !raw) return;
+  const slash = raw.indexOf("/");
+  const provider = slash > 0 ? raw.slice(0, slash) : "";
+  const model = slash > 0 ? raw.slice(slash + 1) : raw;
+  const res = await authedFetch("/model", { agentId: id, provider, model });
+  if (res.ok) {
+    $("ap-model-input").value = "";
+    $("ap-model-status").textContent = `switched to ${raw}`;
+  } else {
+    const e = await res.json().catch(() => ({}));
+    $("ap-model-status").textContent = e.error || "switch failed";
+  }
+});
+
+// ---------- tool-approval popup (POST /approval — the same FIFO queue the TUI answers from, so
+// answering here unblocks a concurrently open TUI session and vice versa) ----------
+function renderApproval() {
+  const el = $("approval-overlay");
+  if (!pendingApprovals.length) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  const r = pendingApprovals[0];
+  const path = r.input && typeof r.input.path === "string" ? ` on ${r.input.path}` : "";
+  $("approval-head").textContent = `${r.agentId} wants to run ${r.tool}${path}`;
+  const diff = r.input && typeof r.input.diff === "string" ? r.input.diff : "";
+  $("approval-diff").innerHTML = diff
+    ? diff.split("\n").map((l) => `<div class="${l.startsWith("+") ? "plus" : l.startsWith("-") ? "minus" : l.startsWith("@@") ? "hunk" : ""}">${esc(l)}</div>`).join("")
+    : `<div class="empty">${esc(JSON.stringify(r.input ?? {}))}</div>`;
+}
+function answerApproval(ok, scope) {
+  authedFetch("/approval", { ok, scope }).catch(() => {});
+  pendingApprovals = pendingApprovals.slice(1); // mirrors the TUI: pop locally, don't wait on the round trip
+  renderApproval();
+}
+$("approval-yes").addEventListener("click", () => answerApproval(true));
+$("approval-always").addEventListener("click", () => answerApproval(true, "agent"));
+$("approval-no").addEventListener("click", () => answerApproval(false));
+
+// ---------- prompt bar: submit a whole-team goal (POST /prompt) ----------
+function setPromptEnabled() {
+  $("prompt-send").disabled = running;
+  $("prompt-input").disabled = running;
+}
+async function submitPrompt() {
+  const text = $("prompt-input").value.trim();
+  if (!text || running) return;
+  const res = await authedFetch("/prompt", { text, mode: "build" });
+  if (res.ok) { $("prompt-input").value = ""; $("prompt-status").textContent = ""; }
+  else { const e = await res.json().catch(() => ({})); $("prompt-status").textContent = e.error || "failed"; }
+}
+$("prompt-send").addEventListener("click", submitPrompt);
+$("prompt-input").addEventListener("keydown", (e) => { if (e.key === "Enter") submitPrompt(); });
+
 // ---------- canvas render loop ----------
 const canvas = $("canvas");
 const ctx = canvas.getContext("2d");
@@ -180,6 +333,16 @@ function resize() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 }
 window.addEventListener("resize", resize);
+
+// Click-to-inspect: hit-test against each node's drawn circle, same x/y/radius draw() uses.
+canvas.addEventListener("click", (ev) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  for (const n of nodes.values()) {
+    const x = n.x * W, y = n.y * H, r = AVATAR_R;
+    if (Math.hypot(mx - x, my - y) <= r) { openAgentPanel(n.id); return; }
+  }
+});
 
 function step() {
   const arr = [...nodes.values()];
@@ -244,20 +407,24 @@ function draw() {
 
   // nodes
   for (const n of nodes.values()) {
-    const x = px(n), y = py(n), r = n.lead ? 26 : 20;
+    const x = px(n), y = py(n), r = AVATAR_R; // every avatar is the same size — lead gets a ring, not a bigger sprite
     if (n.status === "working") {
       const t = (now % 1200) / 1200;
       ctx.strokeStyle = "rgba(96,165,250,0.5)"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, y, r + 4 + t * 8, 0, Math.PI * 2); ctx.globalAlpha = 1 - t; ctx.stroke(); ctx.globalAlpha = 1;
     }
+    drawPixelAvatar(ctx, x, y, r * 2, n.colorIndex);
+    if (n.lead) { ctx.strokeStyle = "#a78bfa"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 5, 0, Math.PI * 2); ctx.stroke(); }
+    // Status now lives outside the sprite (its fill/face are identity, not status) — a small dot
+    // at the shoulder, same colors the legend already uses.
     ctx.fillStyle = STATUS_FILL[n.status] || "#3a3f52";
-    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-    if (n.lead) { ctx.strokeStyle = "#a78bfa"; ctx.lineWidth = 3; ctx.stroke(); }
-    ctx.fillStyle = "#0d0f16"; ctx.font = "bold 11px ui-monospace, monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(n.id.slice(0, 3).toUpperCase(), x, y);
-    ctx.fillStyle = "#e7e9f2"; ctx.font = "11px ui-monospace, monospace"; ctx.textBaseline = "top";
-    ctx.fillText(n.role.slice(0, 18), x, y + r + 4);
-    if (n.tokens) { ctx.fillStyle = "#8b90a6"; ctx.fillText(n.tokens.toLocaleString() + " tok", x, y + r + 18); }
+    ctx.beginPath(); ctx.arc(x + r * 0.72, y - r * 0.72, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillStyle = "#e7e9f2"; ctx.font = "bold 10px ui-monospace, monospace";
+    ctx.fillText(n.id.slice(0, 3).toUpperCase(), x, y + r + 4);
+    ctx.fillStyle = "#e7e9f2"; ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText(n.role.slice(0, 18), x, y + r + 16);
+    if (n.tokens) { ctx.fillStyle = "#8b90a6"; ctx.fillText(n.tokens.toLocaleString() + " tok", x, y + r + 30); }
   }
   requestAnimationFrame(draw);
 }
@@ -285,8 +452,10 @@ async function boot() {
       const s = await res.json();
       for (const a of s.agents || []) ensureNode(a.id, a.role, a.lead);
       if (s.tasks && s.tasks.length) { tasks = s.tasks.map((t) => ({ id: t.id, description: t.description, role: t.assignedTo || t.role, dependsOn: t.dependsOn || [], status: t.status })); renderTasks(); }
+      running = !!s.running;
     }
   } catch { /* server not reachable yet — SSE will retry */ }
+  setPromptEnabled();
   renderTasks(); renderMessages(); renderUsage();
   resize(); requestAnimationFrame(draw); connect();
 }

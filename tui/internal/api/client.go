@@ -294,8 +294,20 @@ func (c *Client) SwitchModel(agentID, provider, model, baseURL string) error {
 	return c.do("POST", "/model", map[string]string{"agentId": agentID, "provider": provider, "model": model, "baseURL": baseURL}, nil)
 }
 
-func (c *Client) Approve(ok bool, scope string) error {
-	return c.do("POST", "/approval", map[string]any{"ok": ok, "scope": scope}, nil)
+// SetTheme persists the active theme to .amux/agents.yaml and broadcasts it over SSE so the web
+// dashboard and graph page pick it up live (see the theme carousel's enter handler).
+func (c *Client) SetTheme(name string) error {
+	return c.do("POST", "/theme", map[string]string{"theme": name}, nil)
+}
+
+// edited overrides fields of the approved call's input (e.g. a diff-view in-place edit) — nil for
+// a plain approve/deny, unchanged from before this parameter existed.
+func (c *Client) Approve(ok bool, scope string, edited map[string]any) error {
+	body := map[string]any{"ok": ok, "scope": scope}
+	if edited != nil {
+		body["edited"] = edited
+	}
+	return c.do("POST", "/approval", body, nil)
 }
 
 type ProvidersResp struct {

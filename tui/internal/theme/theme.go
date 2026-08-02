@@ -4,6 +4,8 @@
 package theme
 
 import (
+	_ "embed"
+	"encoding/json"
 	"sort"
 
 	"github.com/charmbracelet/lipgloss"
@@ -29,43 +31,57 @@ type Theme struct {
 	Agents []lipgloss.Color // per-agent identity colors, cycled by roster index
 }
 
-var Themes = map[string]Theme{
-	"amux": {
-		Name: "amux", BgDeep: "#0b0d14", BgPane: "#11141f", Fg: "#dfe3f0", Muted: "#7c8299",
-		Line: "#262b3d", Accent: "#7aa2ff", Alt: "#f5c542",
-		Green: "#4ade80", Red: "#f87171", Amber: "#fbbf24", Blue: "#60a5fa", Pink: "#f472b6",
-		Agents: []lipgloss.Color{"#a78bfa", "#60a5fa", "#4ade80", "#fbbf24", "#f472b6", "#22d3ee", "#fb923c", "#a3e635", "#e879f9", "#2dd4bf", "#f87171", "#818cf8"},
-	},
-	"midnight": {
-		Name: "midnight", BgDeep: "#08090a", BgPane: "#0f1113", Fg: "#e6e6e6", Muted: "#6b7280",
-		Line: "#1f2225", Accent: "#22d3ee", Alt: "#e0af68",
-		Green: "#9ece6a", Red: "#f7768e", Amber: "#e0af68", Blue: "#7dcfff", Pink: "#bb9af7",
-		Agents: []lipgloss.Color{"#7dcfff", "#9ece6a", "#e0af68", "#bb9af7", "#f7768e", "#2ac3de", "#ff9e64", "#73daca", "#c0caf5", "#b4f9f8", "#ff007c", "#41a6b5"},
-	},
-	"nord": {
-		Name: "nord", BgDeep: "#242933", BgPane: "#2e3440", Fg: "#eceff4", Muted: "#7b88a1",
-		Line: "#3b4252", Accent: "#88c0d0", Alt: "#ebcb8b",
-		Green: "#a3be8c", Red: "#bf616a", Amber: "#ebcb8b", Blue: "#81a1c1", Pink: "#b48ead",
-		Agents: []lipgloss.Color{"#88c0d0", "#a3be8c", "#ebcb8b", "#b48ead", "#bf616a", "#81a1c1", "#8fbcbb", "#d08770", "#5e81ac", "#a3be8c", "#b48ead", "#88c0d0"},
-	},
-	"gruvbox": {
-		Name: "gruvbox", BgDeep: "#1d2021", BgPane: "#282828", Fg: "#ebdbb2", Muted: "#928374",
-		Line: "#3c3836", Accent: "#83a598", Alt: "#fabd2f",
-		Green: "#b8bb26", Red: "#fb4934", Amber: "#fabd2f", Blue: "#83a598", Pink: "#d3869b",
-		Agents: []lipgloss.Color{"#fabd2f", "#83a598", "#b8bb26", "#d3869b", "#fe8019", "#8ec07c", "#fb4934", "#d5c4a1", "#458588", "#689d6a", "#d79921", "#cc241d"},
-	},
-	"rosepine": {
-		Name: "rosepine", BgDeep: "#191724", BgPane: "#1f1d2e", Fg: "#e0def4", Muted: "#6e6a86",
-		Line: "#26233a", Accent: "#c4a7e7", Alt: "#f6c177",
-		Green: "#9ccfd8", Red: "#eb6f92", Amber: "#f6c177", Blue: "#31748f", Pink: "#ebbcba",
-		Agents: []lipgloss.Color{"#c4a7e7", "#ebbcba", "#9ccfd8", "#f6c177", "#eb6f92", "#31748f", "#e0def4", "#c4a7e7", "#9ccfd8", "#f6c177", "#ebbcba", "#eb6f92"},
-	},
-	"matrix": {
-		Name: "matrix", BgDeep: "#000000", BgPane: "#050a05", Fg: "#c8facc", Muted: "#3f7a4a",
-		Line: "#123a1c", Accent: "#39ff14", Alt: "#a6ff00",
-		Green: "#39ff14", Red: "#ff5555", Amber: "#a6ff00", Blue: "#00e5c0", Pink: "#7dff9a",
-		Agents: []lipgloss.Color{"#39ff14", "#7dff9a", "#00e5c0", "#a6ff00", "#c8facc", "#2ecc40", "#00ff9c", "#5cff5c", "#9dffb0", "#00c853", "#76ff03", "#69f0ae"},
-	},
+// palettes.json is the single source of truth for theme colors — the web dashboard serves this
+// same file (GET /palettes.json, resolved from this path) so the TUI and the web control center
+// offer identical palettes instead of two hand-maintained color tables drifting apart. It lives
+// here rather than at the repo root because Go's //go:embed cannot reach outside this module.
+//
+//go:embed palettes.json
+var palettesJSON []byte
+
+// paletteFile is the on-disk shape of one palettes.json entry.
+type paletteFile struct {
+	Name   string `json:"name"`
+	Bg     string `json:"bg"`
+	Panel  string `json:"panel"`
+	Fg     string `json:"fg"`
+	Muted  string `json:"muted"`
+	Line   string `json:"line"`
+	Accent string `json:"accent"`
+	Alt    string `json:"alt"`
+	Green  string `json:"green"`
+	Red    string `json:"red"`
+	Amber  string `json:"amber"`
+	Blue   string `json:"blue"`
+	Pink   string `json:"pink"`
+}
+
+var Themes = loadThemes()
+
+func loadThemes() map[string]Theme {
+	var raw []paletteFile
+	if err := json.Unmarshal(palettesJSON, &raw); err != nil {
+		panic("theme: palettes.json is invalid: " + err.Error())
+	}
+	out := make(map[string]Theme, len(raw))
+	for _, p := range raw {
+		// Per-agent identity colors are derived, not hand-authored: AgentColor()'s existing
+		// index%len(palette) wrap means handing it just these 7 already cycles correctly — no
+		// need to materialize a longer repeated slice.
+		semantic := []lipgloss.Color{
+			lipgloss.Color(p.Accent), lipgloss.Color(p.Alt), lipgloss.Color(p.Green),
+			lipgloss.Color(p.Red), lipgloss.Color(p.Amber), lipgloss.Color(p.Blue), lipgloss.Color(p.Pink),
+		}
+		out[p.Name] = Theme{
+			Name: p.Name, BgDeep: lipgloss.Color(p.Bg), BgPane: lipgloss.Color(p.Panel),
+			Fg: lipgloss.Color(p.Fg), Muted: lipgloss.Color(p.Muted), Line: lipgloss.Color(p.Line),
+			Accent: lipgloss.Color(p.Accent), Alt: lipgloss.Color(p.Alt),
+			Green: lipgloss.Color(p.Green), Red: lipgloss.Color(p.Red), Amber: lipgloss.Color(p.Amber),
+			Blue: lipgloss.Color(p.Blue), Pink: lipgloss.Color(p.Pink),
+			Agents: semantic,
+		}
+	}
+	return out
 }
 
 // The active theme's colors, read directly by every render site.
@@ -83,7 +99,7 @@ var (
 	Blue   lipgloss.Color
 	Pink   lipgloss.Color
 
-	current = "amux"
+	current = "neon graveyard"
 	palette []lipgloss.Color
 )
 

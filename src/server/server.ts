@@ -1,15 +1,31 @@
 import { join, normalize } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { timingSafeEqual } from "node:crypto";
+import * as pty from "node-pty";
+import type { IPty } from "node-pty";
 import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "./events.ts";
 import { CATALOG, contextWindow, providersByCategory, splitModelId, type Category } from "../providers/catalog.ts";
 import { costOf } from "../providers/pricing.ts";
 import { buildFileGraph } from "../graph/filegraph.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
-import { saveAgents } from "../config/config.ts";
+import { saveAgents, setTheme } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
 import type { AgentConfig } from "../agent/agent.ts";
+
+// xterm.js's own dist bundles — served straight from node_modules (not vendored into web/) so
+// there's exactly one copy, kept in step with package.json by `bun install`. Each is a UMD build
+// that self-attaches to `globalThis` when loaded as a plain <script>, matching the rest of web/'s
+// no-bundler convention.
+const VENDOR_FILES: Record<string, { path: string; type: string }> = {
+  "/xterm.js": { path: "@xterm/xterm/lib/xterm.js", type: "text/javascript; charset=utf-8" },
+  "/xterm.css": { path: "@xterm/xterm/css/xterm.css", type: "text/css; charset=utf-8" },
+  "/xterm-addon-fit.js": { path: "@xterm/addon-fit/lib/addon-fit.js", type: "text/javascript; charset=utf-8" },
+};
+
+interface TerminalSocketData {
+  pty?: IPty;
+}
 
 export interface ServerHandle {
   url: string;
@@ -36,6 +52,9 @@ export function startServer(
   const token = opts.token ?? crypto.randomUUID();
   const webDir = opts.webDir ?? new URL("../../web", import.meta.url).pathname;
   const commands = opts.commands ?? new CommandRegistry();
+  // Mutable, unlike the rest of `opts` — POST /theme updates this in place so /session reflects a
+  // theme changed mid-session (by the TUI carousel or the web dropdown) without a server restart.
+  let currentTheme = opts.theme ?? "";
 
   const json = (data: unknown, status = 200) =>
     new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -45,8 +64,32 @@ export function startServer(
     const file = join(webDir, safe);
     if (!file.startsWith(webDir) || !existsSync(file)) return json({ error: "not found" }, 404);
     const ext = file.slice(file.lastIndexOf("."));
-    return new Response(readFileSync(file), { headers: { "content-type": CONTENT_TYPES[ext] ?? "application/octet-stream" } });
+    // No cache-control here previously meant a browser was free to serve a stale cached copy of
+    // graph.js/app.js/etc. across visits with no way to tell — every edit to web/ ships live from
+    // disk on the next request, so a client should never need to guess whether its copy is current.
+    return new Response(readFileSync(file), {
+      headers: { "content-type": CONTENT_TYPES[ext] ?? "application/octet-stream", "cache-control": "no-cache" },
+    });
   };
+
+  const nodeModulesDir = new URL("../../node_modules", import.meta.url).pathname;
+  const serveVendor = (urlPath: string): Response => {
+    const v = VENDOR_FILES[urlPath];
+    if (!v) return json({ error: "not found" }, 404);
+    const file = join(nodeModulesDir, v.path);
+    if (!existsSync(file)) return json({ error: "not found" }, 404);
+    return new Response(readFileSync(file), { headers: { "content-type": v.type } });
+  };
+
+  // The 5 theme palettes — single source of truth, also embedded straight into the TUI binary
+  // (tui/internal/theme/theme.go's //go:embed) from this same file, so there's exactly one place
+  // to add a 6th palette later. Lives under tui/ rather than a repo-root assets/ dir because Go's
+  // //go:embed can't reach outside its own module.
+  const palettesFile = new URL("../../tui/internal/theme/palettes.json", import.meta.url).pathname;
+  const servePalettes = (): Response =>
+    existsSync(palettesFile)
+      ? new Response(readFileSync(palettesFile), { headers: { "content-type": "application/json" } })
+      : json({ error: "not found" }, 404);
 
   const sse = (fromSeq: number): Response => {
     const enc = new TextEncoder();
@@ -81,7 +124,7 @@ export function startServer(
     });
   };
 
-  const server = Bun.serve({
+  const server = Bun.serve<TerminalSocketData>({
     port: opts.port ?? 0,
     hostname: "127.0.0.1",
     idleTimeout: 0, // SSE connections are long-lived
@@ -94,7 +137,9 @@ export function startServer(
       if (p === "/health") return json({ ok: true, name: "amux", running: engine.running });
       if (p === "/" || p === "/dashboard" || p === "/dashboard/") return serveFile("index.html");
       if (p.startsWith("/dashboard/")) return serveFile(p.slice("/dashboard/".length));
-      if (p === "/app.js" || p === "/style.css") return serveFile(p.slice(1));
+      if (p === "/app.js" || p === "/style.css" || p === "/theme.js" || p === "/avatar.js") return serveFile(p.slice(1));
+      if (p in VENDOR_FILES) return serveVendor(p);
+      if (p === "/palettes.json") return servePalettes();
       // The interactive graph page — public shell like the dashboard; its /graph and /events calls
       // carry the token via ?token=. (Distinct from the gated data route `/graph` below.)
       if (p === "/graph/view" || p === "/graph/view/") return serveFile("graph.html");
@@ -106,6 +151,15 @@ export function startServer(
       if (!tokensMatch(provided, token)) return json({ error: "unauthorized" }, 401);
 
       if (p === "/events" && method === "GET") return sse(Number(u.searchParams.get("from") ?? 0));
+
+      // A real shell in the browser, gated by the same token as every other route — same trust
+      // model as the rest of the dashboard, just a bigger blast radius if that token leaks (code
+      // execution instead of read access). server.upgrade() takes over the socket; the pty itself
+      // is spawned in the `open` handler below, once the WS connection actually exists.
+      if (p === "/terminal/ws" && method === "GET") {
+        if (server.upgrade(req, { data: {} })) return;
+        return json({ error: "expected a WebSocket upgrade" }, 400);
+      }
 
       if (p === "/session" && method === "POST") {
         engine.emitUsage();
@@ -120,7 +174,7 @@ export function startServer(
           lsp: engine.lsp?.list() ?? [],
           mcp: engine.mcp?.servers?.() ?? [],
           contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider)])),
-          theme: opts.theme ?? "", // `theme:` from agents.yaml — the TUI applies it at launch
+          theme: currentTheme, // `theme:` from agents.yaml, or whatever POST /theme last set
         });
       }
 
@@ -191,6 +245,15 @@ export function startServer(
         return json({ ok: true, note: "saved to .amux/agents.yaml — restart the session to apply" });
       }
 
+      if (p === "/theme" && method === "POST") {
+        const { theme } = (await req.json().catch(() => ({}))) as { theme?: string };
+        if (!theme) return json({ error: "expected theme" }, 400);
+        currentTheme = theme;
+        setTheme(theme);
+        engine.hub.publish({ kind: "theme", theme });
+        return json({ ok: true });
+      }
+
       if (p === "/providers" && method === "GET") {
         const cats: Category[] = ["byok", "local", "login"];
         const byCat = Object.fromEntries(
@@ -242,13 +305,78 @@ export function startServer(
         return json(await engine.mergeWorktree());
       }
 
+      if (p.startsWith("/agents/") && p.endsWith("/message") && method === "POST") {
+        const agentId = decodeURIComponent(p.slice("/agents/".length, -"/message".length));
+        const { text } = (await req.json().catch(() => ({}))) as { text?: string };
+        if (!text?.trim()) return json({ error: "empty message" }, 400);
+        const err = engine.messageAgent(agentId, text);
+        return err ? json({ error: err }, 409) : json({ ok: true });
+      }
+
       if (p === "/approval" && method === "POST") {
-        const { ok, scope } = (await req.json().catch(() => ({}))) as { ok?: boolean; scope?: "agent" | "path" };
-        engine.approvals.answer(Boolean(ok), scope);
+        const { ok, scope, edited } = (await req.json().catch(() => ({}))) as {
+          ok?: boolean;
+          scope?: "agent" | "path";
+          edited?: Record<string, unknown>;
+        };
+        engine.approvals.answer(Boolean(ok), scope, edited);
         return json({ ok: true });
       }
 
       return json({ error: `no route ${method} ${p}` }, 404);
+    },
+    websocket: {
+      // The pty is spawned here (not at upgrade time) so a rejected/dropped upgrade never leaks a
+      // process — one socket, one pty, for its whole lifetime.
+      //
+      // KNOWN BLOCKER (confirmed by direct testing, not theoretical): a node-pty child spawned in
+      // any process where Bun.serve() is running gets killed (SIGHUP, or exits immediately) within
+      // single-digit milliseconds — reproduces with zero WebSocket code involved (a bare fetch
+      // handler is enough), independent of shell, shell args, or env passed to spawn(). This code
+      // is therefore not yet functional end-to-end under Bun; the fix is architectural (run the pty
+      // in a separate helper process without Bun.serve in it, proxied over IPC) rather than a
+      // one-line patch here. Left in place because the WS protocol/route shape above is correct and
+      // reusable once that's done — do not spend time re-diagnosing this as a bug in this handler.
+      open(ws) {
+        const shell = process.env.SHELL || "/bin/bash";
+        const term = pty.spawn(shell, [], {
+          name: "xterm-256color",
+          cols: 80,
+          rows: 24,
+          cwd: engine.root,
+          env: process.env as Record<string, string>,
+        });
+        ws.data.pty = term;
+        term.onData((data) => {
+          try {
+            ws.send(data);
+          } catch {
+            /* socket already gone */
+          }
+        });
+        term.onExit(() => {
+          try {
+            ws.close();
+          } catch {
+            /* already closed */
+          }
+        });
+      },
+      message(ws, raw) {
+        const term = ws.data.pty;
+        if (!term) return;
+        let msg: { type?: string; data?: string; cols?: number; rows?: number };
+        try {
+          msg = JSON.parse(String(raw));
+        } catch {
+          return; // not our protocol — ignore rather than crash the socket over one bad frame
+        }
+        if (msg.type === "input" && typeof msg.data === "string") term.write(msg.data);
+        if (msg.type === "resize" && msg.cols && msg.rows) term.resize(msg.cols, msg.rows);
+      },
+      close(ws) {
+        ws.data.pty?.kill(); // the one thing that must not leak: the process behind a closed socket
+      },
     },
   });
 

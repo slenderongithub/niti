@@ -94,6 +94,15 @@ export function editDiff(before: string, oldString: string, newString: string): 
   return [`@@ line ${line} @@`, ...minus, ...plus].join("\n");
 }
 
+// Same crude format as editDiff, for the write_file approval prompt. before === null means the
+// file doesn't exist yet (all-plus); otherwise it's a whole-file replace (all-minus, all-plus) —
+// no LCS pass needed since nothing downstream does more than colorize +/- lines.
+export function writeFileDiff(before: string | null, content: string): string {
+  const minus = before === null ? [] : before.split("\n").map((l) => `-${l}`);
+  const plus = content.split("\n").map((l) => `+${l}`);
+  return [`@@ line 1 @@`, ...minus, ...plus].join("\n");
+}
+
 // Tool definitions exposed to the model, keyed by allowedTools name. (No additionalProperties —
 // Gemini's schema subset rejects it, and the others don't need it.)
 const SPECS: Record<string, ToolSpec> = {

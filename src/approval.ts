@@ -58,9 +58,13 @@ export class ApprovalQueue {
     return Date.now() - this.pending[0]!.queuedAt <= BATCH_WINDOW_MS ? this.pending : undefined;
   }
 
-  answer(ok: boolean, scope?: "agent" | "path"): void {
+  // `edited` overrides fields of the queued request's input (e.g. a diff-view in-place edit) —
+  // merged into the same object the agent loop is holding a reference to, so it picks up the
+  // change without any further plumbing back through the caller.
+  answer(ok: boolean, scope?: "agent" | "path", edited?: Record<string, unknown>): void {
     const req = this.pending.shift();
     if (!req) return;
+    if (ok && edited) Object.assign(req.input, edited);
     if (ok && scope === "agent") this.grant(req.agentId, req.tool);
     if (ok && scope === "path" && typeof req.input.path === "string") {
       const dir = req.input.path.split("/").slice(0, -1).join("/") || ".";

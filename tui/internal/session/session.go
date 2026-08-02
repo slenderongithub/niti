@@ -102,9 +102,11 @@ type Model struct {
 	commands  []api.Command // fetched from the server registry; drives dispatch and the footer hints
 	menu      ui.List       // slash-command suggestions shown over the prompt while typing "/…"
 	menuOpen  bool
-	car       carousel // the ctrl+p model switcher, when open
-	sett      settings // the /settings · /status · /config · /usage · /stats overlay, when open
-	out       output   // the pager a multi-line command result opens, when open
+	car       carousel    // the ctrl+p model switcher, when open
+	sett      settings    // the /settings · /status · /config · /usage · /stats overlay, when open
+	out       output      // the pager a multi-line command result opens, when open
+	diffv     diffview    // full-screen state for the diff-viewing approval (edit/write_file only)
+	tp        themePicker // the ctrl+t theme swatch picker, when open
 	view      string   // "panes" | "usage"
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
@@ -284,8 +286,16 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.car.open {
 		return m, m.carouselKey(k)
 	}
-	// Approval gate takes priority.
+	if m.tp.open {
+		return m, m.themePickerKey(k)
+	}
+	// Approval gate takes priority. A diff on the head of the queue gets the full-screen viewer
+	// (its own key handler, y/a/n plus scroll/edit/batch-preview); anything else (e.g. a bare shell
+	// call) keeps the one-line bar below.
 	if len(m.approvals) > 0 {
+		if _, ok := approvalDiff(m.approvals[0]); ok {
+			return m, m.diffViewKey(k)
+		}
 		var ok bool
 		var scope string
 		switch k.String() {
@@ -304,7 +314,7 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// wrong, now-shifted, one).
 		m.approvals = m.approvals[1:]
 		client := m.client
-		return m, func() tea.Msg { return actionResultMsg{action: "approval", err: client.Approve(ok, scope)} }
+		return m, func() tea.Msg { return actionResultMsg{action: "approval", err: client.Approve(ok, scope, nil)} }
 	}
 
 	// While the slash menu is up it owns the arrow keys, tab and enter — the same keys the rest of
@@ -348,7 +358,7 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = m.mode + " mode"
 		return m, nil
 	case "ctrl+t":
-		m.status = "theme: " + theme.Next()
+		m.openThemePicker()
 		return m, nil
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
@@ -393,10 +403,11 @@ func (m Model) menuItems() []ui.Item {
 		add(c.Name, c.Description)
 	}
 	add("graph", "Open the interactive graph in your browser")
+	add("dashboard", "Open the control-center dashboard in your browser")
 	add("settings", "Open the settings overlay (Status · Config · Usage · Stats)")
 	add("config", "Theme, mode and the team's model assignments")
 	add("stats", "Token stats: favorite model and per-model breakdown")
-	add("theme", "Switch the TUI theme: /theme <name>")
+	add("theme", "Open the theme picker (or /theme <name> to switch directly)")
 	add("quit", "Leave amux")
 	return items
 }
@@ -444,7 +455,9 @@ func (m *Model) submit(text string) tea.Cmd {
 	if name, args, _ := strings.Cut(strings.TrimPrefix(text, "/"), " "); strings.HasPrefix(text, "/") && name == "theme" {
 		switch {
 		case args == "":
-			m.status = "themes: " + strings.Join(theme.Names(), " ") + "  (now: " + theme.Current() + ")"
+			// Bare /theme opens the same swatch picker ctrl+t does — nobody should have to type a
+			// theme name from memory. `/theme <name>` (below) stays direct-apply for scripting.
+			m.openThemePicker()
 		case theme.Use(strings.TrimSpace(args)):
 			m.status = "theme: " + theme.Current()
 		default:
@@ -463,7 +476,7 @@ func (m *Model) submit(text string) tea.Cmd {
 		switch name {
 		case "help":
 			// Client-side, because only the client knows the whole set: the server registry plus the
-			// commands that can only happen here (/quit, /theme, /graph, the settings tabs).
+			// commands that can only happen here (/quit, /theme, /graph, /dashboard, the settings tabs).
 			m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
 			return nil
 		case "model":
@@ -479,6 +492,13 @@ func (m *Model) submit(text string) tea.Cmd {
 			target := m.client.BaseURL + "/graph/view?token=" + url.QueryEscape(m.client.Token)
 			m.status = "opened the graph in your browser"
 			return func() tea.Msg { return actionResultMsg{action: "open graph", err: openBrowser(target)} }
+		}
+		if name == "dashboard" {
+			// Same idea as /graph — the control-center dashboard (tasks/messages/usage, per-agent
+			// mid-task messaging) is a browser page, not something the terminal can render itself.
+			target := m.client.BaseURL + "/dashboard?token=" + url.QueryEscape(m.client.Token)
+			m.status = "opened the dashboard in your browser"
+			return func() tea.Msg { return actionResultMsg{action: "open dashboard", err: openBrowser(target)} }
 		}
 	}
 	if strings.HasPrefix(text, "/") {
