@@ -50,7 +50,7 @@ const MANUAL_CATALOG: Record<string, CatalogEntry> = {
     client: "gemini",
     envVar: "GEMINI_API_KEY",
     context: 1_000_000,
-    models: ["gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-pro"],
+    models: ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest"],
   },
   openrouter: {
     label: "OpenRouter",
