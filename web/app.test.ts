@@ -39,7 +39,7 @@ function load() {
   const exported = new Function(
     "window", "document", "location", "requestAnimationFrame", "fetch", "EventSource", "performance", "URLSearchParams",
     `${src}\nreturn { handle, onAgentEvent, ensureNode, nodes, renderApproval, answerApproval, onOrch,
-       openAgentPanel, sendAgentMessage,
+       openAgentPanel, sendAgentMessage, esc,
        getPending: () => pendingApprovals, getRunning: () => running, setPromptEnabled };`,
   )(win, doc, win.location, win.requestAnimationFrame, win.fetch, win.EventSource, performance, URLSearchParams);
   return { ...exported, elFor: el, calls };
@@ -158,4 +158,43 @@ test("a session starting disables the prompt bar; ending re-enables it", async (
   g.handle({ kind: "session", state: "ended" });
   expect(g.getRunning()).toBe(false);
   expect(g.elFor("prompt-send").disabled).toBe(false);
+});
+
+test("model-supplied task text cannot inject markup into the dashboard", async () => {
+  // This page's URL carries the bearer token, so an injected <script> reads it straight out of
+  // location.search. Task ids, statuses, roles and descriptions all originate from a model.
+  const g = load();
+  await settled();
+
+  expect(g.esc('<img src=x onerror=alert(1)>')).not.toContain("<");
+  expect(g.esc('" onmouseover="steal()')).not.toContain('"'); // attribute breakout
+  expect(g.esc("it's")).not.toContain("'");
+  expect(g.esc("plain text")).toBe("plain text");
+
+  g.onOrch({
+    type: "plan",
+    goal: "g",
+    tasks: [{ id: '<script>x</script>', description: '"><img onerror=alert(1)>', role: "r", dependsOn: ['<b>'] }],
+  });
+  const html = g.elFor("tab-tasks").innerHTML;
+  expect(html).not.toContain("<script>");
+  expect(html).not.toContain("<img");
+  expect(html).toContain("&lt;script&gt;");
+});
+
+test("a cancelled run reports real progress, and review/replan events are surfaced", async () => {
+  const g = load();
+  await settled();
+
+  // `complete` used to jump to 100% unconditionally — and my first cut of this referenced the
+  // wrong variable, which would have thrown instead. Both are pinned here.
+  g.onOrch({ type: "complete", completed: 1, total: 4 });
+  expect(g.elFor("bar").style.width).toBe("25%");
+
+  // Review and replan carry the reviewer, task and verdict; the dashboard used to drop them.
+  g.onOrch({ type: "review", reviewer: "qa", taskId: "t1", phase: "changes_requested" });
+  expect(g.nodes.has("qa")).toBe(true);
+  // "orchestrator" is a NON_AGENT_ID, so ensureNode returns null for it — this must not throw.
+  g.onOrch({ type: "replan", role: "orchestrator", taskId: "t1", action: "retry", reason: "too vague" });
+  g.onOrch({ type: "review", reviewer: "orchestrator", taskId: "t1", phase: "approved" });
 });

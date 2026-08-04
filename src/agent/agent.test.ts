@@ -200,7 +200,7 @@ test("busy stays true if run() and respond() overlap — one finishing must not 
   expect(agent.busy).toBe(false);
 });
 
-test("a denied gated tool is not executed and 'denied by user' is fed back", async () => {
+test("a denied gated tool is not executed and 'not approved' is fed back", async () => {
   const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
   let n = 0;
   const stub: Provider = {
@@ -238,7 +238,9 @@ test("write_file waits on a lock another agent holds, via a shared LockRegistry"
   const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
   const bus = new Bus();
   const locks = new LockRegistry(bus);
-  await locks.acquire("shared.txt", "other-agent"); // simulate another agent mid-write
+  // Lock keys are resolved absolute paths, so that two agents spelling the same file differently
+  // ("shared.txt" vs "./shared.txt") still contend for one lock.
+  await locks.acquire(join(root, "shared.txt"), "other-agent"); // simulate another agent mid-write
 
   let n = 0;
   const stub: Provider = {
@@ -257,9 +259,38 @@ test("write_file waits on a lock another agent holds, via a shared LockRegistry"
   expect(done).toBe(false); // still blocked behind other-agent's lock
   expect(existsSync(join(root, "shared.txt"))).toBe(false);
 
-  locks.release("shared.txt", "other-agent");
+  locks.release(join(root, "shared.txt"), "other-agent");
   await runP;
   expect(done).toBe(true);
+  expect(readFileSync(join(root, "shared.txt"), "utf8")).toBe("mine");
+});
+
+test("a differently-spelled path takes the same lock", async () => {
+  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const bus = new Bus();
+  const locks = new LockRegistry(bus);
+  await locks.acquire(join(root, "shared.txt"), "other-agent");
+
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      n++;
+      // './shared.txt' and 'a/../shared.txt' are the same file as 'shared.txt'; keying the lock on
+      // raw model output gave each spelling its own lock, i.e. no mutual exclusion at all.
+      if (n === 1) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "./shared.txt", content: "mine" } }] };
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, bus, { root, locks });
+
+  let done = false;
+  const runP = agent.run("write shared").then(() => (done = true));
+  await new Promise((r) => setTimeout(r, 30));
+  expect(done).toBe(false); // blocked, despite the different spelling
+  expect(existsSync(join(root, "shared.txt"))).toBe(false);
+
+  locks.release(join(root, "shared.txt"), "other-agent");
+  await runP;
   expect(readFileSync(join(root, "shared.txt"), "utf8")).toBe("mine");
 });
 
@@ -566,4 +597,55 @@ test("a disallowed tool surfaces an error and doesn't crash the loop", async () 
   expect(ok).toBe("done");
   expect(events).toContain("error");
   expect(events).toContain("done");
+});
+
+test("dangerous shell detection matches flag sets, not exact spellings", () => {
+  const d = (command: string, args: string[] = []) => isDangerousShellCall("shell", { command, args });
+
+  // The spellings the old substring list caught.
+  expect(d("rm", ["-rf", "/tmp/x"])).toBe(true);
+  expect(d("git", ["push", "--force"])).toBe(true);
+
+  // ...and the equivalents it missed, every one of which a model may prefer.
+  expect(d("rm", ["-fr", "/tmp/x"])).toBe(true);
+  expect(d("rm", ["-r", "-f", "/tmp/x"])).toBe(true);
+  expect(d("rm", ["--recursive", "--force", "/tmp/x"])).toBe(true);
+  expect(d("git", ["push", "-f"])).toBe(true);
+  expect(d("git", ["push", "--force-with-lease"])).toBe(true);
+  expect(d("git", ["clean", "-fd"])).toBe(true);
+  expect(d("find", [".", "-delete"])).toBe(true);
+  expect(d("/bin/sh", ["-c", "rm -rf /"])).toBe(true); // opaque payload, and an absolute path
+  expect(d("python3", ["-c", "import shutil"])).toBe(true);
+
+  // Ordinary commands must still run without a prompt, including harmless rm and push.
+  expect(d("rm", ["one.txt"])).toBe(false);
+  expect(d("rm", ["-r", "build"])).toBe(false); // recursive but not forced
+  expect(d("git", ["push"])).toBe(false);
+  expect(d("ls", ["-la"])).toBe(false);
+  expect(d("bash", ["script.sh"])).toBe(false); // running a file, not an inline payload
+});
+
+test("cancel stops an in-flight agent between turns instead of paying for the rest", async () => {
+  // /cancel used to stop only the scheduler from launching *new* tasks — an agent already running
+  // kept going for every remaining turn, each a billed call that could still write files.
+  let cancelled = false;
+  let calls = 0;
+  const stub: Provider = {
+    async send() {
+      calls++;
+      if (calls === 3) cancelled = true; // the user hits /cancel while this turn is in flight
+      return { text: "", toolCalls: [{ id: String(calls), name: "write_file", input: { path: `f${calls}.txt`, content: "x" } }] };
+    },
+  };
+  const root = mkdtempSync(join(tmpdir(), "amux-cancel-"));
+  const agent = new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), {
+    root,
+    approve: async () => true,
+    shouldStop: () => cancelled,
+  });
+
+  const result = await agent.run("keep going");
+
+  expect(result).toBe("failed");
+  expect(calls).toBe(3); // the turn after the cancel never made a model call (cap is 12)
 });

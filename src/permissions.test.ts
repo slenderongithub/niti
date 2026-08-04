@@ -59,3 +59,19 @@ test("parsePermissions rejects malformed blocks with a pointed message", () => {
   expect(() => parsePermissions({ shell: "allow" }, "f.yaml")).toThrow(/permissions.shell/);
   expect(() => parsePermissions({ shell: { "git *": "maybe" } }, "f.yaml")).toThrow(/allow, ask, deny/);
 });
+
+// A deny is worthless if the model can spell its way around it, and an allow is dangerous if the
+// model can climb out of it. Both directions resolve to the same file safePath would write to.
+test("path subjects are normalized, so ./x and a/../x cannot dodge a rule", () => {
+  const deny: PermissionRules = { write_file: { "secret*": "deny" } };
+  expect(resolve([deny], "write_file", { path: "secret.txt" })).toBe("deny");
+  expect(resolve([deny], "write_file", { path: "./secret.txt" })).toBe("deny");
+  expect(resolve([deny], "write_file", { path: "a/../secret.txt" })).toBe("deny");
+
+  // ...and the inverse: an allow scoped to src/** must not cover an escape out of src/.
+  const allow: PermissionRules = { write_file: { "src/**": "allow" } };
+  expect(resolve([allow], "write_file", { path: "src/api.ts" })).toBe("allow");
+  expect(resolve([allow], "write_file", { path: "src/../.amux/agents.yaml" })).not.toBe("allow");
+
+  expect(subject("write_file", { path: "./a/../b.txt" })).toBe("b.txt");
+});

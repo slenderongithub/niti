@@ -14,6 +14,7 @@ export interface McpTools {
   has(name: string): boolean;
   call(name: string, input: Record<string, unknown>): Promise<string>;
   servers?(): { name: string; tools: number }[]; // optional: display only, so test fakes needn't implement it
+  close?(): Promise<void>; // optional for the same reason; the shutdown path is what reaps stdio children
 }
 
 // Flatten MCP tool-result content blocks to a string for feeding back to the model.

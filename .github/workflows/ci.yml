@@ -1,0 +1,97 @@
+name: CI
+
+# Three toolchains and a hand-rolled test glob: drift is the default state without this. The
+# packaging job is the one that matters most — it is what would have caught a `bin` pointing at a
+# .ts file, a compiled binary that crashes on startup, and a clone with no `func main()` in it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      # --frozen-lockfile so a dependency that only exists in someone's stale node_modules fails
+      # here rather than in a contributor's first `bun test`.
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test src web
+
+  tui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: tui/go.sum
+      # `go build ./...` on a clean checkout is the check that fails if .gitignore ever swallows
+      # the main package again.
+      - run: go build ./...
+        working-directory: tui
+      - run: go vet ./...
+        working-directory: tui
+      - run: go test ./...
+        working-directory: tui
+
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: tui/go.sum
+      - run: bun install --frozen-lockfile
+
+      # The compiled core must start from a directory that is not the repo — the node-pty crash
+      # reproduced everywhere *except* where anyone thought to look.
+      - name: compiled core runs outside the checkout
+        run: |
+          bun build --compile ./src/cli.ts --outfile "$RUNNER_TEMP/amux-core"
+          cd "$RUNNER_TEMP"
+          ./amux-core --version
+          ./amux-core --help > /dev/null
+
+      # Pack the real artefacts, install the tarballs into a scratch project, and run the shims.
+      - name: npm pack → install → run
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform=$([ "$RUNNER_OS" = "macOS" ] && echo darwin-arm64 || echo linux-x64)
+          bun run build:release "$platform"
+          mkdir -p "$RUNNER_TEMP/install" && cd "$GITHUB_WORKSPACE"
+          npm pack --pack-destination "$RUNNER_TEMP/install"
+          (cd "npm/$platform" && npm pack --pack-destination "$RUNNER_TEMP/install")
+          cd "$RUNNER_TEMP/install"
+          npm init -y > /dev/null
+          npm install ./*.tgz
+          ./node_modules/.bin/amux-core --version
+
+      # The tarball must contain the launcher and nothing personal — no .amux/, no .claude/,
+      # no tests, no Go source.
+      - name: tarball contains only what it should
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=$(npm pack --dry-run --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].files.map(f=>f.path).join("\n")))')
+          echo "$files"
+          # -F: these are paths, not patterns. An unescaped "." here matches any character, so
+          # ".amux" happily matches "bin/amux.js" and the check fails on a correct tarball.
+          for bad in .amux/ .claude/ old-tech/ tui/ project_context.md bun.lock .test.ts; do
+            if grep -qF "$bad" <<< "$files"; then echo "::error::tarball contains $bad"; exit 1; fi
+          done
+          grep -qF "bin/amux.js" <<< "$files" || { echo "::error::tarball is missing the launcher"; exit 1; }

@@ -1,8 +1,22 @@
 import { test, expect } from "bun:test";
-import { schedule, detectCycle, type OrchestrationEvent } from "./scheduler.ts";
+import { schedule as realSchedule, detectCycle, type OrchestrationEvent } from "./scheduler.ts";
 import { MessageBus, type AgentMessage } from "../messaging/message-bus.ts";
 import type { TaskNode } from "./task.ts";
 import type { Agent } from "../agent/agent.ts";
+
+// The fakes in this file implement run(); the scheduler calls runDetailed(), which returns the
+// text belonging to that specific call rather than reading the agent's shared `output`. One
+// adapter here beats bolting the method onto every fake below.
+function detailed(a: any): any {
+  if (!a.runDetailed) {
+    a.runDetailed = async (prompt: string) => {
+      const outcome = await a.run(prompt);
+      return { outcome, text: a.output ?? "", error: outcome === "done" ? "" : (a.error ?? "") };
+    };
+  }
+  return a;
+}
+const schedule: typeof realSchedule = (tasks, agents, deps) => realSchedule(tasks, agents.map(detailed), deps);
 
 function node(p: Partial<TaskNode> & { id: string; role: string; description: string }): TaskNode {
   return { status: "pending", dependsOn: [], handoffTo: [], ...p };
@@ -18,6 +32,7 @@ function fakeAgent(id: string, role: string, order: string[], opts: FakeOpts = {
   const a: any = {
     config: { id, role },
     output: "",
+    error: "",
     async run(_prompt: string) {
       order.push(id);
       if (opts.active) {
@@ -364,4 +379,37 @@ test("a cancelled run skips the integrate pass (no extra unabortable model call)
   expect(asked).toBe(false);
   expect(events.find((e) => e.type === "integrate")).toBeUndefined();
   expect(events.find((e) => e.type === "complete")).toBeDefined();
+});
+
+test("the review gate fails closed: no explicit approval means the task is not accepted", async () => {
+  const order: string[] = [];
+  const fe = fakeAgent("fe", "FE", order, { output: "built it" });
+  (fe as any).config.reviewer = "qa";
+  // A reviewer whose text never contains a verdict — a clobbered, garbled or empty review. The old
+  // test was "not literally changes_requested", so this passed the gate and shipped broken work.
+  const qa: any = { config: { id: "qa", role: "QA" }, output: "some unrelated task output", async run() { return "done"; } };
+  const tasks = [node({ id: "t1", role: "fe", description: "build" })];
+  await schedule(tasks, [fe, qa]);
+  expect(tasks[0]!.status).toBe("failed");
+});
+
+test("an explicit approval passes the gate", async () => {
+  const order: string[] = [];
+  const fe = fakeAgent("fe", "FE", order, { output: "built it" });
+  (fe as any).config.reviewer = "qa";
+  const qa: any = { config: { id: "qa", role: "QA" }, output: "looks right\nVERDICT: approve", async run() { return "done"; } };
+  const tasks = [node({ id: "t1", role: "fe", description: "build" })];
+  await schedule(tasks, [fe, qa]);
+  expect(tasks[0]!.status).toBe("done");
+});
+
+test("an exhausted task fails over to a different agent, not the same one again", async () => {
+  const tried: string[] = [];
+  const a: any = { config: { id: "a", role: "A" }, output: "", async run() { tried.push("a"); return "exhausted"; } };
+  const b: any = { config: { id: "b", role: "B" }, output: "b did it", async run() { tried.push("b"); return "done"; } };
+  const tasks = [node({ id: "t1", role: "a", description: "x" })];
+  await schedule(tasks, [a, b]);
+  expect(tried).toEqual(["a", "b"]); // the idle teammate was actually tried
+  expect(tasks[0]!.status).toBe("done");
+  expect(tasks[0]!.assignedTo).toBe("b");
 });

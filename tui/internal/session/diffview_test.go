@@ -96,3 +96,23 @@ func TestDiffViewEditRoundTrip(t *testing.T) {
 		t.Error("approving must pop the answered request")
 	}
 }
+
+// `G` used to park the offset at 1<<30 (clamped only when rendering), so the next `up` decremented
+// from a billion and the view appeared frozen at the bottom forever.
+func TestDiffScrollEndThenUpMovesImmediately(t *testing.T) {
+	m := Model{height: 24}
+	m.approvals = []api.Approval{{
+		AgentID: "a", Tool: "edit",
+		Input: map[string]any{"path": "x.ts", "diff": strings.Repeat("line\n", 200)},
+	}}
+
+	m.diffViewKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	bottom := m.diffv.top
+	if bottom == 0 || bottom > 200 {
+		t.Fatalf("G should land on a real bottom offset, got %d", bottom)
+	}
+	m.diffViewKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.diffv.top != bottom-1 {
+		t.Fatalf("up after G must move one line, got %d (was %d)", m.diffv.top, bottom)
+	}
+}

@@ -33,7 +33,18 @@ export class Bus {
   }
 
   subscribe(fn: (e: AgentEvent) => void): () => void {
-    this.emitter.on("event", fn);
-    return () => this.emitter.off("event", fn);
+    // Wrapped, because EventEmitter.emit calls listeners synchronously and lets a throw propagate
+    // straight out of publish() — i.e. out of the agent loop that published it. One buggy renderer
+    // or a subscriber that touched a closed stream would abort the run and strand in-flight agents.
+    // A broken subscriber is the subscriber's problem, not the run's.
+    const guarded = (ev: AgentEvent) => {
+      try {
+        fn(ev);
+      } catch (err) {
+        console.error(`amux: event subscriber threw: ${err instanceof Error ? err.message : err}`);
+      }
+    };
+    this.emitter.on("event", guarded);
+    return () => this.emitter.off("event", guarded);
   }
 }

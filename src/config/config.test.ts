@@ -1,8 +1,8 @@
 import { test, expect } from "bun:test";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadAgents, loadOptions, loadInstructions, loadPermissions, loadMcpServers, saveAgents } from "./config.ts";
+import { loadAgents, loadOptions, loadInstructions, loadPermissions, loadMcpServers, saveAgents, setTheme, findProjectRoot } from "./config.ts";
 
 function writeYaml(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "amux-cfg-"));
@@ -157,4 +157,67 @@ agents:
   expect(loadOptions(path)).toMatchObject({ theme: "nord", maxTurns: 40 });
   expect(loadPermissions(path)).toEqual({ shell: { "git *": "allow" } });
   expect(loadMcpServers(path)).toEqual([{ name: "code-review", command: "crg", args: undefined }]);
+});
+
+test("findProjectRoot walks up to the directory holding .amux/, like git finds .git", () => {
+  const root = mkdtempSync(join(tmpdir(), "amux-root-"));
+  mkdirSync(join(root, ".amux"), { recursive: true });
+  const deep = join(root, "src", "server", "nested");
+  mkdirSync(deep, { recursive: true });
+
+  // Running from a subdirectory used to create a second, empty .amux/ there and start with zero
+  // agents while the real config sat above it.
+  expect(findProjectRoot(deep)).toBe(root);
+  expect(findProjectRoot(root)).toBe(root);
+});
+
+test("findProjectRoot falls back to the enclosing git repo, then to cwd", () => {
+  const repo = mkdtempSync(join(tmpdir(), "amux-git-"));
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  const sub = join(repo, "packages", "api");
+  mkdirSync(sub, { recursive: true });
+  expect(findProjectRoot(sub)).toBe(repo);
+
+  const bare = mkdtempSync(join(tmpdir(), "amux-bare-"));
+  expect(findProjectRoot(bare)).toBe(bare); // neither marker → stay put
+});
+
+test("saving config preserves comments and unrecognised keys", () => {
+  // The picker runs on every launch and the theme carousel writes on every keypress — so a
+  // parse→stringify round-trip meant a user who documented their roster lost every comment the
+  // first time they cycled a colour scheme. This is the file amux tells people to hand-edit.
+  const dir = mkdtempSync(join(tmpdir(), "amux-doc-"));
+  const path = join(dir, "agents.yaml");
+  writeFileSync(
+    path,
+    [
+      "# my team, do not delete",
+      "agents:",
+      "  - id: a",
+      "    provider: anthropic",
+      "    model: m",
+      "    role: A",
+      "    systemPrompt: s",
+      "",
+      "# keep the shell locked down",
+      "permissions:",
+      '  shell: { "rm -rf*": deny }',
+      "somethingAmuxDoesNotKnow: keepme",
+      "",
+    ].join("\n"),
+  );
+
+  saveAgents([{ id: "b", provider: "openai", model: "m2", role: "B", systemPrompt: "s2" }], path);
+  const after = readFileSync(path, "utf8");
+
+  expect(after).toContain("# my team, do not delete");
+  expect(after).toContain("# keep the shell locked down");
+  expect(after).toContain("somethingAmuxDoesNotKnow: keepme");
+  expect(loadAgents(path).map((a) => a.id)).toEqual(["b"]); // and the roster really was replaced
+  expect(loadPermissions(path)).toEqual({ shell: { "rm -rf*": "deny" } });
+
+  setTheme("neon graveyard", path);
+  const themed = readFileSync(path, "utf8");
+  expect(themed).toContain("# my team, do not delete"); // survives the carousel too
+  expect(loadOptions(themed.includes("theme") ? path : path).theme).toBe("neon graveyard");
 });

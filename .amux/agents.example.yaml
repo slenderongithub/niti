@@ -1,0 +1,50 @@
+# Copy to .amux/agents.yaml and edit, or just run `amux` (the team picker writes this file for you)
+# and `amux-core init` for the headless equivalent. Only `agents:` is required — everything below it
+# has a working default.
+
+agents:
+  - id: architect
+    provider: anthropic
+    model: claude-opus-4-8
+    role: Architect
+    lead: true # the lead plans the goal into a task DAG and integrates at the end
+    systemPrompt: You are a software architect. Decompose work into independent subtasks.
+    allowedTools: [read_file]
+
+  - id: engineer
+    provider: openai
+    model: gpt-4o
+    role: Backend Engineer
+    systemPrompt: You are a backend engineer. Implement the assigned task.
+    # `mcp` grants every configured MCP server's tools; list a single mcp__server__tool to
+    # narrow it. Without it, MCP tools are not offered to this agent at all.
+    allowedTools: [read_file, write_file, edit, shell, mcp]
+    reviewer: qa # qa must answer "VERDICT: approve" before this agent's tasks are accepted
+
+  - id: qa
+    provider: google
+    model: gemini-flash-latest
+    role: QA
+    systemPrompt: You review teammates' work against the acceptance criteria and say what is wrong.
+    allowedTools: [read_file, shell]
+
+# Project-wide tool policy. Most specific pattern wins; a tie goes to the stricter decision, and an
+# agent's own `permissions:` block overrides this one. Anything unmatched falls through to "ask".
+permissions:
+  shell: { "git *": allow, "git commit *": ask, "rm -rf*": deny }
+  write_file: { "src/**": allow, "*": ask }
+
+# theme: amux          # TUI palette at launch (ctrl+t opens the picker)
+# auto: false          # approve anything not explicitly denied — same as --auto
+# maxTurns: 12         # tool-loop cap per agent turn
+# maxAgents: 6         # ceiling on team size
+# worktree: false      # isolate each run's writes in a throwaway git worktree
+# instructions: [AGENTS.md]   # files appended to every agent's system prompt
+
+# lsp:                 # you install the servers; amux spawns them
+#   typescript: { command: typescript-language-server, args: [--stdio], extensions: [.ts, .tsx] }
+
+# mcpServers:          # external MCP tools, namespaced as mcp__<name>__<tool>
+#   - name: code-review
+#     command: code-review-graph
+#     args: [--stdio]

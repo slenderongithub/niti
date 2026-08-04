@@ -2,9 +2,8 @@ module github.com/amux/tui
 
 go 1.22
 
-// NOTE: this module was authored in an environment without a Go toolchain, so it has NOT been
-// compiled or `go mod tidy`'d. Versions below are the current stable Charm releases; run
-// `cd tui && go mod tidy && go build ./...` on a machine with Go >= 1.22 to resolve and verify.
+// Built, vetted and tested with Go 1.22+. `bun run build:tui` from the repo root is the usual
+// entry point; `cd tui && go build ./... && go vet ./... && go test ./...` is the same thing by hand.
 require (
 	github.com/charmbracelet/bubbles v0.20.0
 	github.com/charmbracelet/bubbletea v1.1.0

@@ -19,3 +19,13 @@ test("falls back to the plain message when it isn't nested JSON", () => {
 test("handles a non-Error thrown value without throwing itself", () => {
   expect(summarizeError("plain string")).toBe("plain string");
 });
+
+
+test("summarizeError redacts credentials before they reach the bus or the store", () => {
+  // Provider errors quote the offending request more often than you would like, and this text is
+  // published to every client and persisted to SQLite.
+  expect(summarizeError(new Error("401 bad key sk-abcdef0123456789abcdef"))).not.toContain("sk-abcdef0123456789");
+  expect(summarizeError(new Error("header Authorization: Bearer eyJhbGciOiJIUzI1NiJ9xxxx"))).toContain("[redacted]");
+  expect(summarizeError(new Error("api_key=AIzaSyA1234567890abcdefghijklmn bad"))).toContain("[redacted]");
+  expect(summarizeError(new Error("plain upstream failure"))).toBe("plain upstream failure");
+});

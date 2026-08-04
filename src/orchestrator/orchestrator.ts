@@ -14,7 +14,11 @@ export class Orchestrator {
 
   // Restore a saved task list (resume); continues id numbering past the highest existing id.
   load(tasks: Task[]): void {
-    this.tasks = [...tasks];
+    // The same array, not a copy. The scheduler appends replan-injected remediation tasks to the
+    // array it was handed; with a copy here those nodes existed only inside the scheduler, so they
+    // never reached orch.all — meaning they were never persisted to session.json, never resumable,
+    // and never drawn on the board while the user watched an agent work on them.
+    this.tasks = tasks;
     this.nextId = Math.max(0, ...tasks.map((t) => Number(t.id.replace(/\D/g, "")) || 0)) + 1;
   }
 

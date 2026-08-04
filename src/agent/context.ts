@@ -12,7 +12,12 @@ function describeTurn(t: Turn): string {
   return `Assistant: ${t.text}${calls}`;
 }
 
-export async function compactTurns(turns: Turn[], provider: Provider, keepRecent = KEEP_RECENT): Promise<Turn[]> {
+export async function compactTurns(
+  turns: Turn[],
+  provider: Provider,
+  keepRecent = KEEP_RECENT,
+  onUsage?: (u: { inputTokens: number; outputTokens: number }) => void,
+): Promise<Turn[]> {
   if (turns.length <= keepRecent) return turns;
   let cut = turns.length - keepRecent;
   // Never start the kept "recent" window on a tool-result turn: it references tool_call/tool_use
@@ -24,11 +29,15 @@ export async function compactTurns(turns: Turn[], provider: Provider, keepRecent
   const old = turns.slice(0, cut);
   const recent = turns.slice(cut);
   const transcript = old.map(describeTurn).join("\n");
-  const { text } = await provider.send(
+  // A second, fully billed model call. Its tokens went entirely unrecorded, so /usage and /cost
+  // understated real spend by exactly the amount compaction cost — and compaction fires on the
+  // longest, most expensive conversations. onUsage lets the caller book it against the agent.
+  const { text, usage } = await provider.send(
     "Summarize this conversation excerpt in 2-4 sentences: what was asked, what was done, what's still pending. Be concise.",
     [{ role: "user", text: transcript }],
     [],
   );
+  if (usage) onUsage?.(usage);
   const summaryTurn: Turn = { role: "user", text: `[Earlier conversation summary]\n${text}` };
   return [summaryTurn, ...recent];
 }

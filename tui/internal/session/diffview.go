@@ -105,19 +105,19 @@ func (m *Model) diffViewKey(k tea.KeyMsg) tea.Cmd {
 		m.diffv.top = max(m.diffv.top-1, 0)
 		return nil
 	case "down", "j":
-		m.diffv.top++
+		m.diffv.top = min(m.diffv.top+1, m.diffMaxTop())
 		return nil
 	case "pgup":
 		m.diffv.top = max(m.diffv.top-page, 0)
 		return nil
 	case "pgdown", " ":
-		m.diffv.top += page
+		m.diffv.top = min(m.diffv.top+page, m.diffMaxTop())
 		return nil
 	case "home", "g":
 		m.diffv.top = 0
 		return nil
 	case "end", "G":
-		m.diffv.top = 1 << 30 // clamped against the real line count at render time
+		m.diffv.top = m.diffMaxTop()
 		return nil
 	case "tab":
 		if len(m.approvals) > 1 {
@@ -175,6 +175,27 @@ func diffLineColor(l string) lipgloss.Color {
 	}
 }
 
+// The largest useful scroll offset for the current approval. diffView has a value receiver, so it
+// cannot stash this on the model — and storing a 1<<30 sentinel instead is what made `G` then `up`
+// dead: the decrement started from a billion. Both sides compute it from the same inputs.
+func (m Model) diffMaxTop() int {
+	if len(m.approvals) == 0 {
+		return 0
+	}
+	r := m.approvals[clamp(m.diffv.idx, 0, len(m.approvals)-1)]
+	var diffText string
+	if m.diffv.edited != nil {
+		diffText = crudeDiff(editSeed(r), stringField(m.diffv.edited, editedField(r.Tool)))
+	} else {
+		diffText, _ = approvalDiff(r)
+	}
+	if diffText == "" {
+		return 0
+	}
+	rows := max(max(m.height-2, 1)-2, 3)
+	return max(len(strings.Split(diffText, "\n"))-rows, 0)
+}
+
 func (m Model) diffView(w, h int) string {
 	bg := theme.BgDeep
 	if len(m.approvals) == 0 {
@@ -219,7 +240,7 @@ func (m Model) diffView(w, h int) string {
 		diffLines = strings.Split(diffText, "\n")
 	}
 	rows := max(inner-2, 3)
-	top := clamp(m.diffv.top, 0, max(len(diffLines)-rows, 0))
+	top := clamp(m.diffv.top, 0, m.diffMaxTop())
 	var body []string
 	for i := top; i < len(diffLines) && i < top+rows; i++ {
 		body = append(body, txt(diffLineColor(diffLines[i]), bg).Render(truncate(diffLines[i], iw)))

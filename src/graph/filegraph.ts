@@ -37,7 +37,11 @@ export function buildFileGraph(root: string, maxFiles = 400): FileGraph {
       }
     }
   }
-  const nodes = files.map((f) => ({ id: f, label: basename(f), group: f.split("/")[0] ?? "" }));
+  // go.mod is walked (findGoModule needs it to map an import path to a directory) but it is not a
+  // source file, so it must not appear as a node.
+  const nodes = files
+    .filter((f) => !f.endsWith("go.mod"))
+    .map((f) => ({ id: f, label: basename(f), group: f.split("/")[0] ?? "" }));
   return { nodes, edges };
 }
 
@@ -55,7 +59,10 @@ function walk(root: string, rel: string, out: string[], max: number): void {
     const child = rel ? `${rel}/${e.name}` : e.name;
     if (e.isDirectory()) {
       if (!IGNORE.has(e.name)) walk(root, child, out, max);
-    } else if (SRC_EXT.has(extname(e.name)) && !e.name.endsWith(".d.ts")) {
+    } else if (e.name === "go.mod" || (SRC_EXT.has(extname(e.name)) && !e.name.endsWith(".d.ts"))) {
+      // go.mod is collected but is not a graph node — findGoModule needs to see it to resolve
+      // a package import to a directory, and a *nested* module (tui/go.mod here) was never in the
+      // walk output at all, so every Go file rendered as an unconnected island.
       out.push(child);
     }
   }

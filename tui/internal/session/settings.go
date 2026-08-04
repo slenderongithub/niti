@@ -1,10 +1,12 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/amux/tui/internal/api"
@@ -385,7 +387,7 @@ func padTo(lines []string, n int) []string {
 // greeting is the time-of-day welcome: "Morning, Shubh!" and so on. The name is the git author, or
 // $USER, so it's personal without any config.
 func greeting() string {
-	name := userName
+	name := user()
 	switch h := time.Now().Hour(); {
 	case h < 5:
 		return "Late night, " + name + "!"
@@ -400,12 +402,27 @@ func greeting() string {
 	}
 }
 
-// userName is resolved once at startup: the git author's first name, else $USER, else a neutral
-// fallback. ponytail: computed at package load, not per-frame — it can't change mid-session.
-var userName = detectUser()
+// userName is resolved once, lazily: the git author's first name, else $USER, else a neutral
+// fallback. It used to be a package-level `var userName = detectUser()`, which shelled out to git
+// during package initialisation — before main() runs, before Bubbletea takes the screen, and
+// before there is any way to show a failure. A hung or slow `git` there delayed startup with a
+// blank terminal and no explanation; on a machine with no git on PATH it was pure wasted latency
+// on every launch. sync.Once keeps the "computed once" property without paying it up front.
+var (
+	userOnce sync.Once
+	userName string
+)
+
+func user() string {
+	userOnce.Do(func() { userName = detectUser() })
+	return userName
+}
 
 func detectUser() string {
-	if out, err := exec.Command("git", "config", "user.name").Output(); err == nil {
+	// Bounded: this is a nicety on a greeting line, not something worth stalling a session for.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "git", "config", "user.name").Output(); err == nil {
 		if f := strings.Fields(string(out)); len(f) > 0 {
 			return f[0]
 		}

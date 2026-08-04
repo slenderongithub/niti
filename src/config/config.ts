@@ -1,14 +1,40 @@
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { parse, stringify } from "yaml";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { parse, parseDocument, stringify } from "yaml";
 import type { AgentConfig } from "../agent/agent.ts";
 import type { McpServerConfig } from "../mcp/mcp.ts";
 import type { LspServerConfig } from "../lsp/registry.ts";
 import { parsePermissions, type PermissionRules } from "../permissions.ts";
 import { CATALOG, providerKeys } from "../providers/catalog.ts";
 
+// Find the project root the way git finds a repo: walk up for the first ancestor holding .amux/
+// (or, failing that, .git/). Every path in amux is cwd-relative, so running from a subdirectory
+// used to create a second, empty .amux/ there and start with zero agents — while the real config
+// sat one level up. Call this once at process start, before any loader runs.
+export function findProjectRoot(from = process.cwd()): string {
+  for (let dir = resolvePath(from); ; ) {
+    if (existsSync(join(dir, ".amux"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break; // hit the filesystem root
+    dir = parent;
+  }
+  // No .amux/ anywhere: fall back to the enclosing git repo, so `amux "task"` in a fresh checkout
+  // roots itself at the project rather than at whatever subdirectory you happened to be in.
+  for (let dir = resolvePath(from); ; ) {
+    if (existsSync(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return resolvePath(from); // not a repo either — cwd it is
+    dir = parent;
+  }
+}
+
 // Loads and validates .amux/agents.yaml. User-authored → validate required fields with clear errors.
 export function loadAgents(path = ".amux/agents.yaml"): AgentConfig[] {
+  // Explicit, so "missing" is distinguishable from "invalid" upstream. readFileSync's own ENOENT
+  // message names the path, but every validation error below names it too — and the CLI used to
+  // treat both as "no agents configured", telling users to re-run init and overwrite the config
+  // they were trying to fix.
+  if (!existsSync(path)) throw new Error(`ENOENT: no such file '${path}'`);
   const raw = parse(readFileSync(path, "utf8"));
   const agents = raw?.agents;
   if (!Array.isArray(agents) || agents.length === 0) {
@@ -107,10 +133,15 @@ export function loadMcpServers(path = ".amux/agents.yaml"): McpServerConfig[] {
 // scratch would silently delete the permissions/lsp/mcpServers blocks and every option next to
 // them — config the user hand-wrote and never asked to have touched.
 export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): void {
+  // The read path validated carefully and the write path validated nothing — yet the write path is
+  // the one facing untrusted input (POST /agents). One guard here covers all three writers: the
+  // HTTP route, the init wizard, and the TUI team picker.
+  agents.forEach((a, i) => validate(a, i, path));
   mkdirSync(dirname(path), { recursive: true });
-  const existing = existsSync(path) ? ((parse(readFileSync(path, "utf8")) ?? {}) as Record<string, unknown>) : {};
-  const doc = {
-    ...existing,
+  // Only the `agents:` key is replaced, and only through the Document API — so comments elsewhere
+  // in the file (and any top-level key amux does not know about) survive a picker relaunch.
+  const doc = existsSync(path) ? parseDocument(readFileSync(path, "utf8")) : parseDocument("{}");
+  const next = {
     agents: agents.map((a) => ({
       id: a.id,
       provider: a.provider,
@@ -125,7 +156,8 @@ export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): v
       ...(a.reviewer ? { reviewer: a.reviewer } : {}),
     })),
   };
-  writeFileSync(path, stringify(doc));
+  doc.set("agents", next.agents);
+  writeFileSync(path, doc.toString());
 }
 
 // Persist the active theme name back to .amux/agents.yaml (written by the TUI's theme carousel so
@@ -133,8 +165,12 @@ export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): v
 // read-merge-write shape as saveAgents — only the `theme` key is touched.
 export function setTheme(theme: string, path = ".amux/agents.yaml"): void {
   mkdirSync(dirname(path), { recursive: true });
-  const existing = existsSync(path) ? ((parse(readFileSync(path, "utf8")) ?? {}) as Record<string, unknown>) : {};
-  writeFileSync(path, stringify({ ...existing, theme }));
+  // parse→stringify round-trips *data*, discarding every comment in the file. This runs on every
+  // keypress of the theme carousel, so a user who documented their roster lost all of it the first
+  // time they cycled a colour scheme. The Document API edits in place and keeps the rest verbatim.
+  const doc = existsSync(path) ? parseDocument(readFileSync(path, "utf8")) : parseDocument("{}");
+  doc.set("theme", theme);
+  writeFileSync(path, doc.toString());
 }
 
 function validate(a: unknown, i: number, path: string): AgentConfig {

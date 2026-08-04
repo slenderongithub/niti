@@ -2,7 +2,6 @@ import { test, expect } from "bun:test";
 import { Orchestrator } from "./orchestrator.ts";
 import { Bus } from "../events/bus.ts";
 import { Agent, type AgentConfig } from "../agent/agent.ts";
-import { parseTaskList, runWorker } from "./runner.ts";
 import type { Provider } from "../providers/provider.ts";
 
 // Stub provider: small delay forces the two workers to interleave, no network, no tool calls.
@@ -18,12 +17,6 @@ function makeAgent(id: string, bus: Bus): Agent {
   return new Agent(cfg, stub, bus);
 }
 
-test("parseTaskList extracts a JSON string array, ignoring prose and non-strings", () => {
-  expect(parseTaskList('Sure! ["a","b"]')).toEqual(["a", "b"]);
-  expect(parseTaskList("no array here")).toEqual([]);
-  expect(parseTaskList('[1,"b",true,"c"]')).toEqual(["b", "c"]);
-});
-
 test("clear() drops all tasks but keeps id numbering moving forward", () => {
   const orch = new Orchestrator();
   orch.addTask("a");
@@ -34,21 +27,20 @@ test("clear() drops all tasks but keeps id numbering moving forward", () => {
   expect(t.id).toBe("t3"); // ids keep counting up, not reused
 });
 
-test("two agents drain the shared queue with no double-claims", async () => {
-  const bus = new Bus();
+test("claimTask hands one task to one agent, and requeue excludes the agent that failed it", () => {
+  // Orchestrator owns the shared board. This used to be covered only through runner.ts's `worker`,
+  // which nothing in production called — so the coverage certified a code path that never ran.
   const orch = new Orchestrator();
-  for (let i = 0; i < 6; i++) orch.addTask(`task ${i}`);
+  const t1 = orch.addTask("a");
+  orch.addTask("b");
 
-  const a = makeAgent("a", bus);
-  const b = makeAgent("b", bus);
-  await Promise.all([runWorker(a, orch, bus), runWorker(b, orch, bus)]);
+  const first = orch.claimTask("agent-1");
+  expect(first?.id).toBe(t1.id);
+  expect(orch.claimTask("agent-2")?.id).not.toBe(t1.id); // no double-claim
 
-  const tasks = orch.all;
-  expect(tasks.every((t) => t.status === "done")).toBe(true);
-  expect(tasks.every((t) => t.assignedTo === "a" || t.assignedTo === "b")).toBe(true);
-
-  // Both agents actually worked — proves concurrent draining, not one agent grabbing all.
-  const byA = tasks.filter((t) => t.assignedTo === "a").length;
-  expect(byA).toBeGreaterThan(0);
-  expect(byA).toBeLessThan(6);
+  orch.requeue(first!, "agent-1");
+  expect(orch.claimTask("agent-1")).toBeUndefined(); // the failing agent cannot grab it straight back
+  const t = orch.all.find((x) => x.id === t1.id)!;
+  expect(t.status).toBe("pending");
+  expect(t.attempts).toBe(1);
 });

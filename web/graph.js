@@ -56,6 +56,10 @@ async function loadProject() {
   setConn("loading…", "");
   try {
     const r = await fetch(`/graph?token=${encodeURIComponent(TOKEN)}`);
+    // 401 is not "failed to load" — it is a specific, fixable thing (the URL lost its token), and
+    // reporting it as a generic failure sends people looking at the server instead of the link.
+    if (r.status === 401) { setConn(TOKEN ? "unauthorized — check the ?token=" : "no token in this URL", "dead"); return; }
+    if (!r.ok) { setConn(`failed to load (${r.status})`, "dead"); return; }
     const g = await r.json();
     const ns = g.nodes.map((n) => ({ id: n.id, label: n.label.replace(/\.(ts|tsx|js|jsx|mjs|cjs|py|go)$/, ""), group: n.group }));
     const gi = new Map(); let gc = 0;
@@ -99,8 +103,9 @@ async function loadModels() {
   buildLegend(Object.entries(STATUS_FILL).map(([k, c]) => ({ label: k, color: c })), "agent status");
   if (es) es.close();
   es = new EventSource(`/events?from=0&token=${encodeURIComponent(TOKEN)}`);
-  es.onopen = () => setConn("live", "live");
-  es.onerror = () => setConn("reconnecting…", "dead");
+  let everOpened = false;
+  es.onopen = () => { everOpened = true; setConn("live", "live"); };
+  es.onerror = () => setConn(everOpened ? "reconnecting…" : TOKEN ? "unauthorized — check the ?token=" : "no token in this URL", "dead");
   es.onmessage = (ev) => { let e; try { e = JSON.parse(ev.data); } catch { return; } onEvent(e); };
 }
 function onEvent(e) {
@@ -661,7 +666,7 @@ function centerY() { const p = [...pointers.values()]; return (p[0].y + p[1].y) 
 const tip = q("tip");
 function showTip(i, x, y) {
   const n = nodes[i];
-  const sub = mode === "project" ? esc(n.id) : `${n.status || "idle"}${n.tokens ? " · " + n.tokens.toLocaleString() + " tok" : ""}${n.lead ? " · orchestrator" : ""}`;
+  const sub = mode === "project" ? esc(n.id) : `${esc(n.status || "idle")}${n.tokens ? " · " + n.tokens.toLocaleString() + " tok" : ""}${n.lead ? " · orchestrator" : ""}`;
   tip.innerHTML = `<div class="t">${esc(n.label)}</div><div class="s">${sub} · ${n.deg} link${n.deg === 1 ? "" : "s"}</div>`;
   tip.classList.add("show"); moveTip(x, y);
 }
@@ -719,10 +724,15 @@ window.addEventListener("keydown", (e) => {
 
 function buildLegend(items, title) {
   q("legend").innerHTML = `<div class="title">${esc(title)}</div>` +
-    items.slice(0, 14).map((it) => `<span class="k"><i style="background:${it.color}"></i>${esc(it.label)}</span>`).join("");
+    items.slice(0, 14).map((it) => `<span class="k"><i style="background:${esc(it.color)}"></i>${esc(it.label)}</span>`).join("");
 }
 function setConn(text, cls) { const c = q("conn"); c.textContent = text; c.className = cls; }
-function esc(s) { return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+// Quotes too: buildLegend interpolates a colour into a style="…" attribute, where escaping only
+// angle brackets still lets a crafted value close the attribute. Agent ids and task text reach
+// this page from the model, and the page's URL carries the token.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
 
 // ---------- boot ----------
 resize();

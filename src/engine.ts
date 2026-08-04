@@ -17,7 +17,7 @@ import { costOf } from "./providers/pricing.ts";
 import { watchProject, type ProjectWatcher } from "./watch.ts";
 import { TOOL_GUIDANCE } from "./tools/tools.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
-import { isGitRepo, createWorktree, diffStat, commitPending, mergeBack, removeWorktree, type WorktreeHandle } from "./orchestrator/worktree.ts";
+import { isGitRepo, createWorktree, diffStat, commitPending, mergeBack, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
 
 export interface EngineOptions {
   configs: AgentConfig[];
@@ -62,6 +62,8 @@ export class Engine {
 
   private makeProvider: (cfg: AgentConfig) => Provider;
   private byId = new Map<string, Agent>();
+  // agent id → the systemPrompt as written in agents.yaml, before any suffix was appended.
+  private declaredPrompts = new Map<string, string>();
   private busy = false;
   private cancelled = false;
   private watcher?: ProjectWatcher;
@@ -74,7 +76,9 @@ export class Engine {
     this.lsp = opts.lsp;
     this.mcp = opts.mcp;
     this.worktreeEnabled = opts.worktree ?? false;
-    this.locks = new LockRegistry(this.bus);
+    // A held lock is only reclaimable once its holder is actually finished — Agent.busy is the
+    // authority, and it is in this process. `undefined` (an id we don't know) counts as not alive.
+    this.locks = new LockRegistry(this.bus, undefined, (holder) => this.byId.get(holder)?.busy ?? false);
     if (opts.watch) {
       this.watcher = watchProject(this.root, (path) =>
         this.bus.publish({ agentId: "system", type: "external_change", payload: path, time: Date.now() }),
@@ -112,10 +116,25 @@ export class Engine {
     const permissionLayers = [...(opts.permissions ? [opts.permissions] : []), ...(opts.auto ? [AUTO_RULES] : [])];
 
     for (const c of opts.configs) {
+      this.declaredPrompts.set(c.id, c.systemPrompt);
       const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + TOOL_GUIDANCE };
       const agent = new Agent(cfg, this.makeProvider(cfg), this.bus, {
         root: this.root,
-        approve: opts.interactive ? (tool, input, forceAsk) => this.approvals.request(c.id, tool, input, forceAsk) : undefined,
+        // Headless has no TTY to prompt on, but `approve: undefined` skipped the guard entirely —
+        // so a scripted run was *more* permissive than --auto, with no flag typed. Now it answers
+        // the queue non-interactively: --auto means yes, anything else means no.
+        approve: opts.interactive
+          ? (tool, input, forceAsk) => this.approvals.request(c.id, tool, input, forceAsk)
+          : async (tool) => {
+              if (opts.auto) return true;
+              this.bus.publish({
+                agentId: c.id,
+                type: "error",
+                payload: `${tool} needs approval, and there's no one to ask — re-run with --auto, or pre-grant it via autoApprove/permissions in agents.yaml`,
+                time: Date.now(),
+              });
+              return false;
+            },
         mcp: opts.mcp,
         usageTracker: this.usage,
         locks: this.locks,
@@ -125,6 +144,7 @@ export class Engine {
         lsp: opts.lsp,
         onWrite: (path) => this.watcher?.markSelfWrite(path),
         maxTurns: opts.maxTurns,
+        shouldStop: () => this.cancelled,
       });
       this.agents.push(agent);
       this.byId.set(c.id, agent);
@@ -141,8 +161,15 @@ export class Engine {
     this.approvals.onChange(() => this.hub.publish({ kind: "approval_request", requests: this.pendingApprovals() }));
   }
 
+  // The *declared* prompt, not the augmented one. Agents run with systemPrompt + skills text +
+  // TOOL_GUIDANCE appended; exposing that over GET /agents meant the dashboard round-tripped it
+  // back through POST /agents into agents.yaml, and the next boot appended the suffix again — the
+  // stored prompt grew by the whole guidance block on every save.
   get configs(): readonly AgentConfig[] {
-    return this.agents.map((a) => a.config);
+    return this.agents.map((a) => {
+      const declared = this.declaredPrompts.get(a.config.id);
+      return declared === undefined ? a.config : { ...a.config, systemPrompt: declared };
+    });
   }
 
   get running(): boolean {
@@ -171,7 +198,11 @@ export class Engine {
     await this.runSession("(resumed session)", (deps) =>
       resumeProject(this.agents, this.orch, this.bus, {
         ...deps,
-        priorTurns: store ? (taskId) => resumeConversation(store, taskId) : undefined,
+        // Scoped to the agent that owns the task, so a failed-over task never replays another
+        // agent's transcript as its own history.
+        priorTurns: store
+          ? (taskId) => resumeConversation(store, taskId, this.orch.all.find((t) => t.id === taskId)?.assignedTo)
+          : undefined,
       }),
     );
   }
@@ -212,6 +243,22 @@ export class Engine {
     }
   }
 
+  // POST /worktree/discard — the escape hatch the "merge or discard it first" error promised but
+  // never had. Without it a merge conflict wedged the engine permanently: worktreeHandle stayed
+  // set, so every later worktree-mode run refused to start and there was no way to clear it.
+  async discardWorktree(): Promise<{ ok: boolean; message: string }> {
+    const handle = this.worktreeHandle;
+    if (!handle) return { ok: false, message: "no pending worktree" };
+    try {
+      await discardWorktree(this.root, handle);
+    } catch (err) {
+      return { ok: false, message: `could not discard: ${err instanceof Error ? err.message : err}` };
+    }
+    this.worktreeHandle = undefined;
+    this.bus.publish({ agentId: "orchestrator", type: "warning", payload: `discarded worktree ${handle.branch}`, time: Date.now() });
+    return { ok: true, message: `discarded ${handle.branch} — its changes are gone` };
+  }
+
   // Status for GET /worktree — undefined when no run is currently isolated.
   async worktreeStatus(): Promise<{ path: string; branch: string; diffStat: string } | undefined> {
     if (!this.worktreeHandle) return undefined;
@@ -228,12 +275,24 @@ export class Engine {
     if (result.ok) {
       await removeWorktree(this.root, this.worktreeHandle.path);
       this.worktreeHandle = undefined;
+      return result;
     }
-    return result;
+    // A failed merge left the user's repo sitting mid-merge with conflict markers in their files,
+    // which they then had to discover and unpick by hand. Put the tree back and tell them the two
+    // ways forward.
+    await abortMerge(this.root);
+    return {
+      ok: false,
+      message: `${result.message}\n\nYour working tree was restored. Resolve it on branch ${this.worktreeHandle.branch}, or POST /worktree/discard to throw the run away.`,
+    };
   }
 
   cancel(): void {
     this.cancelled = true;
+    // An agent parked on an approval is not "in flight" in any useful sense — it is waiting on a
+    // human who has just said stop. Without this the promise never settles: the agent never
+    // returns, `busy` stays true, and no further submit() is ever possible.
+    this.approvals.denyAll();
   }
 
   // Revert the most recent file write an agent made (LIFO, one write per call). Returns a

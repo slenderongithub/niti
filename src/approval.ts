@@ -3,6 +3,8 @@
 // Approving with scope "agent" grants that (agentId, tool) pair for the rest of the session;
 // scope "path" additionally narrows the grant to the request's parent directory. A dangerous
 // call marks itself forceAsk, which always queues regardless of any standing grant.
+import { normalize } from "node:path";
+
 export interface ApprovalRequest {
   agentId: string;
   tool: string;
@@ -35,7 +37,9 @@ export class ApprovalQueue {
       if (s.agentId !== agentId && s.agentId !== "*") return false;
       if (s.tool !== tool && s.tool !== "*") return false;
       if (!s.pathPattern) return true;
-      return typeof input.path === "string" && new Bun.Glob(s.pathPattern).match(input.path);
+      // normalize for the same reason as permissions.subject: a standing grant on src/** must not
+      // be satisfied by src/../.amux/agents.yaml.
+      return typeof input.path === "string" && new Bun.Glob(s.pathPattern).match(normalize(input.path));
     });
   }
 
@@ -67,8 +71,11 @@ export class ApprovalQueue {
     if (ok && edited) Object.assign(req.input, edited);
     if (ok && scope === "agent") this.grant(req.agentId, req.tool);
     if (ok && scope === "path" && typeof req.input.path === "string") {
-      const dir = req.input.path.split("/").slice(0, -1).join("/") || ".";
-      this.grant(req.agentId, req.tool, `${dir}/**`);
+      const dir = normalize(req.input.path).split("/").slice(0, -1).join("/");
+      // A file at the project root has no directory part. Granting "./**" there matched nothing —
+      // Bun.Glob compares it against a bare "README.md" — so "always allow in this directory"
+      // silently did nothing and the user was re-prompted for every root-level file.
+      this.grant(req.agentId, req.tool, dir ? `${dir}/**` : "*");
     }
     req.resolve(ok);
     this.notify();

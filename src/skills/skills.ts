@@ -17,14 +17,21 @@ export function loadSkills(dir = ".amux/skills"): Skill[] {
     if (!entry.isDirectory()) continue;
     const path = join(dir, entry.name, "SKILL.md");
     if (!existsSync(path)) continue;
-    const raw = readFileSync(path, "utf8");
-    const m = raw.match(/^---\n([\s\S]*?)\n---/);
-    const fm = (m ? (parse(m[1]!) ?? {}) : {}) as Record<string, unknown>;
-    skills.push({
-      name: typeof fm.name === "string" ? fm.name : entry.name,
-      description: typeof fm.description === "string" ? fm.description : "",
-      path,
-    });
+    // Same posture as .amux/commands/*.md: one hand-edited file with a stray `[` must cost you
+    // that skill, not the whole engine. parse() throws on malformed YAML and this runs during
+    // startup, so it used to surface as a bare YAMLParseError with no filename.
+    try {
+      const raw = readFileSync(path, "utf8");
+      const m = raw.match(/^---\n([\s\S]*?)\n---/);
+      const fm = (m ? (parse(m[1]!) ?? {}) : {}) as Record<string, unknown>;
+      skills.push({
+        name: typeof fm.name === "string" ? fm.name : entry.name,
+        description: typeof fm.description === "string" ? fm.description : "",
+        path,
+      });
+    } catch (err) {
+      console.error(`amux: skipping ${path}: ${err instanceof Error ? err.message : err}`);
+    }
   }
   return skills;
 }

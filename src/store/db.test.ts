@@ -138,7 +138,7 @@ test("listCheckpoints previews pending writes, most recent first, without consum
   expect(s.listCheckpoints(id)).toHaveLength(2); // read-only: nothing consumed
 });
 
-test("resumeConversation flattens every session for a task, oldest first", () => {
+test("resumeConversation seeds only the latest session, and only the resuming agent's own", () => {
   const s = store();
   const first = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m", taskId: "t1" });
   s.appendMessage(first, "user", toParts({ role: "user", text: "first run" }));
@@ -146,11 +146,18 @@ test("resumeConversation flattens every session for a task, oldest first", () =>
   s.appendMessage(second, "user", toParts({ role: "user", text: "second run" }));
   s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m", taskId: "other" });
 
-  expect(resumeConversation(s, "t1")).toEqual([
-    { role: "user", text: "first run" },
-    { role: "user", text: "second run" },
-  ]);
+  // Concatenating every attempt is how a resume overflows the window before doing any work.
+  expect(resumeConversation(s, "t1")).toEqual([{ role: "user", text: "second run" }]);
   expect(resumeConversation(s, "nope")).toEqual([]);
+
+  // A failed-over task has sessions from more than one agent; replaying another agent's transcript
+  // hands one model a first-person account of work it never did.
+  const other = s.createSession({ agentId: "b", kind: "task", provider: "p", model: "m", taskId: "t2" });
+  s.appendMessage(other, "user", toParts({ role: "user", text: "b's attempt" }));
+  const mine = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m", taskId: "t2" });
+  s.appendMessage(mine, "user", toParts({ role: "user", text: "a's attempt" }));
+  expect(resumeConversation(s, "t2", "a")).toEqual([{ role: "user", text: "a's attempt" }]);
+  expect(resumeConversation(s, "t2", "b")).toEqual([{ role: "user", text: "b's attempt" }]);
 });
 
 test("stats aggregates tokens by day and by model, and counts sessions", () => {
@@ -171,4 +178,40 @@ test("stats aggregates tokens by day and by model, and counts sessions", () => {
   // All messages land on the same (local) day here, so one perDay bucket holds every token.
   const total = st.perDay.reduce((n, d) => n + d.tokens, 0);
   expect(total).toBe(1450);
+});
+
+test("a full persistence round-trip: turn in, turn out, checkpoint, undo", () => {
+  // session-store.ts is what makes resume and /undo work, and it had no round-trip test of its own
+  // — only the narrower queries above. This is the path a real session actually walks.
+  const dir = mkdtempSync(join(tmpdir(), "amux-roundtrip-"));
+  const file = join(dir, "app.ts");
+  writeFileSync(file, "original\n");
+
+  const s = store();
+  const id = s.createSession({ agentId: "a", kind: "task", provider: "anthropic", model: "m", taskId: "t1" });
+  s.appendMessage(id, "user", toParts({ role: "user", text: "change it" }));
+  s.appendMessage(id, "assistant", toParts({ role: "assistant", text: "on it", toolCalls: [{ id: "c1", name: "write_file", input: { path: "app.ts" } }] }));
+  s.appendMessage(id, "tool", toParts({ role: "tool", results: [{ id: "c1", name: "write_file", output: "wrote app.ts" }] }));
+
+  // Turns come back in order, with the tool call and its result intact — this is what a resumed
+  // agent is seeded with, so a lossy round-trip means a resumed agent forgets what it just did.
+  const turns = s.loadTurns(id);
+  expect(turns).toHaveLength(3);
+  expect(turns[1]).toMatchObject({ role: "assistant", text: "on it" });
+  expect(turns[2]).toMatchObject({ role: "tool" });
+
+  // Checkpoint the prior contents, overwrite, then undo back to it.
+  s.checkpoint(id, file, "original\n");
+  writeFileSync(file, "agent's version\n");
+  const undone = s.undoLast(id);
+  expect(undone).toEqual({ path: file, action: "restored" });
+  expect(readFileSync(file, "utf8")).toBe("original\n");
+
+  // A file that did not exist before is deleted rather than restored, and undo is LIFO-exhaustible.
+  const fresh = join(dir, "new.ts");
+  writeFileSync(fresh, "created by the agent\n");
+  s.checkpoint(id, fresh, null);
+  expect(s.undoLast(id)).toEqual({ path: fresh, action: "deleted" });
+  expect(existsSync(fresh)).toBe(false);
+  expect(s.undoLast(id)).toBeUndefined(); // nothing left to undo
 });

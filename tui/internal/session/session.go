@@ -18,6 +18,7 @@ import (
 )
 
 type eventMsg api.Event
+type eventsMsg []api.Event // a coalesced batch — see waitFor
 type errMsg struct{ err error }
 
 // commandsMsg delivers the server-side slash-command registry once it has been fetched.
@@ -53,7 +54,11 @@ type agentState struct {
 	avatar   string
 }
 
-const agentLogMax = 60 // per-agent scrollback; only the tail is ever rendered
+// Per-agent scrollback. Only the tail is rendered in the pane, but /transcript pages through all
+// of it — at 60 lines an agent's output was genuinely unrecoverable once it scrolled, which for a
+// tool whose entire product is agent output is the wrong trade. 600 lines × 6 agents is a few
+// hundred KB.
+const agentLogMax = 600
 
 func (s *agentState) push(line string) {
 	if line = strings.TrimRight(line, " \t\r"); line == "" {
@@ -120,9 +125,16 @@ type Model struct {
 	width     int
 	height    int
 	status    string
-	quitArm   time.Time // when ctrl+c was last pressed — a second press inside quitGrace leaves
-	quitting  bool
+	// True between a "lost"/"dead" connection event and a "restored" one. The header shows it,
+	// because a frozen-but-normal-looking frame is the worst way to learn the core is gone.
+	disconnected bool
+	quitArm      time.Time // when ctrl+c was last pressed — a second press inside quitGrace leaves
+	quitting     bool
 }
+
+// Long enough that pasting a file or a stack trace is not silently clipped; still bounded, since
+// the prompt is a single-line widget and the core caps the task text anyway.
+const promptCharLimit = 100_000
 
 // Quitting takes two keystrokes (or /quit) on purpose: this window holds a live session, and a
 // stray ctrl+c aimed at cancelling a runaway agent used to take the whole thing down with it.
@@ -134,7 +146,10 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	ti.Placeholder = "describe the project…"
 	ti.Prompt = ""
 	ti.Focus()
-	ti.CharLimit = 4000
+	// A pasted spec or stack trace is routinely longer than a few thousand characters, and the old
+	// 4000 cap silently dropped the tail — the user sent a prompt they never saw. Raised, and
+	// onKey reports it when the cap is actually reached.
+	ti.CharLimit = promptCharLimit
 	m := Model{
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected",
@@ -182,13 +197,32 @@ func fetchStats(client *api.Client) tea.Cmd {
 	}
 }
 
+// Coalesced on purpose. Every streamed token arrives as its own event, and one event per Update
+// meant one full-frame repaint per token — the whole screen rebuilt, and the garbage that comes
+// with it, at whatever rate the model emits. Take one blocking, then drain whatever else is
+// already queued and apply the batch in a single Update, so repaints track the terminal rather
+// than the token stream.
+const maxCoalesced = 64
+
 func waitFor(ch <-chan api.Event) tea.Cmd {
 	return func() tea.Msg {
 		e, ok := <-ch
 		if !ok {
 			return errMsg{fmt.Errorf("event stream closed")}
 		}
-		return eventMsg(e)
+		batch := []api.Event{e}
+		for len(batch) < maxCoalesced {
+			select {
+			case next, ok := <-ch:
+				if !ok {
+					return eventsMsg(batch) // stream closed; deliver what we have, the next wait reports it
+				}
+				batch = append(batch, next)
+			default:
+				return eventsMsg(batch) // nothing else queued right now
+			}
+		}
+		return eventsMsg(batch)
 	}
 }
 
@@ -257,6 +291,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case eventMsg:
 		m.apply(api.Event(msg))
 		return m, waitFor(m.events) // keep listening
+	case eventsMsg:
+		for _, e := range msg {
+			m.apply(e)
+		}
+		return m, waitFor(m.events) // one View for the whole batch
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -368,6 +407,11 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
+	// Silent truncation is the worst outcome: the user sends a prompt missing its tail and never
+	// learns why. Saying so costs one comparison.
+	if len(m.input.Value()) >= promptCharLimit {
+		m.status = fmt.Sprintf("input reached the %d-character limit — the rest was dropped", promptCharLimit)
+	}
 	m.refreshMenu()
 	return m, cmd
 }
@@ -402,6 +446,7 @@ func (m Model) menuItems() []ui.Item {
 	for _, c := range m.commands {
 		add(c.Name, c.Description)
 	}
+	add("transcript", "Page through an agent's full output: /transcript [agentId]")
 	add("graph", "Open the interactive graph in your browser")
 	add("dashboard", "Open the control-center dashboard in your browser")
 	add("settings", "Open the settings overlay (Status · Config · Usage · Stats)")
@@ -486,6 +531,30 @@ func (m *Model) submit(text string) tea.Cmd {
 				return m.openCarousel()
 			}
 		}
+		if name == "transcript" {
+			// The panes show only the tail. This is the read-past-it path: the pager already
+			// scrolls, has search-free navigation keys, and is the same widget /help uses.
+			id := strings.TrimSpace(args)
+			if id == "" && len(m.order) > 0 {
+				id = m.order[0]
+			}
+			st := m.agents[id]
+			if st == nil {
+				m.status = "unknown agent: " + id + " — try /transcript <agentId>"
+				return nil
+			}
+			lines := append([]string{}, st.log...)
+			if st.pending != "" {
+				lines = append(lines, st.pending)
+			}
+			if len(lines) == 0 {
+				m.status = id + " hasn't said anything yet"
+				return nil
+			}
+			m.out = output{open: true, title: id + " transcript", lines: lines}
+			m.out.top = m.outputMaxTop() // open at the end, where the newest output is
+			return nil
+		}
 		if name == "graph" {
 			// The interactive graph lives in the browser — the terminal can't do drag/hover/zoom. Open
 			// the core's own /graph/view page, passing the token the same way the web dashboard does.
@@ -525,6 +594,20 @@ func (m *Model) submit(text string) tea.Cmd {
 
 func (m *Model) apply(e api.Event) {
 	switch e.Kind {
+	// Synthesized client-side by streamWithReconnect — the core never sends these. Without them a
+	// dead core looked exactly like an idle one: agents "working", progress frozen, status stale.
+	case "connection":
+		switch e.State {
+		case "lost":
+			m.disconnected = true
+			m.status = "lost the core — reconnecting…"
+		case "restored":
+			m.disconnected = false
+			m.status = "reconnected"
+		case "dead":
+			m.disconnected = true
+			m.status = "the core exited — see .amux/core.log; restart amux"
+		}
 	case "session":
 		if e.State == "started" {
 			m.goal = e.Goal
@@ -651,10 +734,38 @@ func (m *Model) applyOrch(oe api.OrchestrationEvent) {
 		}
 	case "handoff":
 		m.pushFeed(fmt.Sprintf("%s hands off %s → %s", oe.From, oe.TaskID, strings.Join(oe.To, ", ")))
+	case "review":
+		// A review gate that silently rejects work is indistinguishable from a task that just
+		// failed — these events carried the reviewer, the task and the verdict all along.
+		switch oe.Phase {
+		case "requested":
+			m.pushFeed(fmt.Sprintf("%s reviews %s", oe.Reviewer, oe.TaskID))
+		case "approved":
+			m.pushFeed(fmt.Sprintf("%s approved %s", oe.Reviewer, oe.TaskID))
+		default:
+			m.pushFeed(fmt.Sprintf("%s requested changes on %s", oe.Reviewer, oe.TaskID))
+		}
+	case "replan":
+		line := fmt.Sprintf("orchestrator replans %s: %s", oe.TaskID, oe.Action)
+		if oe.Reason != "" {
+			line += " — " + truncate(oe.Reason, 40)
+		}
+		m.pushFeed(line)
 	case "integrate":
 		m.pushFeed("orchestrator: " + truncate(oe.Summary, 60))
 	case "complete":
-		m.progress = 100
+		// Report what actually finished. Jumping to 100% on a cancelled or half-failed run told the
+		// user the work was done when some of it never ran.
+		if oe.Total > 0 {
+			m.progress = oe.Completed * 100 / oe.Total
+		} else {
+			m.progress = 100
+		}
+		if oe.Cancelled {
+			m.status = fmt.Sprintf("cancelled — %d/%d tasks done", oe.Completed, oe.Total)
+		} else if oe.Completed < oe.Total {
+			m.status = fmt.Sprintf("finished with %d of %d tasks done", oe.Completed, oe.Total)
+		}
 	}
 }
 
@@ -692,17 +803,18 @@ func (m *Model) pushFeed(line string) {
 // margins, which can go non-positive). Clamp instead of panicking on a negative slice bound.
 // Counts runes, not bytes: the UI is full of multibyte glyphs (avatars, box drawing, ─kind→ edges)
 // and a byte-wise cut would both under-fill the line and split a rune into mojibake.
+// n is a budget in *display cells*, not runes: a CJK glyph or an emoji occupies two, so counting
+// runes handed wide text twice its allowance and overflowed every pane that used this.
 func truncate(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	if n <= 0 {
 		return ""
 	}
-	r := []rune(s)
-	if len(r) <= n {
+	if lipgloss.Width(s) <= n {
 		return s
 	}
 	if n == 1 {
 		return "…"
 	}
-	return string(r[:n-1]) + "…"
+	return ui.Truncate(s, n-1) + "…"
 }

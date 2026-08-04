@@ -95,9 +95,16 @@ type OrchestrationEvent struct {
 	Ok        bool       `json:"ok"`
 	Completed int        `json:"completed"`
 	Total     int        `json:"total"`
+	Cancelled bool       `json:"cancelled"`
 	From      string     `json:"from"`
 	To        []string   `json:"to"`
 	Summary   string     `json:"summary"`
+	// review / replan. The core has always emitted these; nothing decoded them, so the two most
+	// interesting things the orchestrator does were invisible in the TUI.
+	Reviewer string `json:"reviewer"`
+	Phase    string `json:"phase"`
+	Action   string `json:"action"`
+	Reason   string `json:"reason"`
 }
 
 type Usage struct {
