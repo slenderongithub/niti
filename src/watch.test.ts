@@ -6,7 +6,9 @@ import { watchProject, isIgnored } from "./watch.ts";
 
 // fs.watch delivers asynchronously and coalesces; poll for the expectation instead of sleeping
 // a fixed amount and hoping.
-async function until(pred: () => boolean, ms = 2000): Promise<boolean> {
+// Comfortably longer than watch.ts's SELF_WRITE_TTL_MS (2s): a poll budget equal to the window
+// it races is how this suite went red on CI and stayed green locally.
+async function until(pred: () => boolean, ms = 5000): Promise<boolean> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (pred()) return true;
@@ -44,11 +46,20 @@ test("an agent's own write is not reported back as an external change", async ()
   const seen: string[] = [];
   const w = watchProject(root, (p) => seen.push(p));
 
+  // Establish that the watcher is live and delivering *before* testing suppression. Writing both
+  // files back to back instead made this depend on two rapid writes producing two distinct fs
+  // events — Linux coalesces them, so the only event was the suppressed one and the test hung
+  // waiting for a second that was never coming.
+  writeFileSync(join(root, "theirs.txt"), "a human wrote this");
+  expect(await until(() => seen.includes("theirs.txt"))).toBe(true);
+
   w.markSelfWrite("mine.txt");
   writeFileSync(join(root, "mine.txt"), "agent wrote this");
-  writeFileSync(join(root, "theirs.txt"), "a human wrote this");
-
-  expect(await until(() => seen.includes("theirs.txt"))).toBe(true);
+  // Give the notification a chance to arrive and be suppressed. A pass here means either it was
+  // filtered or it hasn't landed yet; the following write proves the watcher is still delivering,
+  // so "hasn't landed yet" cannot silently carry the assertion.
+  writeFileSync(join(root, "after.txt"), "another human write");
+  expect(await until(() => seen.includes("after.txt"))).toBe(true);
   expect(seen).not.toContain("mine.txt");
   w.close();
 });
