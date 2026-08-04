@@ -79,6 +79,9 @@ for (const t of targets) {
 console.log(
   `\nBuilt ${targets.length} package(s) in npm/.\n` +
     `Publish the platform packages first, then the root:\n` +
-    targets.map((t) => `  npm publish npm/${t.platform}`).join("\n") +
+    // The leading ./ is load-bearing: `npm publish npm/linux-x64` is parsed as the GitHub
+    // shorthand owner/repo, so npm tries to clone github.com/npm/linux-x64 instead of publishing
+    // the directory. A path has to look like a path.
+    targets.map((t) => `  npm publish ./npm/${t.platform}`).join("\n") +
     `\n  npm publish\n`,
 );
