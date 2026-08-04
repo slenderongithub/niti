@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 // Embedded, not read from disk: this is also the Go TUI's //go:embed source, and a compiled
-// amux-core has no repo around it to find the file in. One copy, compiled into both binaries.
+// niti-core has no repo around it to find the file in. One copy, compiled into both binaries.
 import palettes from "../../tui/internal/theme/palettes.json";
 import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "./events.ts";
@@ -153,7 +153,7 @@ export function startServer(
       const method = req.method;
 
       // --- public: health + static dashboard shell ---
-      if (p === "/health") return json({ ok: true, name: "amux", running: engine.running });
+      if (p === "/health") return json({ ok: true, name: "niti", running: engine.running });
       if (p === "/" || p === "/dashboard" || p === "/dashboard/") return serveFile("index.html");
       if (p.startsWith("/dashboard/")) return serveFile(p.slice("/dashboard/".length));
       if (p === "/app.js" || p === "/style.css" || p === "/theme.js" || p === "/avatar.js") return serveFile(p.slice(1));
@@ -275,7 +275,7 @@ export function startServer(
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) }, 400);
         }
-        return json({ ok: true, note: "saved to .amux/agents.yaml — restart the session to apply" });
+        return json({ ok: true, note: "saved to .niti/agents.yaml — restart the session to apply" });
       }
 
       if (p === "/theme" && method === "POST") {
@@ -379,13 +379,13 @@ export function startServer(
 // URL.pathname because the latter stays percent-encoded, so any path with a space in it 404s too.
 export function resolveWebDir(): string {
   const candidates: string[] = [];
-  if (process.env.AMUX_WEB_DIR) candidates.push(process.env.AMUX_WEB_DIR);
+  if (process.env.NITI_WEB_DIR) candidates.push(process.env.NITI_WEB_DIR);
   try {
     candidates.push(fileURLToPath(new URL("../../web", import.meta.url)));
   } catch {
     /* not a file: URL (compiled) — the execPath candidate below is the one that matters there */
   }
-  candidates.push(join(dirname(process.execPath), "..", "web")); // <pkg>/bin/amux-core → <pkg>/web
+  candidates.push(join(dirname(process.execPath), "..", "web")); // <pkg>/bin/niti-core → <pkg>/web
   return candidates.find(existsSync) ?? candidates[candidates.length - 1]!;
 }
 

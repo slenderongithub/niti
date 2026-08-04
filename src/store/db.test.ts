@@ -57,7 +57,7 @@ test("setStatus marks how a session ended", () => {
 
 test("checkpoint → undo restores an overwritten file and deletes a created one", () => {
   const s = store();
-  const dir = mkdtempSync(join(tmpdir(), "amux-undo-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-undo-"));
   const id = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
   const existing = join(dir, "kept.txt");
   const created = join(dir, "new.txt");
@@ -77,7 +77,7 @@ test("checkpoint → undo restores an overwritten file and deletes a created one
 
 test("undoLast with no session id reverts the most recent write by any agent", () => {
   const s = store();
-  const dir = mkdtempSync(join(tmpdir(), "amux-undo-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-undo-"));
   const a = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
   const b = s.createSession({ agentId: "b", kind: "task", provider: "p", model: "m" });
   const file = join(dir, "shared.txt");
@@ -93,7 +93,7 @@ test("undoLast with no session id reverts the most recent write by any agent", (
 
 test("rewindN reverts the last n writes at once, oldest of the n restored last", () => {
   const s = store();
-  const dir = mkdtempSync(join(tmpdir(), "amux-rewind-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-rewind-"));
   const id = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
   const file = join(dir, "f.txt");
   writeFileSync(file, "v1");
@@ -113,7 +113,7 @@ test("rewindN reverts the last n writes at once, oldest of the n restored last",
 
 test("rewindN stops early (not partially applied past what exists) when fewer than n checkpoints remain", () => {
   const s = store();
-  const dir = mkdtempSync(join(tmpdir(), "amux-rewind-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-rewind-"));
   const id = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
   const file = join(dir, "only-one.txt");
   writeFileSync(file, "v1");
@@ -126,7 +126,7 @@ test("rewindN stops early (not partially applied past what exists) when fewer th
 
 test("listCheckpoints previews pending writes, most recent first, without consuming them", () => {
   const s = store();
-  const dir = mkdtempSync(join(tmpdir(), "amux-list-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-list-"));
   const id = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
   const a = join(dir, "a.txt");
   const b = join(dir, "b.txt");
@@ -183,7 +183,7 @@ test("stats aggregates tokens by day and by model, and counts sessions", () => {
 test("a full persistence round-trip: turn in, turn out, checkpoint, undo", () => {
   // session-store.ts is what makes resume and /undo work, and it had no round-trip test of its own
   // — only the narrower queries above. This is the path a real session actually walks.
-  const dir = mkdtempSync(join(tmpdir(), "amux-roundtrip-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-roundtrip-"));
   const file = join(dir, "app.ts");
   writeFileSync(file, "original\n");
 

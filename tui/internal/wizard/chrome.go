@@ -3,8 +3,8 @@ package wizard
 import (
 	"strings"
 
-	"github.com/amux/tui/internal/theme"
-	"github.com/amux/tui/internal/ui"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -54,7 +54,7 @@ func screen(w, h int, title string, cardW int, body, hint, input string) string 
 	}
 	bg := theme.BgPane
 	head := lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).Render(
-		lipgloss.NewStyle().Foreground(theme.Accent).Background(bg).Bold(true).Render(" ● amux ") +
+		lipgloss.NewStyle().Foreground(theme.Accent).Background(bg).Bold(true).Render(" ● niti ") +
 			lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("v"+ui.Version+" ") +
 			lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render("— "+title))
 	stripe := lipgloss.NewStyle().Foreground(theme.Accent).Background(theme.BgDeep).Render(strings.Repeat("━", w))

@@ -1,6 +1,6 @@
 # EVERYTHING.md
 
-**A complete architectural record of `amux`, written as a pre-publish audit.**
+**A complete architectural record of `niti`, written as a pre-publish audit.**
 
 Audit date: 2026-08-04 · Branch `main` · HEAD `a861b44` · working tree dirty (5 files)
 
@@ -41,14 +41,14 @@ Measured on darwin-arm64, Bun 1.3.10, Go 1.22, **in the maintainer's working cop
 | TypeScript | `bun run typecheck` (`tsc --noEmit`) | **exit 0**, clean |
 | Unit + integration | `bun test` | **275 pass / 0 fail**, 3,225 assertions, 41 files, 6.85s |
 | Go TUI | `cd tui && go build ./... && go test ./...` | **passes** (session, theme, wizard) |
-| Compiled core | `./amux-core --help` (or any argv) | **exit 1 — crashes at module load** |
+| Compiled core | `./niti-core --help` (or any argv) | **exit 1 — crashes at module load** |
 | Package tarball | `npm pack --dry-run` | 135 files, 268.8 kB, **zero executables** |
 
 The first three lines are genuinely green and the codebase deserves credit for that. The important
 caveat is that **they are green only here.** On a clean clone:
 
-- `tui/cmd/amux/main.go` does not exist in the repository at all — `.gitignore:2`'s unanchored
-  `amux` pattern ignores the directory `tui/cmd/amux/`, so `bun run build:tui` fails.
+- `tui/cmd/niti/main.go` does not exist in the repository at all — `.gitignore:2`'s unanchored
+  `niti` pattern ignores the directory `tui/cmd/niti/`, so `bun run build:tui` fails.
 - `bun test` picks up 5 test files under `old-tech/ink-tui/` that import `ink` and `react`. Neither
   package is in `package.json` or `bun.lock`; both are present in this machine's `node_modules` as
   leftovers. A fresh `bun install` therefore turns the suite red.
@@ -58,7 +58,7 @@ Both were confirmed by hand (`git check-ignore -v`, `git ls-files`, `grep` over 
 
 ---
 
-## What amux is
+## What niti is
 
 A terminal CLI that runs several AI coding agents — each on its own provider and model — as a team
 against one project. A lead agent decomposes a prompt into a task DAG; the other agents drain it
@@ -69,12 +69,12 @@ sandbox, with every turn persisted to SQLite so a session can be resumed, undone
 
 | Component | Language | Role | Lines |
 | --- | --- | --- | --- |
-| `amux` | Go + Bubbletea (`tui/`) | The **primary** interactive front end | ~3,900 |
-| `amux-core` | TypeScript on Bun (`src/`) | The headless engine, HTTP/SSE server and scripting CLI | ~7,500 |
+| `niti` | Go + Bubbletea (`tui/`) | The **primary** interactive front end | ~3,900 |
+| `niti-core` | TypeScript on Bun (`src/`) | The headless engine, HTTP/SSE server and scripting CLI | ~7,500 |
 | dashboard | Vanilla JS (`web/`) | Optional live web view, incl. a 730-line force-directed graph | ~2,700 |
 | tests | TS + Go | 41 Bun test files, 4 Go packages | ~3,200 |
 
-The two binaries are **not peers**. `amux` (Go) is what a user runs; it spawns the core as a
+The two binaries are **not peers**. `niti` (Go) is what a user runs; it spawns the core as a
 subprocess, reads a one-line JSON handshake from its stdout, and then drives it entirely over
 HTTP + Server-Sent Events on `127.0.0.1` behind a bearer token.
 
@@ -83,11 +83,11 @@ HTTP + Server-Sent Events on `127.0.0.1` behind a bearer token.
 ```
         user
          │
-    ./amux  (Go TUI, Bubbletea, alt-screen)
+    ./niti  (Go TUI, Bubbletea, alt-screen)
          │  spawn: `bun run src/server/main.ts`
-         │  ← one JSON line on stdout: {"amuxServer":{"url","token"}}
+         │  ← one JSON line on stdout: {"nitiServer":{"url","token"}}
          ▼
-    amux-core  (Bun)
+    niti-core  (Bun)
          │
     Bun.serve on 127.0.0.1:<random>  ── bearer token on every data route
          ├── GET  /events        SSE — the single fan-out stream
@@ -102,7 +102,7 @@ HTTP + Server-Sent Events on `127.0.0.1` behind a bearer token.
          ├── MessageBus ──── agent↔agent send_message / ask_agent
          ├── ApprovalQueue ─ write_file / shell gating
          ├── LockRegistry ── per-path locks + one global shell lock
-         ├── SessionStore ── bun:sqlite → .amux/amux.db (sessions→messages→parts, checkpoints)
+         ├── SessionStore ── bun:sqlite → .niti/niti.db (sessions→messages→parts, checkpoints)
          └── LSP + MCP ───── spawned language servers and MCP stdio servers
 ```
 
@@ -110,12 +110,12 @@ HTTP + Server-Sent Events on `127.0.0.1` behind a bearer token.
 
 | Path | Written by | Contents |
 | --- | --- | --- |
-| `.amux/agents.yaml` | user, TUI picker, `POST /agents`, `POST /theme` | roster, permissions, MCP, LSP, options, theme |
-| `.amux/amux.db` (+`-wal`,`-shm`) | `SessionStore` | conversations, parts, checkpoints, bus messages |
-| `.amux/session.json` | `saveTasks` | the task board, for `resume` |
-| `.amux/worktrees/<id>` | `--worktree` runs | isolated git worktrees |
-| `.amux/skills/`, `.amux/commands/` | user | injected skill prompts, custom slash commands |
-| `~/.config/amux/auth.json` | `auth-store` | credentials, 0600 in a 0700 dir, mirrored to the OS keychain |
+| `.niti/agents.yaml` | user, TUI picker, `POST /agents`, `POST /theme` | roster, permissions, MCP, LSP, options, theme |
+| `.niti/niti.db` (+`-wal`,`-shm`) | `SessionStore` | conversations, parts, checkpoints, bus messages |
+| `.niti/session.json` | `saveTasks` | the task board, for `resume` |
+| `.niti/worktrees/<id>` | `--worktree` runs | isolated git worktrees |
+| `.niti/skills/`, `.niti/commands/` | user | injected skill prompts, custom slash commands |
+| `~/.config/niti/auth.json` | `auth-store` | credentials, 0600 in a 0700 dir, mirrored to the OS keychain |
 
 Every one of these is resolved relative to **`process.cwd()`**, not to a discovered project root.
 That single fact drives a whole family of findings.
@@ -126,18 +126,18 @@ That single fact drives a whole family of findings.
 
 This is the part the audit was really commissioned for, so it is stated plainly up front.
 
-**`amux` cannot currently be published to NPM in any form that works.** Not "needs polish" — the
+**`niti` cannot currently be published to NPM in any form that works.** Not "needs polish" — the
 three artefacts a global install would need are each independently non-functional today:
 
 1. **`package.json` is `"private": true`**, version `0.0.1`, and its only `bin` entry is
-   `"amux-core": "./src/cli.ts"` — a raw TypeScript file whose shebang is `#!/usr/bin/env bun`.
+   `"niti-core": "./src/cli.ts"` — a raw TypeScript file whose shebang is `#!/usr/bin/env bun`.
    npm and Node cannot execute either the `.ts` extension or that interpreter. There is no `files`
    field and no `.npmignore`.
-2. **The compiled `amux-core` binary crashes on startup, on every command, on the machine that
+2. **The compiled `niti-core` binary crashes on startup, on every command, on the machine that
    built it.** `bun build --compile` cannot embed `node-pty`'s native `.node` addon, so module
    resolution fails before `main()`. Verified directly:
    ```
-   $ cd /tmp/empty && /Users/slender/Developer/Codes/amux/amux-core --help ; echo $?
+   $ cd /tmp/empty && /Users/slender/Developer/Codes/niti/niti-core --help ; echo $?
    error: Failed to load native module: pty.node, checked: build/Release, build/Debug,
           prebuilds/darwin-arm64: … from node_modules/@napi-rs/keyring/index.js
    1
@@ -146,16 +146,16 @@ three artefacts a global install would need are each independently non-functiona
    hook — exists solely for the browser-terminal route, which `src/server/server.ts:332-339`
    documents as non-functional under Bun. **Four of the ten runtime dependencies serve one broken,
    uncallable feature, and one of them breaks the build product.**
-3. **The Go TUI cannot find its core outside a repo checkout.** `tui/cmd/amux/main.go:49` resolves
+3. **The Go TUI cannot find its core outside a repo checkout.** `tui/cmd/niti/main.go:49` resolves
    it as the cwd-relative literal `"src/server/main.ts"` and runs `bun run` on it — no
-   `exec.LookPath`, no `os.Executable()`-relative resolution, no reference to the `amux-core`
-   binary anywhere in `tui/`. A globally installed `amux` run from a user's project fails at the
+   `exec.LookPath`, no `os.Executable()`-relative resolution, no reference to the `niti-core`
+   binary anywhere in `tui/`. A globally installed `niti` run from a user's project fails at the
    handshake.
 
-Additionally, `npm view amux` shows the name is **already registered** to another maintainer
+Additionally, `npm view niti` shows the name is **already registered** to another maintainer
 (`donavon`, v0.0.0), so the package would need a scope or a new name regardless.
 
-The tarball `npm pack` produces today ships the maintainer's personal `.amux/agents.yaml`, the
+The tarball `npm pack` produces today ships the maintainer's personal `.niti/agents.yaml`, the
 dead `old-tech/ink-tui/` tree, every `.test.ts`, the full Go source — and **no executable at all**,
 because `.gitignore` excludes both binaries and there is no `files` field to override it.
 
@@ -212,7 +212,7 @@ recorded regardless of whether they matter, because the brief was to record ever
 
 ---
 
-## 1. The `amux-core` CLI — entry point, argument parsing, command UX
+## 1. The `niti-core` CLI — entry point, argument parsing, command UX
 
 ### Argument parsing is hand-rolled, positional, and structured as a chain of independent top-level `if` blocks — not a dispatcher
 
@@ -222,19 +222,19 @@ recorded regardless of whether they matter, because the brief was to record ever
 
 ### The final `if` block is a catch-all that treats any unrecognised argv as LLM task text
 
-`src/cli.ts:125` computes `const goal = resume ? "" : args.filter((a) => !a.startsWith("--")).join(" ").trim()`. Anything that isn't `serve`/`init`/`keys`/`login`/`auth` and doesn't contain `--web` becomes the prompt. Verified by running `bun src/cli.ts stauts` in an empty directory: it went straight to `buildEngine`, failed only because no agents were configured, and printed `amux: no agents configured. Run 'amux-core init'…` with exit 1. With a real `.amux/agents.yaml` present, a typo'd subcommand is submitted to a paid model. The `!a.startsWith("--")` filter is the only flag handling in this path — it strips flags from the prompt text but never validates them.
+`src/cli.ts:125` computes `const goal = resume ? "" : args.filter((a) => !a.startsWith("--")).join(" ").trim()`. Anything that isn't `serve`/`init`/`keys`/`login`/`auth` and doesn't contain `--web` becomes the prompt. Verified by running `bun src/cli.ts stauts` in an empty directory: it went straight to `buildEngine`, failed only because no agents were configured, and printed `niti: no agents configured. Run 'niti-core init'…` with exit 1. With a real `.niti/agents.yaml` present, a typo'd subcommand is submitted to a paid model. The `!a.startsWith("--")` filter is the only flag handling in this path — it strips flags from the prompt text but never validates them.
 
 *Files:* `src/cli.ts`
 
-### Two independent server bootstraps exist, and the one the Go TUI actually uses is not `amux-core serve`
+### Two independent server bootstraps exist, and the one the Go TUI actually uses is not `niti-core serve`
 
-`src/cli.ts:82-95` implements `serve` (parse `--port=`, call `serveMain`, print a stderr banner, register a SIGINT handler). `src/server/main.ts:60-67` implements a second, near-identical bootstrap under `if (import.meta.main)` — it re-parses `--port=` from `process.argv` and re-reads `--auto`, but ignores `--worktree` and registers no SIGINT handler. `tui/cmd/amux/main.go:48-51` shows the Go TUI spawns `exec.Command(bunBin, "run", entry)` with `entry := envOr("AMUX_CORE_ENTRY", "src/server/main.ts")` — i.e. the real production path is `bun run src/server/main.ts`, so the `serve` branch in cli.ts (and its SIGINT handler) is dead in the TUI flow. The cli.ts header comment on line 11 (`amux-core serve [--port=N] → start the local core server (what the Go TUI connects to)`) is stale relative to that.
+`src/cli.ts:82-95` implements `serve` (parse `--port=`, call `serveMain`, print a stderr banner, register a SIGINT handler). `src/server/main.ts:60-67` implements a second, near-identical bootstrap under `if (import.meta.main)` — it re-parses `--port=` from `process.argv` and re-reads `--auto`, but ignores `--worktree` and registers no SIGINT handler. `tui/cmd/niti/main.go:48-51` shows the Go TUI spawns `exec.Command(bunBin, "run", entry)` with `entry := envOr("NITI_CORE_ENTRY", "src/server/main.ts")` — i.e. the real production path is `bun run src/server/main.ts`, so the `serve` branch in cli.ts (and its SIGINT handler) is dead in the TUI flow. The cli.ts header comment on line 11 (`niti-core serve [--port=N] → start the local core server (what the Go TUI connects to)`) is stale relative to that.
 
-*Files:* `src/cli.ts`, `src/server/main.ts`, `tui/cmd/amux/main.go`
+*Files:* `src/cli.ts`, `src/server/main.ts`, `tui/cmd/niti/main.go`
 
 ### Two engine constructors exist with divergent defaults: `buildEngine` in cli.ts vs `serveMain` in server/main.ts
 
-`src/cli.ts:164-188` (`buildEngine`) and `src/server/main.ts:21-57` (`serveMain`) both load agents/options/skills/MCP/LSP/permissions and construct an `Engine`, with meaningful differences: serveMain tolerates a missing `.amux/agents.yaml` and starts in "setup mode" with `configs = []` (main.ts:23-25), while buildEngine calls `loadAgents()` unconditionally and lets it throw into `surfaceStartupError`; serveMain defaults `watch: options.watch ?? true` (main.ts:47) while buildEngine passes `watch: options.watch` (cli.ts:185) so watching is off unless explicitly configured; serveMain calls `engine.orch.load(loadTasks())` unconditionally (main.ts:52) while cli.ts only does so under `resume` (cli.ts:144). Both duplicate the same seven `load*()` imports.
+`src/cli.ts:164-188` (`buildEngine`) and `src/server/main.ts:21-57` (`serveMain`) both load agents/options/skills/MCP/LSP/permissions and construct an `Engine`, with meaningful differences: serveMain tolerates a missing `.niti/agents.yaml` and starts in "setup mode" with `configs = []` (main.ts:23-25), while buildEngine calls `loadAgents()` unconditionally and lets it throw into `surfaceStartupError`; serveMain defaults `watch: options.watch ?? true` (main.ts:47) while buildEngine passes `watch: options.watch` (cli.ts:185) so watching is off unless explicitly configured; serveMain calls `engine.orch.load(loadTasks())` unconditionally (main.ts:52) while cli.ts only does so under `resume` (cli.ts:144). Both duplicate the same seven `load*()` imports.
 
 *Files:* `src/cli.ts`, `src/server/main.ts`
 
@@ -246,7 +246,7 @@ recorded regardless of whether they matter, because the brief was to record ever
 
 ### Error surfacing is centralised in `die()`/`surfaceStartupError()` and deliberately strips stacks — except in two async `.catch` paths
 
-`src/cli.ts:34-37` defines `die(msg): never` → `console.error('amux: ' + msg)` + `process.exit(1)`. `surfaceStartupError` (190-194) unwraps `err instanceof Error ? err.message : String(err)` and special-cases `/ENOENT|agents\.yaml/` into the friendly `no agents configured. Run 'amux-core init'…`. No stack ever reaches the user through those. But `src/cli.ts:105` does `engine.submit(goal).catch((e) => console.error("run error:", e))` — passing the raw error object, which console.error renders with its full stack — and `src/cli.ts:172` prints raw MCP connect errors via a template string.
+`src/cli.ts:34-37` defines `die(msg): never` → `console.error('niti: ' + msg)` + `process.exit(1)`. `surfaceStartupError` (190-194) unwraps `err instanceof Error ? err.message : String(err)` and special-cases `/ENOENT|agents\.yaml/` into the friendly `no agents configured. Run 'niti-core init'…`. No stack ever reaches the user through those. But `src/cli.ts:105` does `engine.submit(goal).catch((e) => console.error("run error:", e))` — passing the raw error object, which console.error renders with its full stack — and `src/cli.ts:172` prints raw MCP connect errors via a template string.
 
 *Files:* `src/cli.ts`
 
@@ -258,7 +258,7 @@ recorded regardless of whether they matter, because the brief was to record ever
 
 ### Twenty built-in commands plus a file-backed user command loader with override semantics
 
-`BUILTIN_COMMANDS` (registry.ts:36-258) is, in registry order: usage, cancel, undo, rewind, branch, model, sessions, agents, tasks, skills, mcp, lsp, permissions, cost, status, debate, export, resume, clear, init — with `help` appended by the constructor. That exact order is asserted in `registry.test.ts:143-147`. `loadCommands(dir = ".amux/commands")` (registry.ts:272-294) reads `*.md`, parses optional `---`-delimited YAML frontmatter with `yaml.parse`, falls back to the filename for `name`, and builds a `run` that substitutes `$ARGUMENTS` (line 286) then calls `engine.submit`. User commands are appended after builtins so a same-named user command overwrites the builtin in the Map (line 300 comment, asserted in registry.test.ts:132-138).
+`BUILTIN_COMMANDS` (registry.ts:36-258) is, in registry order: usage, cancel, undo, rewind, branch, model, sessions, agents, tasks, skills, mcp, lsp, permissions, cost, status, debate, export, resume, clear, init — with `help` appended by the constructor. That exact order is asserted in `registry.test.ts:143-147`. `loadCommands(dir = ".niti/commands")` (registry.ts:272-294) reads `*.md`, parses optional `---`-delimited YAML frontmatter with `yaml.parse`, falls back to the filename for `name`, and builds a `run` that substitutes `$ARGUMENTS` (line 286) then calls `engine.submit`. User commands are appended after builtins so a same-named user command overwrites the builtin in the Map (line 300 comment, asserted in registry.test.ts:132-138).
 
 *Files:* `src/commands/registry.ts`, `src/commands/registry.test.ts`
 
@@ -270,13 +270,13 @@ recorded regardless of whether they matter, because the brief was to record ever
 
 ### Task board persistence is a relative-path JSON file; conversation history is SQLite
 
-`src/session.ts:7` hardcodes `const DEFAULT = ".amux/session.json"` — a path relative to `process.cwd()`, not to `engine.root`. `saveTasks` (11-14) does `mkdirSync(dirname(path), {recursive:true})` then a single `writeFileSync(JSON.stringify({tasks}, null, 2))`. `loadTasks` (16-20) returns `[]` for a missing file and otherwise `JSON.parse`s with no try/catch, guarding only the shape (`Array.isArray(data.tasks)`). `resumeConversation` (24-26) flattens every stored session for a task id into one `Turn[]` via `store.listSessions({taskId}).flatMap(s => store.loadTurns(s.id))` — that is what seeds a resumed agent and what `/export` renders.
+`src/session.ts:7` hardcodes `const DEFAULT = ".niti/session.json"` — a path relative to `process.cwd()`, not to `engine.root`. `saveTasks` (11-14) does `mkdirSync(dirname(path), {recursive:true})` then a single `writeFileSync(JSON.stringify({tasks}, null, 2))`. `loadTasks` (16-20) returns `[]` for a missing file and otherwise `JSON.parse`s with no try/catch, guarding only the shape (`Array.isArray(data.tasks)`). `resumeConversation` (24-26) flattens every stored session for a task id into one `Turn[]` via `store.listSessions({taskId}).flatMap(s => store.loadTurns(s.id))` — that is what seeds a resumed agent and what `/export` renders.
 
 *Files:* `src/session.ts`
 
 ### `/export` builds a full audit report from data the engine already holds, in six fixed sections
 
-`buildExportReport` (export.ts:46-97) emits `# amux session export`, then Project/Goal, `## Tasks` (via `taskLine`, 15-19), `## Cost` (per-agent via `costOf`, with a `+` suffix when any model is unpriced), `## Diff patch` (only when `engine.worktreeHandle` is set, else an explicit `_not available_` line), `## Test status (best-effort)` (regex heuristics `FAIL_RE`/`PASS_RE` at lines 37-38 scanning `t.output + t.acceptance`, honestly labelled 'self-reported, not verified'), and `## Transcripts` (per task, `resumeConversation` → `renderTurn`). Output path is `join(engine.root, ".amux", "reports", isoStamp + ".md")` (91-95), and `.amux/reports/` is gitignored (.gitignore:8).
+`buildExportReport` (export.ts:46-97) emits `# niti session export`, then Project/Goal, `## Tasks` (via `taskLine`, 15-19), `## Cost` (per-agent via `costOf`, with a `+` suffix when any model is unpriced), `## Diff patch` (only when `engine.worktreeHandle` is set, else an explicit `_not available_` line), `## Test status (best-effort)` (regex heuristics `FAIL_RE`/`PASS_RE` at lines 37-38 scanning `t.output + t.acceptance`, honestly labelled 'self-reported, not verified'), and `## Transcripts` (per task, `resumeConversation` → `renderTurn`). Output path is `join(engine.root, ".niti", "reports", isoStamp + ".md")` (91-95), and `.niti/reports/` is gitignored (.gitignore:8).
 
 *Files:* `src/commands/export.ts`, `.gitignore`
 
@@ -294,7 +294,7 @@ recorded regardless of whether they matter, because the brief was to record ever
 
 ### Credential entry has two code paths with different validation and both echo secrets in cleartext
 
-`amux-core keys set <provider>` (cli.ts:40-49) calls Bun's global `prompt()` and `setKey(args[2], key)` straight into the OS keychain with no catalog lookup. `amux-core auth login [provider]` (cli.ts:74-77 → `authLogin`, 197-221) does validate against `CATALOG` (line 199-200), branches on `entry.client === "copilot"` into the device flow, on `category === "local" || keyOptional` into a base-URL prompt, and otherwise stores `{type:"api", key}` via `setCredential`. `setCredential` writes `~/.config/amux/auth.json` at 0600 inside a 0700 dir (auth-store.ts:35-44) and mirrors into the keychain. Bun's `prompt()` has no masking, so the key is echoed to the terminal and lands in scrollback in both paths.
+`niti-core keys set <provider>` (cli.ts:40-49) calls Bun's global `prompt()` and `setKey(args[2], key)` straight into the OS keychain with no catalog lookup. `niti-core auth login [provider]` (cli.ts:74-77 → `authLogin`, 197-221) does validate against `CATALOG` (line 199-200), branches on `entry.client === "copilot"` into the device flow, on `category === "local" || keyOptional` into a base-URL prompt, and otherwise stores `{type:"api", key}` via `setCredential`. `setCredential` writes `~/.config/niti/auth.json` at 0600 inside a 0700 dir (auth-store.ts:35-44) and mirrors into the keychain. Bun's `prompt()` has no masking, so the key is echoed to the terminal and lands in scrollback in both paths.
 
 *Files:* `src/cli.ts`, `src/auth/auth-store.ts`
 
@@ -307,7 +307,7 @@ recorded regardless of whether they matter, because the brief was to record ever
 ### Observations, edge cases and minor notes (21)
 
 - `src/cli.ts` — `src/cli.ts` has no `.test.ts` sibling — `ls src/cli.test.ts` → No such file. The entire argv-parsing surface, every subcommand branch, `die()`, `surfaceStartupError()`, `authLogin()`, `runInit()` and `openBrowser()` are untested. Every other file in this area has a test sibling.
-- `src/cli.ts:35` — `die()` prefixes messages with `amux: ` but the binary is `amux-core` (package.json bin) and `amux` is the *Go TUI*. Every error line from the core therefore appears to come from the TUI. Verified: `bun src/cli.ts keys` → `amux: usage: amux-core keys set <provider>`.
+- `src/cli.ts:35` — `die()` prefixes messages with `niti: ` but the binary is `niti-core` (package.json bin) and `niti` is the *Go TUI*. Every error line from the core therefore appears to come from the TUI. Verified: `bun src/cli.ts keys` → `niti: usage: niti-core keys set <provider>`.
 - `src/cli.ts:142` — `throw err` on line 142 is unreachable — `surfaceStartupError` is declared `: never` on line 190 so TS already narrows. The comment says as much (`// unreachable (surfaceStartupError exits)`). Dead line kept only for the compiler's benefit.
 - `src/cli.ts:85` — `--port=` is parsed with the magic number `slice(7)` in two places (cli.ts:85 and server/main.ts:61) — the literal 7 is `"--port=".length` written out by hand, twice.
 - `src/cli.ts:132` — The no-task banner (cli.ts:128-133) advertises `init · serve · auth · resume · --web` but omits `keys`, `login`, `--auto` and `--worktree`, all of which the file's own header comment (lines 8-15) documents. There is no `help` subcommand at all.
@@ -319,11 +319,11 @@ recorded regardless of whether they matter, because the brief was to record ever
 - `src/commands/registry.ts:57` — `/rewind` argument parsing swallows junk: `Math.max(1, parseInt(args.trim(), 10) || 1)` turns `/rewind abc` into 1, `/rewind -5` into 1, and `/rewind 1e9` into 1 (parseInt stops at `e`). No feedback that the argument was ignored.
 - `src/commands/registry.ts:78` — `/model` passes `splitModelId(undefined, modelId)`, which returns `{provider: "", model: modelId}` when the head before the slash isn't in CATALOG (catalog.ts:166-174). So `/model a bogus/x` reaches `engine.switchModel` with an empty provider rather than being rejected with 'unknown provider'.
 - `src/usage.ts:48` — `UsageTracker.rateLimits_()` has a trailing underscore purely to dodge the private field of the same name (usage.ts:17 vs 48). It is also the only method in the file that returns internal objects by reference, unlike `snapshot()` which spreads.
-- `src/watch.ts:11` — `IGNORED_SEGMENTS` covers `.git, node_modules, .amux, dist, build, .next, target, vendor` but not `.venv`, `__pycache__`, `coverage`, `.turbo`, or `.pytest_cache` — a Python or monorepo project will see watcher churn from those.
+- `src/watch.ts:11` — `IGNORED_SEGMENTS` covers `.git, node_modules, .niti, dist, build, .next, target, vendor` but not `.venv`, `__pycache__`, `coverage`, `.turbo`, or `.pytest_cache` — a Python or monorepo project will see watcher churn from those.
 - `src/watch.ts:38` — The `catch {}` around `fs.watch` (watch.ts:38-41) is entirely silent. On a platform without recursive watch, the user gets a fully functional-looking watcher that never fires and no diagnostic, while `/status` still reports the session as normal.
 - `src/commands/export.ts:27` — `export.ts` truncates tool *output* to 300 chars (line 32) but dumps tool *input* in full via `JSON.stringify(rest)` (line 27). A single `write_file` of a large file therefore inlines the whole file content into the report on one line.
 - `src/commands/export.ts:91` — The export filename stamp `new Date().toISOString().replace(/[:.]/g,"-")` (export.ts:91) has millisecond resolution and no collision guard — two `/export` calls in the same millisecond silently overwrite. Practically unreachable, but the write is a bare `writeFileSync` with no existence check.
-- `src/session.ts:13` — `saveTasks` writes with a plain `writeFileSync` (session.ts:13) — no temp-file-and-rename. A crash mid-write leaves a truncated `.amux/session.json`, which `loadTasks` then throws on (see findings).
+- `src/session.ts:13` — `saveTasks` writes with a plain `writeFileSync` (session.ts:13) — no temp-file-and-rename. A crash mid-write leaves a truncated `.niti/session.json`, which `loadTasks` then throws on (see findings).
 - `src/commands/export.ts:38` — `selfReportedTestStatus`'s PASS_RE includes a bare `✓` inside a `\b…\b` word-boundary group (export.ts:38). `\b` around a non-word character behaves unintuitively; combined with the fact that agents routinely emit `✓` as a generic success glyph, a task whose output merely contains a checkmark is reported as 'possibly passing'.
 - `src/cli.ts:250` — `runInit`'s duplicate-id resolver appends `-2` repeatedly rather than incrementing: three roles named 'Engineer' become `engineer`, `engineer-2`, `engineer-2-2`.
 - `src/commands/registry.test.ts:143` — `registry.test.ts:143-147` pins the exact order and membership of `list()`, so any new built-in command is a guaranteed test failure until the list is updated — an intentional trip-wire worth knowing about before adding commands.
@@ -401,7 +401,7 @@ The `Engine` constructor (engine.ts:70-142) builds a `Messenger` closure over th
 
 ### Skills are prompt text, not a tool
 
-`loadSkills(dir = ".amux/skills")` (src/skills/skills.ts:13-30) scans one level of directories for `SKILL.md`, extracts the leading `---` frontmatter with a regex and parses it with `yaml.parse`, falling back to the directory name when `name` is absent and to `""` when `description` is. `skillsPrompt` (32-36) renders one bullet per skill including the file path, and cli.ts:167 concatenates it with `loadInstructions(options.instructions)` into `systemSuffix`. The agent is expected to `read_file` the SKILL.md on demand — which works because `DEFAULT_RULES` (src/permissions.ts:19-25) allows `read_file` for `"*"` unconditionally. There is no skills tool, no lazy-load mechanism, and no cap on how many skills' descriptions land in every system prompt of every agent.
+`loadSkills(dir = ".niti/skills")` (src/skills/skills.ts:13-30) scans one level of directories for `SKILL.md`, extracts the leading `---` frontmatter with a regex and parses it with `yaml.parse`, falling back to the directory name when `name` is absent and to `""` when `description` is. `skillsPrompt` (32-36) renders one bullet per skill including the file path, and cli.ts:167 concatenates it with `loadInstructions(options.instructions)` into `systemSuffix`. The agent is expected to `read_file` the SKILL.md on demand — which works because `DEFAULT_RULES` (src/permissions.ts:19-25) allows `read_file` for `"*"` unconditionally. There is no skills tool, no lazy-load mechanism, and no cap on how many skills' descriptions land in every system prompt of every agent.
 
 *Files:* `src/skills/skills.ts`, `src/cli.ts`
 
@@ -439,11 +439,11 @@ agent.test.ts (569 lines) covers the loop, streaming, the 85%/95% thresholds wit
 - `src/approval.ts:29` — Granted scopes only ever accumulate (`this.scopes.push`); there is no revoke, no expiry and no listing, so an accidental "always allow shell" persists for the whole session with no way back short of a restart.
 - `src/tools/lsp-tools.ts:49` — `runLspTool` passes `Number(input.line ?? 1)` straight through — a model sending `line: "top"` produces NaN and it reaches the language server unvalidated.
 - `src/tools/tools.ts:157` — TOOL_GUIDANCE tells every agent "If 'diagnostics' is available, run it on files you edited", but `lspToolSpecs` returns [] whenever no `lsp:` block is configured — the guidance is unconditional while the tool is not, so agents in most projects are advised to use a tool they were never offered.
-- `src/skills/skills.ts:13` — `loadSkills` defaults to the cwd-relative `".amux/skills"` rather than the engine root, so skills silently vanish when the process is started from a subdirectory — unlike everything else in the loop, which is rooted at `Engine.root`.
+- `src/skills/skills.ts:13` — `loadSkills` defaults to the cwd-relative `".niti/skills"` rather than the engine root, so skills silently vanish when the process is started from a subdirectory — unlike everything else in the loop, which is rooted at `Engine.root`.
 - `src/agent/context.ts:27` — `compactTurns` sends the entire `old` transcript as one user message to the same provider that is already at 95% of its window. That summarization call can itself exceed the window and throw — and it throws inside run()'s try, taking the whole task down as `exhausted`.
 - `src/agent/context.ts:10` — `describeTurn` truncates each tool output to 200 chars for the summarization transcript, so compaction of a tool-heavy run summarizes mostly truncated fragments.
 - `src/engine.ts:61` — `engine.lastGoal` is documented as not persisted ("a restart loses it"), yet /export's report header depends on it — an exported report after a resume is headed "(resumed session)".
-- `src/store/session-store.ts:247` — Checkpoints store full prior file contents in SQLite and are never pruned — the file's own `ponytail:` comment names this. A long session that rewrites a large file repeatedly grows `.amux/amux.db` by the total bytes written.
+- `src/store/session-store.ts:247` — Checkpoints store full prior file contents in SQLite and are never pruned — the file's own `ponytail:` comment names this. A long session that rewrites a large file repeatedly grows `.niti/niti.db` by the total bytes written.
 - `src/engine.ts:132` — `autoApprove:` in agents.yaml becomes an unqualified `(agentId, tool)` grant with no path pattern (engine.ts:132 → approval.ts:29), so `autoApprove: [shell]` is functionally --auto for that agent, with only DANGEROUS_PATTERNS still prompting.
 - `src/orchestrator/runner.ts:29` — `runner.ts`'s flat `worker()` loop is dead in the primary path — line 128 says it is "exposed for testing" and runProject only uses the DAG scheduler. It still carries its own `MAX_ATTEMPTS = 3` constant, duplicating scheduler.ts:31.
 - `src/orchestrator/scheduler.ts:157` — `runReviewGate` ends with `return undefined; // unreachable — every loop path above returns`, which is dead code kept for the type checker.
@@ -497,7 +497,7 @@ There are two independent execution models in src/orchestrator/. (1) The DAG pat
 
 ### Git worktree isolation: lifecycle and the deliberate manual-merge policy
 
-Enabled by `--worktree` (cli.ts:186). `Engine.runSession` (engine.ts:181-191) refuses to start if a previous `worktreeHandle` is unmerged, hard-fails if `isGitRepo(root)` is false rather than silently running unisolated, creates `.amux/worktrees/<uuid8>` on branch `amux/<uuid8>` off current HEAD, and repoints every agent's sandbox root with `a.setRoot(...)`. The `finally` (engine.ts:209) always restores the real root. `createWorktree` (worktree.ts:37) captures `baseSha` from `git rev-parse HEAD` — it throws cleanly on a repo with no commits. `diffStat`/`diffPatch` both run `git add -A` first because agents write via write_file/edit and never commit as they go, so a plain diff-against-commit would hide every new file. `mergeBack` is `git merge --no-ff <branch>` and is only reached from POST /worktree/merge (server.ts:304) — never automatic. `removeWorktree` uses `--force` and only runs on a successful merge.
+Enabled by `--worktree` (cli.ts:186). `Engine.runSession` (engine.ts:181-191) refuses to start if a previous `worktreeHandle` is unmerged, hard-fails if `isGitRepo(root)` is false rather than silently running unisolated, creates `.niti/worktrees/<uuid8>` on branch `niti/<uuid8>` off current HEAD, and repoints every agent's sandbox root with `a.setRoot(...)`. The `finally` (engine.ts:209) always restores the real root. `createWorktree` (worktree.ts:37) captures `baseSha` from `git rev-parse HEAD` — it throws cleanly on a repo with no commits. `diffStat`/`diffPatch` both run `git add -A` first because agents write via write_file/edit and never commit as they go, so a plain diff-against-commit would hide every new file. `mergeBack` is `git merge --no-ff <branch>` and is only reached from POST /worktree/merge (server.ts:304) — never automatic. `removeWorktree` uses `--force` and only runs on a successful merge.
 
 *Files:* `src/orchestrator/worktree.ts`, `src/engine.ts`, `src/server/server.ts`
 
@@ -549,9 +549,9 @@ The nine-variant union at scheduler.ts:10-19 (plan, task_ready, task_started, ta
 - `src/orchestrator/locks.ts:27` — LockRegistry.acquire is re-entrant but unbalanced: two acquires by the same holder followed by one release fully frees the lock. Not currently reachable (execTool acquires exactly once per call) but it is a latent footgun for any future caller.
 - `src/orchestrator/locks.ts:62` — `byHolder()` skips stale entries but never deletes them (locks.ts:62). An entry for a path never re-acquired stays in the Map for the process lifetime — an unbounded, if tiny, leak.
 - `src/orchestrator/locks.ts:29` — `re-acquiring` a lock you already hold resets `acquiredAt` (locks.ts:29), so a holder that keeps re-acquiring can hold indefinitely past staleMs. Harmless today, relevant if the lock is ever taken across a loop.
-- `.gitignore:1` — `.amux/worktrees/` is not in .gitignore (which lists .amux/session.json, .amux/amux.db*, .amux/reports/). Verified empirically: `git add -A` in the root stages `.amux/worktrees/x` as an embedded-repo gitlink with git's 'adding embedded git repository' warning.
+- `.gitignore:1` — `.niti/worktrees/` is not in .gitignore (which lists .niti/session.json, .niti/niti.db*, .niti/reports/). Verified empirically: `git add -A` in the root stages `.niti/worktrees/x` as an embedded-repo gitlink with git's 'adding embedded git repository' warning.
 - `src/orchestrator/worktree.ts:52` — `diffStat` and `diffPatch` both mutate the worktree index with `git add -A` (worktree.ts:52, 60) even though they are read-only status/report calls. GET /worktree therefore has a side effect, and it clobbers any index state the user staged by hand in that worktree.
-- `src/orchestrator/worktree.ts:79` — `snapshotBranch` (/branch) does `git checkout -b` + `git add -A` + commit in the real root with no check for an active worktree. Combined with the missing .gitignore entry, a /branch taken during a worktree run commits a gitlink to `.amux/worktrees/<id>` onto the snapshot branch.
+- `src/orchestrator/worktree.ts:79` — `snapshotBranch` (/branch) does `git checkout -b` + `git add -A` + commit in the real root with no check for an active worktree. Combined with the missing .gitignore entry, a /branch taken during a worktree run commits a gitlink to `.niti/worktrees/<id>` onto the snapshot branch.
 - `src/orchestrator/worktree.ts:102` — `mergeBack` merges into 'whatever is currently checked out in root' with no verification that root is still on the branch/commit that `handle.baseSha` was taken from. A user who checks out another branch mid-run gets the merge landed somewhere unintended.
 - `src/orchestrator/worktree.ts:16` — `git()` in worktree.ts accumulates stdout/stderr into unbounded strings. `diffPatch` on a large run returns the entire patch into memory and then into the /export markdown.
 - `src/orchestrator/scheduler.ts:242` — `schedule` ignores every `PostResult`. Both the handoff post (scheduler.ts:242) and the review-feedback post (line 147) discard `{ok, reason}`, so a rate-capped or unknown-recipient message is dropped with no log line and no event.
@@ -605,19 +605,19 @@ Both `anthropic.ts:26-30` and `openai.ts:24-28` install a `trackedFetch` into th
 
 ### `makeProvider` is the single place credentials meet transport, and it is only 22 lines
 
-`factory.ts:10-32`: look up `CATALOG[cfg.provider]` (throw with the full known-provider list if absent), `resolveApiKey(cfg.provider)`, substitute the literal string `"local"` when the key is missing and `entry.keyOptional` is set (`factory.ts:16`), otherwise throw a provider-appropriate instruction (`amux login copilot` for the copilot client, `amux auth login (or export ${entry.envVar})` otherwise). Base URL precedence is `cfg.baseURL ?? resolveBaseURL(provider) ?? entry.baseURL` (`factory.ts:21`) — agent config beats stored credential beats catalog default. Then a four-arm switch on `entry.client`. Note the Gemini arm at `factory.ts:26` passes only `(model, apiKey)` — `baseURL` is computed and then silently dropped for that one client.
+`factory.ts:10-32`: look up `CATALOG[cfg.provider]` (throw with the full known-provider list if absent), `resolveApiKey(cfg.provider)`, substitute the literal string `"local"` when the key is missing and `entry.keyOptional` is set (`factory.ts:16`), otherwise throw a provider-appropriate instruction (`niti login copilot` for the copilot client, `niti auth login (or export ${entry.envVar})` otherwise). Base URL precedence is `cfg.baseURL ?? resolveBaseURL(provider) ?? entry.baseURL` (`factory.ts:21`) — agent config beats stored credential beats catalog default. Then a four-arm switch on `entry.client`. Note the Gemini arm at `factory.ts:26` passes only `(model, apiKey)` — `baseURL` is computed and then silently dropped for that one client.
 
 *Files:* `src/providers/factory.ts`
 
 ### Credential resolution is a three-tier fallback with a deliberate test escape hatch
 
-`resolveApiKey` (`auth-store.ts:86-98`) reads the typed store first; an `api` credential yields `.key`, an `oauth` credential yields `.access`, and a `local` credential yields `undefined` on purpose (the factory's `"local"` sentinel covers it). Only when *no* credential exists does it fall through to `keychainKey(provider)`, and `keystore.getKey` (`keystore.ts:17-25`) itself is a two-tier fallback: OS keychain via `new Entry("amux", provider).getPassword()` wrapped in try/catch, then `envKey(provider)` which does `process.env[CATALOG[provider].envVar]`. Crucially `auth-store.ts:96` short-circuits the entire fallback when `AMUX_AUTH_FILE` is set, with the reasoning spelled out in the comment: a test store must be hermetic or a provider absent from the temp store would resolve a real key and make billed calls. `auth-store.test.ts:72-79` asserts this. `setCredential` mirrors api keys into the keychain best-effort (`auth-store.ts:62-68`) and `removeCredential` clears the mirror (`auth-store.ts:81`) so a logout is not undone by the fallback.
+`resolveApiKey` (`auth-store.ts:86-98`) reads the typed store first; an `api` credential yields `.key`, an `oauth` credential yields `.access`, and a `local` credential yields `undefined` on purpose (the factory's `"local"` sentinel covers it). Only when *no* credential exists does it fall through to `keychainKey(provider)`, and `keystore.getKey` (`keystore.ts:17-25`) itself is a two-tier fallback: OS keychain via `new Entry("niti", provider).getPassword()` wrapped in try/catch, then `envKey(provider)` which does `process.env[CATALOG[provider].envVar]`. Crucially `auth-store.ts:96` short-circuits the entire fallback when `NITI_AUTH_FILE` is set, with the reasoning spelled out in the comment: a test store must be hermetic or a provider absent from the temp store would resolve a real key and make billed calls. `auth-store.test.ts:72-79` asserts this. `setCredential` mirrors api keys into the keychain best-effort (`auth-store.ts:62-68`) and `removeCredential` clears the mirror (`auth-store.ts:81`) so a logout is not undone by the fallback.
 
 *Files:* `src/auth/auth-store.ts`, `src/keystore/keystore.ts`, `src/auth/auth-store.test.ts`
 
 ### On-disk credential storage: single global JSON file, 0600 in a 0700 dir
 
-`authFile()` (`auth-store.ts:15-17`) resolves `$AMUX_AUTH_FILE || ~/.config/amux/auth.json` — global, not per-project, matching opencode. `write` (`auth-store.ts:36-45`) does `mkdirSync(dirname, {recursive:true, mode:0o700})` then `writeFileSync(..., {mode:0o600})` then a belt-and-braces `chmodSync(path, 0o600)` in a try/catch for pre-existing files, with the catch commented as a Windows concession. `read` (`auth-store.ts:23-33`) treats a corrupt file as empty rather than fatal and filters entries lacking a string `provider`. `removeCredential` deletes the file entirely when the last credential goes (`auth-store.ts:74-78`). This *is* a plaintext credential fallback — by design and clearly labelled — and the keychain is a mirror on top of it, not the other way round.
+`authFile()` (`auth-store.ts:15-17`) resolves `$NITI_AUTH_FILE || ~/.config/niti/auth.json` — global, not per-project, matching opencode. `write` (`auth-store.ts:36-45`) does `mkdirSync(dirname, {recursive:true, mode:0o700})` then `writeFileSync(..., {mode:0o600})` then a belt-and-braces `chmodSync(path, 0o600)` in a try/catch for pre-existing files, with the catch commented as a Windows concession. `read` (`auth-store.ts:23-33`) treats a corrupt file as empty rather than fatal and filters entries lacking a string `provider`. `removeCredential` deletes the file entirely when the last credential goes (`auth-store.ts:74-78`). This *is* a plaintext credential fallback — by design and clearly labelled — and the keychain is a mirror on top of it, not the other way round.
 
 *Files:* `src/auth/auth-store.ts`
 
@@ -662,12 +662,12 @@ Verified end to end. `src/server/server.ts:408-410` defines `redact(c) => ({prov
 - `scripts/gen-catalog.ts:83` — `SKIP_IDS` (gen-catalog.ts:25-36) is now entirely dead code. The condition is `if (SKIP_IDS.has(p.id) || !ALLOW_IDS.has(p.id))` and no member of SKIP_IDS appears in ALLOW_IDS, so the first clause can never be the deciding one. Ten entries and their explanatory comment now cost reading time for nothing.
 - `scripts/gen-catalog.ts:13` — `RawModel.limit?.context` is declared at gen-catalog.ts:13 but `limit` is never referenced anywhere in `main()`. models.dev supplies a real per-model context window and the generator throws it away, which is why `contextWindow()` is stuck at per-provider granularity with a 128k default.
 - `scripts/gen-catalog.ts:126` — `Bun.write("src/providers/catalog.generated.ts", out)` uses a cwd-relative path, so `bun run scripts/gen-catalog.ts` from any directory other than the repo root writes the file into the wrong place and silently reports success.
-- `scripts/gen-catalog.ts:130` — `main()` is called bare with no `.catch()`. A models.dev outage produces an unhandled rejection rather than a clean `amux: ...` error, and nothing sets a non-zero exit code explicitly.
+- `scripts/gen-catalog.ts:130` — `main()` is called bare with no `.catch()`. A models.dev outage produces an unhandled rejection rather than a clean `niti: ...` error, and nothing sets a non-zero exit code explicitly.
 - `src/providers/catalog.ts:154` — The catalog now ships four near-duplicate provider pairs the picker shows side by side: `fireworks` ("Fireworks", .../inference/v1) vs `fireworks-ai` ("Fireworks AI", .../inference/v1/ — note the trailing slash), `moonshot` ("Moonshot (Kimi)") vs `moonshotai` ("Moonshot AI") on the *identical* baseURL https://api.moonshot.ai/v1, `ollama` vs `ollama-cloud`, and `deepseek`/`openrouter`/`lmstudio` which exist in both layers (manual wins). A user with a Moonshot key must guess which of two identical entries to authenticate.
 - `src/providers/catalog.ts:83` — MANUAL_CATALOG is the *sole* source for groq, xai, mistral, together and cerebras now that ALLOW_IDS excludes them — but models.dev still carries `groq`, `xai`, `mistral`, `togetherai` and `cerebras` upstream (verified against a live api.json fetch). Their hand-frozen seeds have rotted: `xai` offers `grok-2`/`grok-2-mini` while the `requesty` generated entry two screens away lists `xai/grok-4` and `xai/grok-4-fast`.
 - `src/providers/catalog.ts:97` — MANUAL `together` uses id `together`; models.dev's id is `togetherai`. The two would never have collided, so the "hand-maintained overrides generated" contract was never actually exercised for this provider.
 - `src/providers/catalog.ts:148` — `custom` is declared `category: "byok"` *and* `keyOptional: true` (catalog.ts:148-149). That combination makes `authLogin` take the local-endpoint branch (`cli.ts:205`, condition `(entry.category ?? "byok") === "local" || entry.keyOptional`), so a user configuring a custom OpenAI-compatible endpoint is prompted for a base URL first and stored as `type: "local"` — a shape that has no `key` field at all. There is no way to store a baseURL *and* a key for one provider; `AuthCredential` has no such variant and `setCredential` upserts by provider.
-- `src/cli.ts:41` — `amux-core keys set <provider>` (cli.ts:41-47) does not validate the provider against CATALOG. `keys set opanai` prints "Stored opanai key in the OS keychain." and the key is unreachable forever, because `envVarName`/`getKey` only ever look up ids that exist in the catalog.
+- `src/cli.ts:41` — `niti-core keys set <provider>` (cli.ts:41-47) does not validate the provider against CATALOG. `keys set opanai` prints "Stored opanai key in the OS keychain." and the key is unreachable forever, because `envVarName`/`getKey` only ever look up ids that exist in the catalog.
 - `src/server/server.ts:264` — `GET /models?provider=bogus` returns `{provider:"bogus", models:[]}` with a 200. An unknown provider is indistinguishable from a provider with no seeds (which `custom` legitimately is), so the TUI picker shows the same empty list for a typo and for the intended escape hatch.
 - `src/providers/catalog.ts:139` — `github-copilot`'s env fallback is named `GITHUB_COPILOT_TOKEN` but the value must be a GitHub *OAuth* token (`gho_…`) — `factory.ts:30` comments "apiKey is the GitHub OAuth token" and `CopilotProvider` exchanges it for the actual Copilot token. Anyone who exports their Copilot API token into that variable gets a confusing 401 from the exchange endpoint, not from the chat endpoint.
 - `src/providers/catalog.ts:141` — Copilot's seed model list `["gpt-4o","claude-3.7-sonnet","o1","gemini-2.0-flash"]` is hand-frozen from Jul 28, even though api.githubcopilot.com exposes a `/models` endpoint the CopilotProvider could query with the token it already holds.
@@ -678,7 +678,7 @@ Verified end to end. `src/server/server.ts:408-410` defines `redact(c) => ({prov
 - `src/providers/catalog.test.ts:8` — `catalog.test.ts` asserts `envVar` matches `/^[A-Z0-9_]+$/` — which `CLOUDFLARE_ACCOUNT_ID` and `DATABRICKS_HOST` both satisfy. The test suite therefore cannot catch the wrong-env-var defect, and nothing asserts that `baseURL` is free of unresolved `${…}` templates.
 - `src/providers/catalog.test.ts:43` — The rewritten breadth test now asserts `> 20 && < 60` (catalog.test.ts:43-46). The live count is 34, so the window is wide enough that adding or dropping a dozen providers would not trip it — it pins nothing in particular.
 - `src/providers/pricing.ts:30` — `pricing.ts` includes a `"claude-3.7-sonnet"` key (line 18) that can never be reached: `"claude-sonnet"` is not a prefix of `"claude-3.7-sonnet"`, but no other entry is either, so it works — however `"gemini-3"` (line 30) *does* shadow-compete with `"gemini-3.6-flash"` (line 31) and the longest-prefix rule resolves it correctly only because both carry identical values. Two entries, one price, no behavioural difference.
-- `.amux/agents.yaml:2` — `.amux/agents.yaml` is tracked in git (`.gitignore` excludes only `session.json`, `amux.db*` and `reports/`) and currently holds a developer scratch roster — a single agent with `id: a`, `role: A`, `systemPrompt: "You are the A. A Implement your assigned tasks…"` and `theme: neon graveyard`. It is uncommitted-modified right now and would ship as the project's example config.
+- `.niti/agents.yaml:2` — `.niti/agents.yaml` is tracked in git (`.gitignore` excludes only `session.json`, `niti.db*` and `reports/`) and currently holds a developer scratch roster — a single agent with `id: a`, `role: A`, `systemPrompt: "You are the A. A Implement your assigned tasks…"` and `theme: neon graveyard`. It is uncommitted-modified right now and would ship as the project's example config.
 - `src/providers/gemini.ts:40` — `gemini.ts:40` carries an `// eslint-disable-next-line @typescript-eslint/no-explicit-any` comment, but there is no ESLint config or eslint dependency anywhere in package.json — the suppression is vestigial.
 - `src/providers/gemini.ts:65` — `gemini.ts:65` `let n = 0` is the tool-call counter, scoped per `send()` call. Ids therefore restart at 0 every turn, so `tool-0` from turn 3 and `tool-0` from turn 5 collide in any store keyed by call id. Harmless for Gemini itself (which pairs by name) but worth knowing if ids ever get persisted.
 
@@ -701,9 +701,9 @@ Verified end to end. `src/server/server.ts:408-410` defines `redact(c) => ({prov
 
 ### Handshake: the first stdout line is the machine-readable contract with the Go TUI
 
-`serveMain()` (src/server/main.ts:21-58) builds the Engine from `.amux/agents.yaml` (empty roster = "setup mode", line 24-25), starts the server, and writes exactly one stdout line: `{"amuxServer":{"url":...,"token":...}}` (main.ts:56). Every other message goes to stderr so that line is always first. `tui/cmd/amux/main.go:51` spawns `bun run <entry>` and parses it. Port selection: no `--port` means port 0, so collisions are impossible for the TUI path; with an explicit `--port=N` already in use, Bun throws and main.ts:63-66 prints `amux serve: Failed to start server. Is port 8794 in use?` and exits 1 — I reproduced this exactly by starting two servers on 8794.
+`serveMain()` (src/server/main.ts:21-58) builds the Engine from `.niti/agents.yaml` (empty roster = "setup mode", line 24-25), starts the server, and writes exactly one stdout line: `{"nitiServer":{"url":...,"token":...}}` (main.ts:56). Every other message goes to stderr so that line is always first. `tui/cmd/niti/main.go:51` spawns `bun run <entry>` and parses it. Port selection: no `--port` means port 0, so collisions are impossible for the TUI path; with an explicit `--port=N` already in use, Bun throws and main.ts:63-66 prints `niti serve: Failed to start server. Is port 8794 in use?` and exits 1 — I reproduced this exactly by starting two servers on 8794.
 
-*Files:* `src/server/main.ts`, `tui/cmd/amux/main.go`
+*Files:* `src/server/main.ts`, `tui/cmd/niti/main.go`
 
 ### EventHub: a 2000-entry replay ring plus a Set of live subscribers
 
@@ -755,7 +755,7 @@ Project mode fetches `GET /graph` and colours nodes by top-level directory; Mode
 
 ### The theme system is one JSON file shared by three surfaces
 
-`GET /palettes.json` (server.ts:89-92) streams `tui/internal/theme/palettes.json` — the same file Go embeds via `//go:embed` (theme.go:34). `theme.js` fetches it, maps palette keys onto CSS custom properties (`applyPalette`, lines 21-37), persists the choice in `localStorage['amux-theme']`, POSTs `/theme` so other clients converge, and opens its own dedicated `EventSource` with `from=Number.MAX_SAFE_INTEGER` (line 86) so it only ever sees live `{kind:"theme"}` events and never a replay. Server-side, `POST /theme` mutates the closure variable `currentTheme` (so `/session` reflects it), calls `setTheme()` to persist to agents.yaml, and publishes a `theme` event (server.ts:248-255).
+`GET /palettes.json` (server.ts:89-92) streams `tui/internal/theme/palettes.json` — the same file Go embeds via `//go:embed` (theme.go:34). `theme.js` fetches it, maps palette keys onto CSS custom properties (`applyPalette`, lines 21-37), persists the choice in `localStorage['niti-theme']`, POSTs `/theme` so other clients converge, and opens its own dedicated `EventSource` with `from=Number.MAX_SAFE_INTEGER` (line 86) so it only ever sees live `{kind:"theme"}` events and never a replay. Server-side, `POST /theme` mutates the closure variable `currentTheme` (so `/session` reflects it), calls `setTheme()` to persist to agents.yaml, and publishes a `theme` event (server.ts:248-255).
 
 *Files:* `web/theme.js`, `src/server/server.ts`
 
@@ -773,7 +773,7 @@ server.test.ts drives a real `startServer` over real HTTP with a scripted no-net
 
 ### Graph data is capped at 400 files, which bounds every scale question about graph.js
 
-`buildFileGraph(root, maxFiles = 400)` (src/graph/filegraph.ts:18) walks the tree with `readdirSync`, skips a fixed IGNORE set (node_modules, .git, dist, .amux, old-tech, …), reads each file with `readFileSync` and regex-extracts import specifiers. On this repo it returns 109 nodes / 217 edges in 78ms cold, 8ms warm. So graph.js's Barnes–Hut, viewport culling, `still()` idle-detector and batched Path2D edges are all operating on ≤400 nodes — comfortably over-engineered for the data the server can actually produce, and never stressed by it.
+`buildFileGraph(root, maxFiles = 400)` (src/graph/filegraph.ts:18) walks the tree with `readdirSync`, skips a fixed IGNORE set (node_modules, .git, dist, .niti, old-tech, …), reads each file with `readFileSync` and regex-extracts import specifiers. On this repo it returns 109 nodes / 217 edges in 78ms cold, 8ms warm. So graph.js's Barnes–Hut, viewport culling, `still()` idle-detector and batched Path2D edges are all operating on ≤400 nodes — comfortably over-engineered for the data the server can actually produce, and never stressed by it.
 
 *Files:* `src/graph/filegraph.ts`, `web/graph.js`
 
@@ -808,13 +808,13 @@ server.test.ts drives a real `startServer` over real HTTP with a scripted no-net
 
 ### Two-tier persistence: JSON task board + SQLite conversation store
 
-State is split deliberately. `src/session.ts:7` defines `const DEFAULT = ".amux/session.json"` and `saveTasks`/`loadTasks` (lines 11-20) round-trip the whole task board as `JSON.stringify({ tasks }, null, 2)`. Conversation history lives in SQLite instead — the header comment at `src/session.ts:9-10` states the reason: "The task board stays JSON (small, human-readable, hand-editable); conversation history lives in SQLite (store/), because it's large, append-heavy, and queried by session rather than read whole." `saveTasks` is called from exactly one production site, `src/engine.ts:206`, after a run session; `loadTasks` from `src/cli.ts:144` (only on `resume`), `src/server/main.ts:52` (on every core boot) and `src/commands/registry.ts:245` (`saveTasks([])` to clear the board).
+State is split deliberately. `src/session.ts:7` defines `const DEFAULT = ".niti/session.json"` and `saveTasks`/`loadTasks` (lines 11-20) round-trip the whole task board as `JSON.stringify({ tasks }, null, 2)`. Conversation history lives in SQLite instead — the header comment at `src/session.ts:9-10` states the reason: "The task board stays JSON (small, human-readable, hand-editable); conversation history lives in SQLite (store/), because it's large, append-heavy, and queried by session rather than read whole." `saveTasks` is called from exactly one production site, `src/engine.ts:206`, after a run session; `loadTasks` from `src/cli.ts:144` (only on `resume`), `src/server/main.ts:52` (on every core boot) and `src/commands/registry.ts:245` (`saveTasks([])` to clear the board).
 
 *Files:* `src/session.ts`, `src/engine.ts`, `src/server/main.ts`
 
 ### SQLite schema: sessions → messages → parts, plus checkpoints and bus_messages
 
-`src/store/db.ts` holds one `SCHEMA` template literal (lines 14-82) executed by `openDb` (line 90). Five tables: `sessions` (id, agent_id, task_id, parent_session_id self-FK, kind, provider, model, status, created_at, updated_at, time_archived), `messages` (per-session, `seq`-ordered, four token counters), `parts` (message decomposed into text/tool_call/tool_result/raw/file_ref, `content` a JSON string), `checkpoints` (one row per file mutation holding the content BEFORE the write; NULL means the file did not exist), and `bus_messages` (durable trail of the agent-to-agent channel). Five indexes: `sessions_task`, `sessions_parent`, `messages_session(session_id, seq)`, `parts_message(message_id, seq)`, `checkpoints_session(session_id, id)`, `bus_messages_session`. I dumped the live `.amux/amux.db` and the on-disk schema matches `SCHEMA` exactly; it currently holds 38 sessions / 85 messages / 109 parts / 0 checkpoints / 1 bus message.
+`src/store/db.ts` holds one `SCHEMA` template literal (lines 14-82) executed by `openDb` (line 90). Five tables: `sessions` (id, agent_id, task_id, parent_session_id self-FK, kind, provider, model, status, created_at, updated_at, time_archived), `messages` (per-session, `seq`-ordered, four token counters), `parts` (message decomposed into text/tool_call/tool_result/raw/file_ref, `content` a JSON string), `checkpoints` (one row per file mutation holding the content BEFORE the write; NULL means the file did not exist), and `bus_messages` (durable trail of the agent-to-agent channel). Five indexes: `sessions_task`, `sessions_parent`, `messages_session(session_id, seq)`, `parts_message(message_id, seq)`, `checkpoints_session(session_id, id)`, `bus_messages_session`. I dumped the live `.niti/niti.db` and the on-disk schema matches `SCHEMA` exactly; it currently holds 38 sessions / 85 messages / 109 parts / 0 checkpoints / 1 bus message.
 
 *Files:* `src/store/db.ts`
 
@@ -844,7 +844,7 @@ State is split deliberately. `src/session.ts:7` defines `const DEFAULT = ".amux/
 
 ### Config is six independent readers over one YAML file, all cwd-relative
 
-`src/config/config.ts` exports `loadAgents`, `loadOptions`, `loadInstructions`, `loadPermissions`, `loadLspServers`, `loadMcpServers`, `saveAgents`, `setTheme` — each with `path = ".amux/agents.yaml"` as its default and each performing its own `readFileSync` + `parse`. `buildEngine` (`cli.ts:164-188`) and `serveMain` (`server/main.ts:21-57`) therefore read and YAML-parse the same file five times per boot. Severity of malformation differs by reader on purpose: `loadAgents` throws on anything missing (`validate`, :140-168), while `loadLspServers` (:79-89) and `loadMcpServers` (:92-101) `flatMap` malformed entries away — the comment at :77-78 states "a malformed entry is skipped rather than blocking startup, exactly like mcpServers above".
+`src/config/config.ts` exports `loadAgents`, `loadOptions`, `loadInstructions`, `loadPermissions`, `loadLspServers`, `loadMcpServers`, `saveAgents`, `setTheme` — each with `path = ".niti/agents.yaml"` as its default and each performing its own `readFileSync` + `parse`. `buildEngine` (`cli.ts:164-188`) and `serveMain` (`server/main.ts:21-57`) therefore read and YAML-parse the same file five times per boot. Severity of malformation differs by reader on purpose: `loadAgents` throws on anything missing (`validate`, :140-168), while `loadLspServers` (:79-89) and `loadMcpServers` (:92-101) `flatMap` malformed entries away — the comment at :77-78 states "a malformed entry is skipped rather than blocking startup, exactly like mcpServers above".
 
 *Files:* `src/config/config.ts`, `src/cli.ts`, `src/server/main.ts`
 
@@ -862,13 +862,13 @@ State is split deliberately. `src/session.ts:7` defines `const DEFAULT = ".amux/
 
 ### Global vs project config: only credentials are global
 
-There is no global `agents.yaml`, no XDG config dir, and no ancestor search for a project root. The only home-directory path in `src/` is `src/auth/auth-store.ts:16`: `process.env.AMUX_AUTH_FILE || join(homedir(), ".config", "amux", "auth.json")`. Everything else — agents, options, permissions, lsp, mcpServers, skills (`.amux/skills`), commands (`.amux/commands`), the DB (`.amux/amux.db`), the task board (`.amux/session.json`), reports (`.amux/reports/`), worktrees (`.amux/worktrees/<id>`) — is a bare relative path resolved against `process.cwd()`. `Engine.root` is likewise `opts.root ?? process.cwd()` (`engine.ts:73`).
+There is no global `agents.yaml`, no XDG config dir, and no ancestor search for a project root. The only home-directory path in `src/` is `src/auth/auth-store.ts:16`: `process.env.NITI_AUTH_FILE || join(homedir(), ".config", "niti", "auth.json")`. Everything else — agents, options, permissions, lsp, mcpServers, skills (`.niti/skills`), commands (`.niti/commands`), the DB (`.niti/niti.db`), the task board (`.niti/session.json`), reports (`.niti/reports/`), worktrees (`.niti/worktrees/<id>`) — is a bare relative path resolved against `process.cwd()`. `Engine.root` is likewise `opts.root ?? process.cwd()` (`engine.ts:73`).
 
 *Files:* `src/auth/auth-store.ts`, `src/store/db.ts`, `src/engine.ts`
 
 ### MCP: namespaced tool routing over stdio child processes
 
-`McpManager.connect` (`src/mcp/mcp.ts:34-54`) loops servers serially, builds an SDK `Client({name:"amux", version:"0.0.1"})` per server over `StdioClientTransport`, lists tools, and registers each as `mcp__<server>__<tool>` in both a `routes` map (namespaced name → {server, tool}) and a flat `specs: ToolSpec[]`. A connect failure is caught and handed to the optional `onError` callback — callers pass a `console.error` (`cli.ts:173`, `server/main.ts:33`), so an unavailable MCP server is never fatal. `call()` (:72-77) looks up the route and flattens the result through `extractText` (:20-25), which maps `{type:"text"}` blocks to their text and `JSON.stringify`s anything else. The `McpTools` interface (:12-17) exists so `Agent` depends on the surface, not the class, and `servers?()` is marked optional "so test fakes needn't implement it".
+`McpManager.connect` (`src/mcp/mcp.ts:34-54`) loops servers serially, builds an SDK `Client({name:"niti", version:"0.0.1"})` per server over `StdioClientTransport`, lists tools, and registers each as `mcp__<server>__<tool>` in both a `routes` map (namespaced name → {server, tool}) and a flat `specs: ToolSpec[]`. A connect failure is caught and handed to the optional `onError` callback — callers pass a `console.error` (`cli.ts:173`, `server/main.ts:33`), so an unavailable MCP server is never fatal. `call()` (:72-77) looks up the route and flattens the result through `extractText` (:20-25), which maps `{type:"text"}` blocks to their text and `JSON.stringify`s anything else. The `McpTools` interface (:12-17) exists so `Agent` depends on the surface, not the class, and `servers?()` is marked optional "so test fakes needn't implement it".
 
 *Files:* `src/mcp/mcp.ts`
 
@@ -886,7 +886,7 @@ There is no global `agents.yaml`, no XDG config dir, and no ancestor search for 
 
 ### File graph: regex import scanning, three language families, no AST
 
-`buildFileGraph(root, maxFiles = 400)` (`src/graph/filegraph.ts:17-42`) walks the tree collecting files whose extension is in `SRC_EXT` (`.ts .tsx .js .jsx .mjs .cjs .py .go`), skipping any dot-entry and any directory in `IGNORE` (`node_modules .git dist build .amux vendor .next out target coverage old-tech`), then regex-scans each file for import specifiers. JS/TS uses one combined regex (:82) covering static imports, re-exports, dynamic `import()` and `require()`; bare specifiers are dropped as external (`resolveJs`, :91-99) after trying seven extension candidates plus `index` fallbacks. Python handles relative dots in `resolvePy` (:101-113). Go maps a package import to the first `.go` file in the matching directory (`resolveGo`, :132-140). `normalizeRel` (:158-166) is a hand-rolled `..`/`.` collapser, kept because `path.resolve` "would anchor to an absolute cwd we don't want here". Consumed synchronously by `GET /graph` at `server/server.ts:209`. Measured on this repo: 109 nodes, 217 edges, 13 ms.
+`buildFileGraph(root, maxFiles = 400)` (`src/graph/filegraph.ts:17-42`) walks the tree collecting files whose extension is in `SRC_EXT` (`.ts .tsx .js .jsx .mjs .cjs .py .go`), skipping any dot-entry and any directory in `IGNORE` (`node_modules .git dist build .niti vendor .next out target coverage old-tech`), then regex-scans each file for import specifiers. JS/TS uses one combined regex (:82) covering static imports, re-exports, dynamic `import()` and `require()`; bare specifiers are dropped as external (`resolveJs`, :91-99) after trying seven extension candidates plus `index` fallbacks. Python handles relative dots in `resolvePy` (:101-113). Go maps a package import to the first `.go` file in the matching directory (`resolveGo`, :132-140). `normalizeRel` (:158-166) is a hand-rolled `..`/`.` collapser, kept because `path.resolve` "would anchor to an absolute cwd we don't want here". Consumed synchronously by `GET /graph` at `server/server.ts:209`. Measured on this repo: 109 nodes, 217 edges, 13 ms.
 
 *Files:* `src/graph/filegraph.ts`, `src/server/server.ts`
 
@@ -898,7 +898,7 @@ There is no global `agents.yaml`, no XDG config dir, and no ancestor search for 
 
 ### Skills and user commands reuse the same frontmatter shape as config
 
-`loadSkills` (`src/skills/skills.ts:13-30`) reads `.amux/skills/<name>/SKILL.md`, matches `/^---\n([\s\S]*?)\n---/` and YAML-parses the frontmatter for `name`/`description`, falling back to the directory name. `skillsPrompt` (:32-36) renders one line per skill into the system prompt with the file path so the agent can `read_file` the full text on demand. `loadCommands` (`src/commands/registry.ts:272-294`) uses a near-identical parser for `.amux/commands/<name>.md`, substituting `$ARGUMENTS` into the body — the comment at :268-271 says this is "deliberately the same shape as .amux/skills/<name>/SKILL.md rather than a second config format to learn". User commands are loaded last and win name clashes over built-ins (`registry.ts:298-300`).
+`loadSkills` (`src/skills/skills.ts:13-30`) reads `.niti/skills/<name>/SKILL.md`, matches `/^---\n([\s\S]*?)\n---/` and YAML-parses the frontmatter for `name`/`description`, falling back to the directory name. `skillsPrompt` (:32-36) renders one line per skill into the system prompt with the file path so the agent can `read_file` the full text on demand. `loadCommands` (`src/commands/registry.ts:272-294`) uses a near-identical parser for `.niti/commands/<name>.md`, substituting `$ARGUMENTS` into the body — the comment at :268-271 says this is "deliberately the same shape as .niti/skills/<name>/SKILL.md rather than a second config format to learn". User commands are loaded last and win name clashes over built-ins (`registry.ts:298-300`).
 
 *Files:* `src/skills/skills.ts`, `src/commands/registry.ts`
 
@@ -909,13 +909,13 @@ There is no global `agents.yaml`, no XDG config dir, and no ancestor search for 
 - `src/store/session-store.ts:6` — `SessionKind` includes `"respond"` (session-store.ts:6, and the schema comment at db.ts:20) but no code path ever creates one — grep for `kind: "` in src/ shows only `"task"` (agent.ts:183), `"ask"` (agent.ts:260) and `"fork"` (agent.ts:272). Same for the `"file_ref"` PartType (session-store.ts:8): `toParts` never emits it.
 - `src/store/session-store.ts:120` — `appendMessage` computes the next `seq` with `SELECT COALESCE(MAX(seq),-1)+1` at line 120, OUTSIDE the transaction that starts at line 121. Harmless in-process (Bun is single-threaded and the whole function is synchronous), but there is no `UNIQUE(session_id, seq)` constraint on `messages`, so two processes on the same DB can silently write duplicate seq values and `loadTurns`'s `ORDER BY seq` becomes ambiguous.
 - `src/store/session-store.ts:164` — `listSessions` orders only by `created_at` (line 164), an integer millisecond timestamp. Two sessions created in the same millisecond (entirely plausible when the orchestrator fans out to several agents at once) come back in unspecified order, which makes `resumeConversation`'s flattened transcript non-deterministic.
-- `src/store/db.ts:90` — `PRAGMA user_version` on the live `.amux/amux.db` reads 0 — it is never set. There is no version marker of any kind, so even a future migration runner would have nothing to branch on for databases created before it existed.
+- `src/store/db.ts:90` — `PRAGMA user_version` on the live `.niti/niti.db` reads 0 — it is never set. There is no version marker of any kind, so even a future migration runner would have nothing to branch on for databases created before it existed.
 - `src/store/session-store.ts:190` — `stats().perModel` reports `msgs: COUNT(*)` over all messages joined to a session, which counts user and tool turns too, not just assistant replies. The /stats dashboard label ('msgs') is accurate but the number is roughly 3x what a reader expecting 'model responses' would assume.
-- `.amux/amux.db-wal` — The live database is 118 KB while `.amux/amux.db-wal` is 1.96 MB (mtimes: db Aug 2 18:53, WAL Aug 3 02:13). The main file has not been checkpointed in a day of use because nothing ever calls `db.close()` and the WAL has not yet crossed SQLite's 1000-page auto-checkpoint threshold.
+- `.niti/niti.db-wal` — The live database is 118 KB while `.niti/niti.db-wal` is 1.96 MB (mtimes: db Aug 2 18:53, WAL Aug 3 02:13). The main file has not been checkpointed in a day of use because nothing ever calls `db.close()` and the WAL has not yet crossed SQLite's 1000-page auto-checkpoint threshold.
 - `src/config/config.ts:11` — `loadAgents` (config.ts:11-12) does no `existsSync` guard and calls `readFileSync` directly, unlike every other loader in the file. It relies entirely on `surfaceStartupError`'s ENOENT regex to turn the raw Node error into a user-facing message — and `serveMain` (server/main.ts:24) has to guard with its own `existsSync` before calling it.
 - `src/config/config.ts:21` — Duplicate agent ids are accepted silently. `loadAgents` on a file with two agents both `id: a` returns `["a", "a"]` (verified by running it). `Engine.byId` is a Map, so the second agent silently shadows the first and one configured teammate never runs.
-- `src/skills/skills.ts:22` — `loadSkills` calls `parse(m[1]!)` on SKILL.md frontmatter with no try/catch (skills.ts:22); `loadCommands` does the same at registry.ts:279. One malformed `.amux/skills/foo/SKILL.md` throws a raw YAMLParseError out of `buildEngine`/`serveMain` and takes down boot — the same class of failure the config loaders were carefully written to avoid.
-- `src/session.ts:18` — `loadTasks` (session.ts:18) calls `JSON.parse` with no try/catch, and `saveTasks` (:13) writes with a plain `writeFileSync` — no temp-file-plus-rename. Since the Go TUI terminates the core with `cmd.Process.Kill()` (SIGKILL, tui/cmd/amux/main.go:39), a kill landing inside that write leaves a truncated session.json, and the next core boot dies with a raw SyntaxError at server/main.ts:52 — before the handshake, so the TUI can only report "core did not hand shake".
+- `src/skills/skills.ts:22` — `loadSkills` calls `parse(m[1]!)` on SKILL.md frontmatter with no try/catch (skills.ts:22); `loadCommands` does the same at registry.ts:279. One malformed `.niti/skills/foo/SKILL.md` throws a raw YAMLParseError out of `buildEngine`/`serveMain` and takes down boot — the same class of failure the config loaders were carefully written to avoid.
+- `src/session.ts:18` — `loadTasks` (session.ts:18) calls `JSON.parse` with no try/catch, and `saveTasks` (:13) writes with a plain `writeFileSync` — no temp-file-plus-rename. Since the Go TUI terminates the core with `cmd.Process.Kill()` (SIGKILL, tui/cmd/niti/main.go:39), a kill landing inside that write leaves a truncated session.json, and the next core boot dies with a raw SyntaxError at server/main.ts:52 — before the handshake, so the TUI can only report "core did not hand shake".
 - `src/graph/filegraph.ts:54` — `walk` skips every entry whose name starts with `.` via `if (e.name.startsWith(".") && e.name !== ".")` — the `&& e.name !== "."` clause is dead, `readdirSync` never returns `.` or `..`. Also means `.github/`, `.claude/` and dotfile-named sources are invisible to the graph regardless of IGNORE.
 - `src/graph/filegraph.ts:136` — `resolveGo` (filegraph.ts:136-138) does a linear scan of the entire file `Set` for every Go import, checking `dirname(id) === dir`. That is O(imports × files) per Go file — invisible at 400 files but the only quadratic path in the scanner.
 - `src/lsp/client.ts:184` — `LspClient.send` (client.ts:184-188) writes to `this.proc?.stdin` with no `'error'` listener registered on the stdin stream anywhere in the file. If the language server dies between the `exit` event dispatch and a queued `notify`, the EPIPE surfaces as an unhandled stream error rather than being folded into the existing `die()` path.
@@ -923,10 +923,10 @@ There is no global `agents.yaml`, no XDG config dir, and no ancestor search for 
 - `src/lsp/client.ts:116` — `waitForDiagnostics` (client.ts:152-164) resolves on timeout and `diagnostics()` then returns `this.diagnosticsByUri.get(uri) ?? []` — an empty array. The tool output is indistinguishable from a genuinely clean file, so a slow server makes the agent believe its code compiles.
 - `src/mcp/mcp.ts:35` — `McpManager.connect` awaits each server serially in a `for` loop (mcp.ts:35). With three MCP servers each taking ~1s to hand shake, boot is ~3s of dead time before the handshake line the Go TUI is blocking on. `Promise.allSettled` over the same body would be the same code shape.
 - `src/mcp/mcp.ts:75` — `McpManager.call` uses a non-null assertion: `this.clients.get(ref.server)!.callTool(...)` (mcp.ts:75). The route map and the client map are populated together so it holds today, but nothing enforces it structurally.
-- `src/cli.ts:165` — `buildEngine` reads and YAML-parses `.amux/agents.yaml` five separate times per boot (loadAgents, loadOptions, loadMcpServers, loadPermissions, loadLspServers at cli.ts:165-183). Beyond the wasted work, an edit landing mid-boot yields an engine built from two different versions of the file.
-- `src/config/config.ts:18` — `AmuxOptions.maxAgents` is documented as a knob (config.ts:33) but is only enforced inside `loadAgents` (:18-20), never re-checked when the dashboard POSTs a new roster to `/agents` — so the cap can be exceeded by writing the file through the API and only bites on the next boot.
-- `.gitignore` — `.amux/agents.yaml` is NOT in .gitignore (which lists `.amux/session.json`, `.amux/amux.db*`, `.amux/reports/`), so the agent roster is committed — visible in git status as a modified file. Fine for a project-shared team, but `baseURL` for a self-hosted endpoint also lands in the repo.
-- `.amux/agents.yaml:7` — The current `.amux/agents.yaml` is a single-agent roster (`id: a`, `provider: google`, `model: gemini-flash-latest`, `role: A`, `lead: true`) whose systemPrompt reads "You are the A. A Implement your assigned tasks directly" — the `${role}` template from `runInit` (cli.ts:~254) with a one-letter role produces that stutter. Ships as the repo's example config.
+- `src/cli.ts:165` — `buildEngine` reads and YAML-parses `.niti/agents.yaml` five separate times per boot (loadAgents, loadOptions, loadMcpServers, loadPermissions, loadLspServers at cli.ts:165-183). Beyond the wasted work, an edit landing mid-boot yields an engine built from two different versions of the file.
+- `src/config/config.ts:18` — `NitiOptions.maxAgents` is documented as a knob (config.ts:33) but is only enforced inside `loadAgents` (:18-20), never re-checked when the dashboard POSTs a new roster to `/agents` — so the cap can be exceeded by writing the file through the API and only bites on the next boot.
+- `.gitignore` — `.niti/agents.yaml` is NOT in .gitignore (which lists `.niti/session.json`, `.niti/niti.db*`, `.niti/reports/`), so the agent roster is committed — visible in git status as a modified file. Fine for a project-shared team, but `baseURL` for a self-hosted endpoint also lands in the repo.
+- `.niti/agents.yaml:7` — The current `.niti/agents.yaml` is a single-agent roster (`id: a`, `provider: google`, `model: gemini-flash-latest`, `role: A`, `lead: true`) whose systemPrompt reads "You are the A. A Implement your assigned tasks directly" — the `${role}` template from `runInit` (cli.ts:~254) with a one-letter role produces that stutter. Ships as the repo's example config.
 
 
 ---
@@ -935,21 +935,21 @@ There is no global `agents.yaml`, no XDG config dir, and no ancestor search for 
 
 ### Two-process architecture: Go TUI parent, Bun core child, HTTP+SSE between them
 
-`main()` in tui/cmd/amux/main.go:156 calls `startCore()` (line 45), which either attaches to an already-running server via `AMUX_SERVER_URL`/`AMUX_SERVER_TOKEN` (line 46-48) or spawns `exec.Command(bunBin, "run", entry)` where `bunBin`=`AMUX_BUN` or "bun" and `entry`=`AMUX_CORE_ENTRY` or "src/server/main.ts" (lines 49-51). It then blocks on `r.ReadString('\n')` (line 61) reading one line of JSON from the child's stdout, unmarshals it into `handshake{AmuxServer{URL,Token}}` (line 25-30), and builds `api.New(url, token)`. The core side is src/server/main.ts:56, `process.stdout.write(JSON.stringify({amuxServer:{url,token}})+"\n")`. There is no fixed port: src/server/server.ts:128 uses `port: opts.port ?? 0` (ephemeral) and returns `http://127.0.0.1:${port}` at line 385, so the handshake is the only way the TUI learns where to connect. A goroutine at main.go:71-81 drains any further child stdout into stderr so the pipe can never fill and block the core.
+`main()` in tui/cmd/niti/main.go:156 calls `startCore()` (line 45), which either attaches to an already-running server via `NITI_SERVER_URL`/`NITI_SERVER_TOKEN` (line 46-48) or spawns `exec.Command(bunBin, "run", entry)` where `bunBin`=`NITI_BUN` or "bun" and `entry`=`NITI_CORE_ENTRY` or "src/server/main.ts" (lines 49-51). It then blocks on `r.ReadString('\n')` (line 61) reading one line of JSON from the child's stdout, unmarshals it into `handshake{NitiServer{URL,Token}}` (line 25-30), and builds `api.New(url, token)`. The core side is src/server/main.ts:56, `process.stdout.write(JSON.stringify({nitiServer:{url,token}})+"\n")`. There is no fixed port: src/server/server.ts:128 uses `port: opts.port ?? 0` (ephemeral) and returns `http://127.0.0.1:${port}` at line 385, so the handshake is the only way the TUI learns where to connect. A goroutine at main.go:71-81 drains any further child stdout into stderr so the pipe can never fill and block the core.
 
-*Files:* `tui/cmd/amux/main.go`, `src/server/main.ts`, `src/server/server.ts`
+*Files:* `tui/cmd/niti/main.go`, `src/server/main.ts`, `src/server/server.ts`
 
 ### Launch sequence: core → picker → core restart → session, with two separate Bubbletea programs
 
-`main()` runs two `tea.NewProgram(...).Run()` calls in sequence, both with `screenOpts()` (main.go:143-149 = `tea.WithAltScreen()` plus `tea.WithMouseCellMotion()` unless `AMUX_NO_MOUSE` is set). First `wizard.NewPicker(c.client)` (line 172); if the returned model isn't a `wizard.Picker` with `Completed==true`, `main` simply `return`s (lines 176-178) and amux exits. On success the picker has already POSTed the roster to `/agents`, so main.go:180-183 kills the core and re-spawns it to pick up the rewritten `.amux/agents.yaml` (the server explicitly refuses to hot-reload — src/server/server.ts:245 returns `note: "saved to .amux/agents.yaml — restart the session to apply"`). Then `sess.Theme` from `/session` is applied via `theme.Use` (line 189), an SSE pump goroutine is started, and `session.New(...)` runs as the second program.
+`main()` runs two `tea.NewProgram(...).Run()` calls in sequence, both with `screenOpts()` (main.go:143-149 = `tea.WithAltScreen()` plus `tea.WithMouseCellMotion()` unless `NITI_NO_MOUSE` is set). First `wizard.NewPicker(c.client)` (line 172); if the returned model isn't a `wizard.Picker` with `Completed==true`, `main` simply `return`s (lines 176-178) and niti exits. On success the picker has already POSTed the roster to `/agents`, so main.go:180-183 kills the core and re-spawns it to pick up the rewritten `.niti/agents.yaml` (the server explicitly refuses to hot-reload — src/server/server.ts:245 returns `note: "saved to .niti/agents.yaml — restart the session to apply"`). Then `sess.Theme` from `/session` is applied via `theme.Use` (line 189), an SSE pump goroutine is started, and `session.New(...)` runs as the second program.
 
-*Files:* `tui/cmd/amux/main.go`, `src/server/server.ts`
+*Files:* `tui/cmd/niti/main.go`, `src/server/server.ts`
 
 ### SSE reconnect state machine with seq-based replay
 
 `streamWithReconnect` (main.go:90-129) owns an outer `events chan api.Event` that is never closed. Each attempt allocates a fresh buffered `tap` channel plus a forwarder goroutine that records `fromSeq = e.Seq` as it copies events across, so a reconnect issues `GET /events?from=<lastSeq>` and the server replays only the gap. `api.Client.StreamEvents` (client.go:392-442) distinguishes deliberate shutdown (`ctx.Err()` → returns `ctx.Err()`) from anything else (`ErrStreamDisconnected`, client.go:384), including a clean server-side close, so the loop knows whether to retry. Backoff doubles from 1s to a 15s cap (lines 92-93, 125-127). The SSE parser is a `bufio.Scanner` with a deliberate 32MB line cap (client.go:410-414, carrying a `ponytail:` comment naming the ceiling), accumulating `data:` lines into a `strings.Builder` and flushing on a blank line.
 
-*Files:* `tui/cmd/amux/main.go`, `tui/internal/api/client.go`
+*Files:* `tui/cmd/niti/main.go`, `tui/internal/api/client.go`
 
 ### Session model: one Elm-style Model, event application separated from rendering
 
@@ -1019,7 +1019,7 @@ view.go:144-146 defines `txt(fg,bg)` as the only styled-text constructor, with t
 
 ### Test posture: strong on the session/wizard render invariants, absent on api/ui/main
 
-`go test ./...` passes; `go build ./...` and `go mod tidy -diff` are both clean on Go 1.26.5. The session and wizard packages carry real invariant tests — the view must exactly fill the terminal and never exceed it at 40x10 through 200x60 (session_test.go:68-96, 341-364; picker_test.go:216-235), the sidebar must be dropped rather than squeezed (99-112), popups must hug their content (popup_test.go:23-42), the overlay must not blank the sidebar (46-72), esc must revert a live theme preview (themepicker_test.go:14-36), and batch preview must be read-only (diffview_test.go:34-60). But `internal/api`, `internal/ui` and `cmd/amux` have zero test files, which leaves `ui.List`'s filter/scroll math, `ui.Overlay`'s row surgery, `api.StreamEvents`' SSE parser and `streamWithReconnect`'s backoff/seq-replay loop — the four trickiest pieces of logic in the module — covered only indirectly or not at all.
+`go test ./...` passes; `go build ./...` and `go mod tidy -diff` are both clean on Go 1.26.5. The session and wizard packages carry real invariant tests — the view must exactly fill the terminal and never exceed it at 40x10 through 200x60 (session_test.go:68-96, 341-364; picker_test.go:216-235), the sidebar must be dropped rather than squeezed (99-112), popups must hug their content (popup_test.go:23-42), the overlay must not blank the sidebar (46-72), esc must revert a live theme preview (themepicker_test.go:14-36), and batch preview must be read-only (diffview_test.go:34-60). But `internal/api`, `internal/ui` and `cmd/niti` have zero test files, which leaves `ui.List`'s filter/scroll math, `ui.Overlay`'s row surgery, `api.StreamEvents`' SSE parser and `streamWithReconnect`'s backoff/seq-replay loop — the four trickiest pieces of logic in the module — covered only indirectly or not at all.
 
 *Files:* `tui/internal/session/session_test.go`, `tui/internal/wizard/picker_test.go`, `tui/go.mod`
 
@@ -1039,7 +1039,7 @@ view.go:144-146 defines `txt(fg,bg)` as the only styled-text constructor, with t
 - `tui/internal/session/carousel.go:55` — `fetchSwitchableModels` fans out `client.Models(provider)` serially, one blocking 30s-timeout HTTP call per credentialed provider (carousel.go:54-62). With eight providers stored the ctrl+p carousel can sit on "loading models…" for minutes with no cancel path and no progress. The calls are independent and could run concurrently.
 - `tui/internal/api/client.go:177` — `api.Client.do` uses a single 30s `http.Client.Timeout` for everything including `POST /commands/<name>`. A slash command that legitimately takes longer (e.g. an export over a large history) will fail client-side while the server keeps running it, and the user sees "/export failed: context deadline exceeded".
 - `tui/internal/session/session.go:492` — `/graph` and `/dashboard` put the bearer token in the URL query string handed to the OS browser, so it lands in browser history and in any referrer. The server's own dashboard does the same, so this is a consistent design choice rather than a TUI slip, but it's worth a conscious decision before publish.
-- `tui/cmd/amux/main.go:109` — `streamWithReconnect` reads `fromSeq` as the argument to `client.StreamEvents` at line 109 while the forwarder goroutine spawned at line 97 writes it. In practice ordering saves it — nothing can be sent on `tap` until `StreamEvents` starts, and `<-forwardDone` at line 111 provides a happens-before edge for the next iteration — but there is no explicit synchronisation, so this is fragile to any future change that pre-fills `tap`.
+- `tui/cmd/niti/main.go:109` — `streamWithReconnect` reads `fromSeq` as the argument to `client.StreamEvents` at line 109 while the forwarder goroutine spawned at line 97 writes it. In practice ordering saves it — nothing can be sent on `tap` until `StreamEvents` starts, and `<-forwardDone` at line 111 provides a happens-before edge for the next iteration — but there is no explicit synchronisation, so this is fragile to any future change that pre-fills `tap`.
 - `tui/internal/session/session.go:199` — `m.input.Width = msg.Width - 4` goes negative on a terminal narrower than 4 columns. I tested `View()` down to 1x1 and it does not panic (bubbles clamps internally), but the assignment is unguarded and every other size computation in this codebase is wrapped in `max`/`clamp`.
 - `tui/internal/session/view.go:85` — `agentBlock` appends `st.pending` to a copy of `st.log` on every frame (`append(append([]string{}, body...), st.pending)`) — a fresh 60-element slice allocation per agent per frame while any agent is mid-stream, which is exactly when frames are most frequent.
 - `tui/internal/session/stats.go:46` — `heatmap`'s week count is `clamp(w-labelW-1, 8, 53)` with a floor of 8, so on a terminal narrower than ~13 columns the grid is wider than the pane. The settings overlay has `Width(w).Height(h).MaxHeight(h)` but no `MaxWidth(w)` (settings.go:111), so nothing clips it there. I measured no actual overflow at 20x20 and above, but the floor + missing MaxWidth combination is unguarded rather than proven safe.
@@ -1055,13 +1055,13 @@ view.go:144-146 defines `txt(fg,bg)` as the only styled-text constructor, with t
 
 ### There is no shippable artifact today: the package declares one bin, and it points at raw TypeScript
 
-package.json lines 7-9 declare exactly one bin entry: `"amux-core": "./src/cli.ts"`. src/cli.ts line 1 is `#!/usr/bin/env bun`. I installed the packed tarball into a throwaway project (`npm i /tmp/.../amux-0.0.1.tgz`, exit 0, 148 packages) and npm created `node_modules/.bin/amux-core -> ../amux/src/cli.ts` — a symlink straight to the .ts source. With bun on PATH it actually runs (`amux: no agents configured. Run 'amux-core init' …`). With `env PATH=/usr/bin:/bin` it produces `env: bun: No such file or directory`. So the bin works only as a bun-shebang script; Node never enters the picture. There is no build step between `src/` and the published bin, no `prepublishOnly`, no `dist/`.
+package.json lines 7-9 declare exactly one bin entry: `"niti-core": "./src/cli.ts"`. src/cli.ts line 1 is `#!/usr/bin/env bun`. I installed the packed tarball into a throwaway project (`npm i /tmp/.../niti-0.0.1.tgz`, exit 0, 148 packages) and npm created `node_modules/.bin/niti-core -> ../niti/src/cli.ts` — a symlink straight to the .ts source. With bun on PATH it actually runs (`niti: no agents configured. Run 'niti-core init' …`). With `env PATH=/usr/bin:/bin` it produces `env: bun: No such file or directory`. So the bin works only as a bun-shebang script; Node never enters the picture. There is no build step between `src/` and the published bin, no `prepublishOnly`, no `dist/`.
 
 *Files:* `package.json`, `src/cli.ts`
 
 ### The 'compiled single binary' distribution path is architecturally dead, not merely stale
 
-`bun run build` = `bun build --compile ./src/cli.ts --outfile amux-core` (package.json:13). I ran a fresh compile (bundle 704 modules, 290ms, exit 0, 64,652,432 bytes) and it crashes identically to the committed `./amux-core` — from the repo root and from an empty foreign dir alike, exit 1: `error: Failed to load native module: pty.node, checked: build/Release, build/Debug, prebuilds/darwin-arm64: ResolveMessage: Cannot find module './prebuilds/darwin-arm64//pty.node' from 'node_modules/@napi-rs/keyring/index.js'` at `/$bunfs/root/amux-core:34547`. I isolated the cause with two one-import probe binaries: a `@napi-rs/keyring`-only compile runs clean (`keyring ok function`, exit 0); a `node-pty`-only compile dies with the same loader error (exit 1). node-pty's `.node` addon is the sole blocker to `bun --compile`, and because src/cli.ts:27 imports `serveMain` from `./server/main.ts`, which pulls in `src/server/server.ts:4 import * as pty from "node-pty"` at module scope, *every* amux-core subcommand loads it — including `amux-core "say hi"`.
+`bun run build` = `bun build --compile ./src/cli.ts --outfile niti-core` (package.json:13). I ran a fresh compile (bundle 704 modules, 290ms, exit 0, 64,652,432 bytes) and it crashes identically to the committed `./niti-core` — from the repo root and from an empty foreign dir alike, exit 1: `error: Failed to load native module: pty.node, checked: build/Release, build/Debug, prebuilds/darwin-arm64: ResolveMessage: Cannot find module './prebuilds/darwin-arm64//pty.node' from 'node_modules/@napi-rs/keyring/index.js'` at `/$bunfs/root/niti-core:34547`. I isolated the cause with two one-import probe binaries: a `@napi-rs/keyring`-only compile runs clean (`keyring ok function`, exit 0); a `node-pty`-only compile dies with the same loader error (exit 1). node-pty's `.node` addon is the sole blocker to `bun --compile`, and because src/cli.ts:27 imports `serveMain` from `./server/main.ts`, which pulls in `src/server/server.ts:4 import * as pty from "node-pty"` at module scope, *every* niti-core subcommand loads it — including `niti-core "say hi"`.
 
 *Files:* `package.json`, `src/server/server.ts`, `src/cli.ts`
 
@@ -1073,19 +1073,19 @@ Exhaustive grep of src/ (excluding *.test.ts) for `Bun.`/`bun:` yields exactly t
 
 ### The tarball is assembled by .gitignore fallback, which inverts what should ship
 
-`npm pack --dry-run` emits `npm warn gitignore-fallback No .npmignore file found, using .gitignore for file exclusion.` There is no `files` field in package.json and no .npmignore. Result: 135 files, 268.8 kB packed / 860.6 kB unpacked. By directory: src 77 files (including every *.test.ts), tui 24 (Go source + go.mod + palettes.json + *_test.go), old-tech 13 (the dead Ink TUI, ~47 kB), web 11 (including web/*.test.ts), scripts 2, plus README.md (16.2 kB), project_context.md (21.8 kB), bun.lock (39.3 kB), LICENSE, tsconfig.json, and two dot-dirs — `.amux/agents.yaml` (the maintainer's own roster) and `.claude/settings.local.json`. Meanwhile the two things a user actually needs — `./amux` (10,874,738 B, Mach-O arm64) and `./amux-core` (64,652,432 B, Mach-O arm64) — are in .gitignore lines 2-3 and therefore excluded. The package ships the source of everything and the executable of nothing.
+`npm pack --dry-run` emits `npm warn gitignore-fallback No .npmignore file found, using .gitignore for file exclusion.` There is no `files` field in package.json and no .npmignore. Result: 135 files, 268.8 kB packed / 860.6 kB unpacked. By directory: src 77 files (including every *.test.ts), tui 24 (Go source + go.mod + palettes.json + *_test.go), old-tech 13 (the dead Ink TUI, ~47 kB), web 11 (including web/*.test.ts), scripts 2, plus README.md (16.2 kB), project_context.md (21.8 kB), bun.lock (39.3 kB), LICENSE, tsconfig.json, and two dot-dirs — `.niti/agents.yaml` (the maintainer's own roster) and `.claude/settings.local.json`. Meanwhile the two things a user actually needs — `./niti` (10,874,738 B, Mach-O arm64) and `./niti-core` (64,652,432 B, Mach-O arm64) — are in .gitignore lines 2-3 and therefore excluded. The package ships the source of everything and the executable of nothing.
 
 *Files:* `package.json`, `.gitignore`
 
 ### Two front ends, two incompatible bootstrap models, and only one of them is even a candidate for npm
 
-README.md lines 13-20 describe `amux` (Go TUI) as the primary front end and `amux-core` as what it spawns. tui/cmd/amux/main.go:49-51 is the actual coupling: `entry := envOr("AMUX_CORE_ENTRY", "src/server/main.ts")`, `bunBin := envOr("AMUX_BUN", "bun")`, `cmd := exec.Command(bunBin, "run", entry)`. It never invokes the compiled `amux-core` binary — it shells out to `bun run` on a **cwd-relative TypeScript path**. Running `amux` from /tmp/amux-probe-pkg produced exit 1 with `error: Module not found "src/server/main.ts"` then `amux: core did not hand shake: EOF` (main.go:64). The Go TUI is therefore only runnable from inside a checkout that has both bun and node_modules — it is not distributable via this npm package at all, and npm has no mechanism to ship a Go binary from a `dependencies`-only package anyway.
+README.md lines 13-20 describe `niti` (Go TUI) as the primary front end and `niti-core` as what it spawns. tui/cmd/niti/main.go:49-51 is the actual coupling: `entry := envOr("NITI_CORE_ENTRY", "src/server/main.ts")`, `bunBin := envOr("NITI_BUN", "bun")`, `cmd := exec.Command(bunBin, "run", entry)`. It never invokes the compiled `niti-core` binary — it shells out to `bun run` on a **cwd-relative TypeScript path**. Running `niti` from /tmp/niti-probe-pkg produced exit 1 with `error: Module not found "src/server/main.ts"` then `niti: core did not hand shake: EOF` (main.go:64). The Go TUI is therefore only runnable from inside a checkout that has both bun and node_modules — it is not distributable via this npm package at all, and npm has no mechanism to ship a Go binary from a `dependencies`-only package anyway.
 
-*Files:* `tui/cmd/amux/main.go`, `README.md`
+*Files:* `tui/cmd/niti/main.go`, `README.md`
 
 ### Asset resolution is import.meta.url-relative and only two of the three paths survive an npm install
 
-src/server/server.ts resolves three asset roots off `import.meta.url`: line 53 `const webDir = opts.webDir ?? new URL("../../web", import.meta.url).pathname`, line 75 `const nodeModulesDir = new URL("../../node_modules", import.meta.url).pathname`, line 88 `const palettesFile = new URL("../../tui/internal/theme/palettes.json", import.meta.url).pathname`. From `<root>/node_modules/amux/src/server/server.ts` these become `<root>/node_modules/amux/{web,node_modules,tui/…}`. I booted the installed copy for real (handshake `{"amuxServer":{"url":"http://127.0.0.1:61736",…}}`) and curled it: `/` → 200, `/palettes.json` → 200 (works only because tui/ accidentally ships), `/xterm.js` → **404** with body `{"error":"not found"}`, because npm hoists deps to `<root>/node_modules/@xterm/*` and `node_modules/amux/node_modules` does not exist (verified: `ls: node_modules/amux/node_modules: No such file or directory`).
+src/server/server.ts resolves three asset roots off `import.meta.url`: line 53 `const webDir = opts.webDir ?? new URL("../../web", import.meta.url).pathname`, line 75 `const nodeModulesDir = new URL("../../node_modules", import.meta.url).pathname`, line 88 `const palettesFile = new URL("../../tui/internal/theme/palettes.json", import.meta.url).pathname`. From `<root>/node_modules/niti/src/server/server.ts` these become `<root>/node_modules/niti/{web,node_modules,tui/…}`. I booted the installed copy for real (handshake `{"nitiServer":{"url":"http://127.0.0.1:61736",…}}`) and curled it: `/` → 200, `/palettes.json` → 200 (works only because tui/ accidentally ships), `/xterm.js` → **404** with body `{"error":"not found"}`, because npm hoists deps to `<root>/node_modules/@xterm/*` and `node_modules/niti/node_modules` does not exist (verified: `ls: node_modules/niti/node_modules: No such file or directory`).
 
 *Files:* `src/server/server.ts`
 
@@ -1097,7 +1097,7 @@ src/server/server.ts resolves three asset roots off `import.meta.url`: line 53 `
 
 ### The postinstall hook is a hard Bun dependency in the one lifecycle phase npm controls
 
-package.json:19 — `"postinstall": "bun run scripts/fix-pty-perms.ts"`. scripts/fix-pty-perms.ts:6 imports `{ Glob } from "bun"` and line 8 scans `node_modules/node-pty/prebuilds/*/spawn-helper` relative to cwd, chmod 0755. Run under a bun-less PATH it exits **127** (`bash: bun: command not found`). npm runs postinstall in the *installing project's* directory tree, so even with bun present the cwd-relative glob targets the consumer's node_modules — which for a hoisted install is `<root>/node_modules/node-pty`, one level up from where the script assumes. In my install npm 11.17.0 deferred it entirely (`npm warn allow-scripts amux@0.0.1 (postinstall: bun run scripts/fix-pty-perms.ts)`), so it silently never ran.
+package.json:19 — `"postinstall": "bun run scripts/fix-pty-perms.ts"`. scripts/fix-pty-perms.ts:6 imports `{ Glob } from "bun"` and line 8 scans `node_modules/node-pty/prebuilds/*/spawn-helper` relative to cwd, chmod 0755. Run under a bun-less PATH it exits **127** (`bash: bun: command not found`). npm runs postinstall in the *installing project's* directory tree, so even with bun present the cwd-relative glob targets the consumer's node_modules — which for a hoisted install is `<root>/node_modules/node-pty`, one level up from where the script assumes. In my install npm 11.17.0 deferred it entirely (`npm warn allow-scripts niti@0.0.1 (postinstall: bun run scripts/fix-pty-perms.ts)`), so it silently never ran.
 
 *Files:* `scripts/fix-pty-perms.ts`, `package.json`
 
@@ -1115,53 +1115,53 @@ Exact import sites: @anthropic-ai/sdk → src/providers/anthropic.ts:1; @google/
 
 ### Config discovery is cwd-relative by design, which is correct for a per-project tool but has no project-root search
 
-src/config/config.ts defaults every loader to a bare relative path: `loadAgents(path = ".amux/agents.yaml")` (:11), `loadOptions(path = ".amux/agents.yaml")` (:37), and likewise loadPermissions/:69, loadLspServers/:80, loadMcpServers/:93. src/server/main.ts:24 gates on `existsSync(".amux/agents.yaml")`. src/store/db.ts:5 `export const DEFAULT_DB = ".amux/amux.db"`. Engine root is `opts.root ?? process.cwd()` (src/engine.ts:73), mirrored in src/agent/agent.ts:141, src/tools/tools.ts:49, src/lsp/registry.ts:25, src/lsp/client.ts:80. This is the right shape for a global install (state follows the project, not the binary), and the failure mode is friendly — from an empty /tmp dir the source CLI printed `amux: no agents configured. Run 'amux-core init' to set up providers and roles.` and exited 1. What is missing is any walk-up-to-git-root behaviour, so invoking amux from a subdirectory of a configured project silently starts a fresh unconfigured session.
+src/config/config.ts defaults every loader to a bare relative path: `loadAgents(path = ".niti/agents.yaml")` (:11), `loadOptions(path = ".niti/agents.yaml")` (:37), and likewise loadPermissions/:69, loadLspServers/:80, loadMcpServers/:93. src/server/main.ts:24 gates on `existsSync(".niti/agents.yaml")`. src/store/db.ts:5 `export const DEFAULT_DB = ".niti/niti.db"`. Engine root is `opts.root ?? process.cwd()` (src/engine.ts:73), mirrored in src/agent/agent.ts:141, src/tools/tools.ts:49, src/lsp/registry.ts:25, src/lsp/client.ts:80. This is the right shape for a global install (state follows the project, not the binary), and the failure mode is friendly — from an empty /tmp dir the source CLI printed `niti: no agents configured. Run 'niti-core init' to set up providers and roles.` and exited 1. What is missing is any walk-up-to-git-root behaviour, so invoking niti from a subdirectory of a configured project silently starts a fresh unconfigured session.
 
 *Files:* `src/config/config.ts`, `src/engine.ts`, `src/server/main.ts`
 
 ### Credentials live outside the package, correctly — this part is publish-safe
 
-src/auth/auth-store.ts:15-17 resolves `process.env.AMUX_AUTH_FILE || join(homedir(), ".config", "amux", "auth.json")` — global, home-relative, env-overridable, chmod'd (chmodSync imported at :3, rmSync at :77). src/keystore/keystore.ts uses the OS keychain via `new Entry("amux", provider)` with a documented env-var fallback (`envKey`) for headless CI. Nothing credential-bearing is cwd-relative and nothing secret appears in the tarball: I read the shipped `.amux/agents.yaml` (14 lines: one google/gemini-flash-latest agent, `theme: neon graveyard`) and `.claude/settings.local.json` (3 MCP tool allowlist entries) — embarrassing to ship, but not a secret leak.
+src/auth/auth-store.ts:15-17 resolves `process.env.NITI_AUTH_FILE || join(homedir(), ".config", "niti", "auth.json")` — global, home-relative, env-overridable, chmod'd (chmodSync imported at :3, rmSync at :77). src/keystore/keystore.ts uses the OS keychain via `new Entry("niti", provider)` with a documented env-var fallback (`envKey`) for headless CI. Nothing credential-bearing is cwd-relative and nothing secret appears in the tarball: I read the shipped `.niti/agents.yaml` (14 lines: one google/gemini-flash-latest agent, `theme: neon graveyard`) and `.claude/settings.local.json` (3 MCP tool allowlist entries) — embarrassing to ship, but not a secret leak.
 
-*Files:* `src/auth/auth-store.ts`, `src/keystore/keystore.ts`, `.amux/agents.yaml`
+*Files:* `src/auth/auth-store.ts`, `src/keystore/keystore.ts`, `.niti/agents.yaml`
 
 ### The npm `private` guard moved into the workspace branch in npm 11, so --dry-run gives a false green
 
-`npm publish --dry-run` in this repo exits **0** and prints `+ amux@0.0.1` after listing 136 files — it does *not* refuse. Reading /opt/homebrew/lib/node_modules/npm/lib/commands/publish.js:153, the local guard is `if (workspace && manifest.private)` — gated on the workspace path, which a plain `npm publish .` never takes. The real enforcement is one layer down in /opt/homebrew/lib/node_modules/npm/node_modules/libnpmpublish/lib/publish.js:15 (`if (manifest.private) throw … EPRIVATE`), which is only reached on a non-dry-run publish. So `private: true` at package.json:4 *does* block a real publish, but the standard pre-flight check reports success — exactly the trap that produces a surprise failure in a release script.
+`npm publish --dry-run` in this repo exits **0** and prints `+ niti@0.0.1` after listing 136 files — it does *not* refuse. Reading /opt/homebrew/lib/node_modules/npm/lib/commands/publish.js:153, the local guard is `if (workspace && manifest.private)` — gated on the workspace path, which a plain `npm publish .` never takes. The real enforcement is one layer down in /opt/homebrew/lib/node_modules/npm/node_modules/libnpmpublish/lib/publish.js:15 (`if (manifest.private) throw … EPRIVATE`), which is only reached on a non-dry-run publish. So `private: true` at package.json:4 *does* block a real publish, but the standard pre-flight check reports success — exactly the trap that produces a surprise failure in a release script.
 
 *Files:* `package.json`
 
 ### The CLI's own argument parsing has no --help or --version and misnames itself in error text
 
-src/cli.ts:33 is `const args = process.argv.slice(2)` followed by a chain of top-level `if (args[0] === …)` blocks (keys/:40, login/:51, auth/:61, serve/:82, --web/:97, init/:115) with no flag parser. `bun run src/cli.ts --help` falls through to the usage banner (`amux-core: no task given.` + 4 lines) and exits **0**; bare `bun run src/cli.ts` also exits 0. There is no `--version`. Naming is inconsistent across the surface: the banner and cli.ts:1-15 header say `amux-core`, but src/server/main.ts's missing-key error says `Run: amux auth login` — a command that does not exist under either binary name.
+src/cli.ts:33 is `const args = process.argv.slice(2)` followed by a chain of top-level `if (args[0] === …)` blocks (keys/:40, login/:51, auth/:61, serve/:82, --web/:97, init/:115) with no flag parser. `bun run src/cli.ts --help` falls through to the usage banner (`niti-core: no task given.` + 4 lines) and exits **0**; bare `bun run src/cli.ts` also exits 0. There is no `--version`. Naming is inconsistent across the surface: the banner and cli.ts:1-15 header say `niti-core`, but src/server/main.ts's missing-key error says `Run: niti auth login` — a command that does not exist under either binary name.
 
 *Files:* `src/cli.ts`, `src/server/main.ts`
 
 ### README documents a git-clone workflow exclusively — there is no published-install story to be inconsistent with yet
 
-README.md:24-40 ("Quickstart") says `Requires Bun ≥ 1.3 and Go ≥ 1.22`, then `bun install` / `bun run build:tui` / `./amux`, and for scripting `bun run src/cli.ts …`. Grepping the whole README for npm/npx/bunx returns only line 190 (`bunx tsc --noEmit` in a dev section). No `npm i -g`, no `npx amux`. That is at least honest, but it means shipping to npm requires writing the install story from scratch, and every command string in README, in cli.ts's header comment, and in the Go TUI's error messages currently assumes a checkout.
+README.md:24-40 ("Quickstart") says `Requires Bun ≥ 1.3 and Go ≥ 1.22`, then `bun install` / `bun run build:tui` / `./niti`, and for scripting `bun run src/cli.ts …`. Grepping the whole README for npm/npx/bunx returns only line 190 (`bunx tsc --noEmit` in a dev section). No `npm i -g`, no `npx niti`. That is at least honest, but it means shipping to npm requires writing the install story from scratch, and every command string in README, in cli.ts's header comment, and in the Go TUI's error messages currently assumes a checkout.
 
 *Files:* `README.md`
 
 ### Observations, edge cases and minor notes (20)
 
-- `package.json:2` — `npm view amux` returns a real package: amux@0.0.0, MIT, deps: none, unpackedSize 273 B, maintainer donavon <github@donavon.com>, published over a year ago. The name is squatted by a 273-byte placeholder. `npm view amux-core` returns E404 — that name is free.
+- `package.json:2` — `npm view niti` returns a real package: niti@0.0.0, MIT, deps: none, unpackedSize 273 B, maintainer donavon <github@donavon.com>, published over a year ago. The name is squatted by a 273-byte placeholder. `npm view niti-core` returns E404 — that name is free.
 - `package.json:21` — package.json has no `files`, `repository`, `homepage`, `bugs`, `keywords`, `author`, `publishConfig`, `os`, or `cpu`. `engines` (line 21-23) declares only `bun: >=1.3.0` — there is no `node` key, so npm has nothing to check and a Node-only user gets no engine warning before the install breaks.
 - `package.json:24` — LICENSE says `Copyright (c) 2026 Shubhadeep Datta` and package.json declares `"license": "MIT"`, but there is no `author` field, so the npm page would show no owner.
 - `bun.lock:1` — bun.lock (39,278 B) ships in the tarball. There is no package-lock.json anywhere in the repo — a Node consumer's `npm ci` story does not exist.
-- `scripts/fix-pty-perms.ts:8` — `npm i` of the tarball on npm 11.17.0 deferred all four install scripts: `npm warn allow-scripts   amux@0.0.1 (postinstall: bun run scripts/fix-pty-perms.ts)`, plus @google/genai preinstall, node-pty install+postinstall, protobufjs postinstall. On npm ≥11 the pty permission fix silently never runs, so the bug fix-pty-perms.ts exists to work around comes back.
+- `scripts/fix-pty-perms.ts:8` — `npm i` of the tarball on npm 11.17.0 deferred all four install scripts: `npm warn allow-scripts   niti@0.0.1 (postinstall: bun run scripts/fix-pty-perms.ts)`, plus @google/genai preinstall, node-pty install+postinstall, protobufjs postinstall. On npm ≥11 the pty permission fix silently never runs, so the bug fix-pty-perms.ts exists to work around comes back.
 - `package.json:32` — node-pty's prebuilds directory contains only darwin-arm64, darwin-x64, win32-arm64, win32-x64 — no Linux. Every Linux install falls through to `node-gyp rebuild`.
-- `package.json:13` — The committed `./amux-core` (Aug 3 10:30, 64,652,432 B) and a freshly built one differ byte-for-byte (`cmp` → DIFFERENT) yet crash identically — so the committed binary is not merely stale, the build itself is broken.
+- `package.json:13` — The committed `./niti-core` (Aug 3 10:30, 64,652,432 B) and a freshly built one differ byte-for-byte (`cmp` → DIFFERENT) yet crash identically — so the committed binary is not merely stale, the build itself is broken.
 - `.gitignore:2` — Both binaries are `Mach-O 64-bit executable arm64` only. There is no darwin-x64, linux-x64, linux-arm64 or win32 artifact, and no CI/release workflow in the repo to produce one.
-- `.gitignore:3` — `git ls-files amux amux-core` returns 0 files — confirmed both binaries are untracked, so a `git clone` user gets no executable either and must run `bun run build:all` (which additionally needs Go ≥1.22).
+- `.gitignore:3` — `git ls-files niti niti-core` returns 0 files — confirmed both binaries are untracked, so a `git clone` user gets no executable either and must run `bun run build:all` (which additionally needs Go ≥1.22).
 - `tsconfig.json:9` — tsconfig.json sets `allowImportingTsExtensions: true` and `noEmit: true` with `types: ["bun"]` and `include: ["src"]`. Every internal import carries an explicit `.ts` extension (e.g. src/cli.ts:16-31). This compiles under bun/tsc but is not resolvable by Node's ESM loader without a rewrite or a bundler step.
 - `package.json:39` — devDependencies pins `"typescript": "^7.0.2"` — the native-port TypeScript. Worth pinning exactly for a published package since 7.x is still moving.
-- `.gitignore:6` — `.gitignore` excludes `.amux/session.json` and `.amux/amux.db*` but not `.amux/agents.yaml`, which is git-tracked (`git ls-files .amux` → .amux/agents.yaml) and therefore lands in the npm tarball along with `.claude/settings.local.json`.
+- `.gitignore:6` — `.gitignore` excludes `.niti/session.json` and `.niti/niti.db*` but not `.niti/agents.yaml`, which is git-tracked (`git ls-files .niti` → .niti/agents.yaml) and therefore lands in the npm tarball along with `.claude/settings.local.json`.
 - `README.md:21` — old-tech/ink-tui/ contributes 13 files (~47 kB) to the tarball including its own package.json and tsconfig.json — a nested package.json inside a published tarball is a common source of tooling confusion.
 - `scripts/gen-catalog.ts:126` — scripts/gen-catalog.ts writes to the cwd-relative literal `"src/providers/catalog.generated.ts"` via `Bun.write` and fetches https://models.dev/api.json at runtime. Dev-only, but it ships in the tarball and would silently write into a consumer's tree if invoked.
 - `src/server/server.ts:4` — node-pty's own loader builds a double-slashed path in the error: `Cannot find module './prebuilds/darwin-arm64//pty.node'`. Upstream cosmetic bug, but useful as a fingerprint when searching issues.
-- `src/server/main.ts:24` — src/server/main.ts's startup errors are well-worded (`amux serve: .amux/agents.yaml agent[0]: missing 'systemPrompt'`, `amux serve: no API key for 'anthropic'. Run: amux auth login (or export ANTHROPIC_API_KEY)`) — the failure UX from source is genuinely good; it is only the compiled/global paths that produce raw stack traces.
-- `tui/cmd/amux/main.go:46` — The Go TUI's escape hatches exist and work: `AMUX_SERVER_URL`/`AMUX_SERVER_TOKEN` skip spawning entirely (main.go:46-47), and `AMUX_CORE_ENTRY`/`AMUX_BUN` override the hardcoded path and binary (main.go:49-50). A shipping strategy can lean on these instead of changing the handshake.
+- `src/server/main.ts:24` — src/server/main.ts's startup errors are well-worded (`niti serve: .niti/agents.yaml agent[0]: missing 'systemPrompt'`, `niti serve: no API key for 'anthropic'. Run: niti auth login (or export ANTHROPIC_API_KEY)`) — the failure UX from source is genuinely good; it is only the compiled/global paths that produce raw stack traces.
+- `tui/cmd/niti/main.go:46` — The Go TUI's escape hatches exist and work: `NITI_SERVER_URL`/`NITI_SERVER_TOKEN` skip spawning entirely (main.go:46-47), and `NITI_CORE_ENTRY`/`NITI_BUN` override the hardcoded path and binary (main.go:49-50). A shipping strategy can lean on these instead of changing the handshake.
 - `src/server/server.ts:76` — `serveFile` guards traversal with `normalize(rel).replace(/^(\.\.[/\\])+/, "")` then `if (!file.startsWith(webDir))` (server.ts:63-65), but `serveVendor` (:76-82) has no such guard — it is safe only because it indexes a fixed 3-entry VENDOR_FILES map. Worth a comment so nobody later makes that map dynamic.
 - `src/cli.ts:33` — `bun run src/cli.ts --help` and bare `bun run src/cli.ts` both exit 0 while printing the 'no task given' banner to **stderr** (via console.error at cli.ts:35 path / the banner). Scripts checking exit codes cannot distinguish 'ran fine' from 'did nothing'.
 - `scripts/gen-catalog.ts:42` — README.md:6 markets '150 more via Models.dev', but scripts/gen-catalog.ts:42-64 hard-filters to a 21-entry ALLOW_IDS set plus the three hand-maintained providers. The generated header comment in catalog.generated.ts records the real counts.
@@ -1172,7 +1172,7 @@ README.md:24-40 ("Quickstart") says `Requires Bun ≥ 1.3 and Go ≥ 1.22`, then
 
 *This section is the completeness critic's pass — it enumerated the file tree, diffed it against what the eight readers had opened, and then went and read the gaps itself.*
 
-### The test suite is 41 files, but only 36 of them are amux — 5 are the dead Ink TUI, and they are not excluded from anything
+### The test suite is 41 files, but only 36 of them are niti — 5 are the dead Ink TUI, and they are not excluded from anything
 
 `bun test` at the repo root runs 275 tests across 41 files. `bun test src web` runs 258 across 36. The difference is exactly `old-tech/ink-tui/{App,GraphView,ModelSelector,UsageView}.test.tsx` and `theme.test.ts` — 17 tests, 5 files. Both `old-tech/ink-tui/README.md` lines 9-11 ("It is excluded from the root project's `tsc --noEmit`/`bun test`") and `project_context.md`'s two-front-ends section ("Has its own package.json/tsconfig.json so it doesn't affect the root project's deps or tsc/bun test") assert this exclusion. Half of it is true: root `tsconfig.json` has `"include": ["src"]`, so `tsc --noEmit` genuinely skips old-tech. The `bun test` half is false — bun's test runner does not read tsconfig `include` and globs the whole working tree. The archived TUI is a live member of the root suite.
 
@@ -1234,7 +1234,7 @@ An automated pass over `src/` and `web/` looking for a `.ts`/`.js` sibling of ev
 
 ### The TUI's first-thing-you-see surface is settings.go's welcome pane, and it personalizes itself by shelling out to git at package init
 
-`welcomeView` (settings.go:324-337) is what the empty work pane renders before any task: a time-of-day greeting, `amux v<version>`, the agent count and mode, an `avatarRow` joining every teammate's avatar with `⇄` (341-352), and two hint lines pointing at the prompt and `/settings`. `settWelcome` (117-131) mirrors it inside the settings overlay so "the two read as one product". `greeting()` (387-401) buckets `time.Now().Hour()` into Late night / Morning / Afternoon / Evening. The name comes from `var userName = detectUser()` at line 405 — a package-level variable initializer that runs `exec.Command("git", "config", "user.name")` (408), takes the first whitespace field, and falls back to `$USER` then `"there"`. `version` is `ui.Version` (settings.go:22).
+`welcomeView` (settings.go:324-337) is what the empty work pane renders before any task: a time-of-day greeting, `niti v<version>`, the agent count and mode, an `avatarRow` joining every teammate's avatar with `⇄` (341-352), and two hint lines pointing at the prompt and `/settings`. `settWelcome` (117-131) mirrors it inside the settings overlay so "the two read as one product". `greeting()` (387-401) buckets `time.Now().Hour()` into Late night / Morning / Afternoon / Evening. The name comes from `var userName = detectUser()` at line 405 — a package-level variable initializer that runs `exec.Command("git", "config", "user.name")` (408), takes the first whitespace field, and falls back to `$USER` then `"there"`. `version` is `ui.Version` (settings.go:22).
 
 *Files:* `tui/internal/session/settings.go`
 
@@ -1246,7 +1246,7 @@ The staged-but-uncommitted diff adds an `ALLOW_IDS` allowlist to `scripts/gen-ca
 
 ### What git actually tracks, and the two artefacts that are conspicuous by their status
 
-`.gitignore` is 10 lines: `node_modules/`, `amux`, `amux-core`, `*.log`, `.DS_Store`, `.amux/session.json`, `.amux/amux.db*`, `.amux/reports/`, `.env`, `.env.*`. `git ls-files .amux/` returns exactly one path: `.amux/agents.yaml` — the maintainer's live team config is a tracked, shipped file. `git ls-files tui/` returns 24 paths and `tui/cmd/amux/main.go` is not among them, because the bare pattern `amux` on line 2 matches the *directory* `tui/cmd/amux/`. Root also carries `LICENSE` (MIT, "Copyright (c) 2026 Shubhadeep Datta"), `project_context.md` (21,752 bytes, referenced twice from README), and the two gitignored 10.8MB/64MB binaries. There is no `.github/` directory anywhere in the repo.
+`.gitignore` is 10 lines: `node_modules/`, `niti`, `niti-core`, `*.log`, `.DS_Store`, `.niti/session.json`, `.niti/niti.db*`, `.niti/reports/`, `.env`, `.env.*`. `git ls-files .niti/` returns exactly one path: `.niti/agents.yaml` — the maintainer's live team config is a tracked, shipped file. `git ls-files tui/` returns 24 paths and `tui/cmd/niti/main.go` is not among them, because the bare pattern `niti` on line 2 matches the *directory* `tui/cmd/niti/`. Root also carries `LICENSE` (MIT, "Copyright (c) 2026 Shubhadeep Datta"), `project_context.md` (21,752 bytes, referenced twice from README), and the two gitignored 10.8MB/64MB binaries. There is no `.github/` directory anywhere in the repo.
 
 *Files:* `.gitignore`, `LICENSE`, `package.json`
 
@@ -1264,9 +1264,9 @@ The postinstall hook globs `node_modules/node-pty/prebuilds/*/spawn-helper` rela
 
 ### Observations, edge cases and minor notes (21)
 
-- `src` — 14 non-test modules under src/ have no `.test.ts` sibling: cli.ts, events/bus.ts, lsp/fake-server.ts, lsp/registry.ts, orchestrator/runner.ts, orchestrator/task.ts, providers/anthropic.ts, providers/catalog.generated.ts, providers/factory.ts, providers/openai.ts, server/events.ts, server/main.ts, store/session-store.ts, tools/lsp-tools.ts. Two of those — providers/anthropic.ts and providers/openai.ts — are the transport for every non-Gemini model amux can talk to.
+- `src` — 14 non-test modules under src/ have no `.test.ts` sibling: cli.ts, events/bus.ts, lsp/fake-server.ts, lsp/registry.ts, orchestrator/runner.ts, orchestrator/task.ts, providers/anthropic.ts, providers/catalog.generated.ts, providers/factory.ts, providers/openai.ts, server/events.ts, server/main.ts, store/session-store.ts, tools/lsp-tools.ts. Two of those — providers/anthropic.ts and providers/openai.ts — are the transport for every non-Gemini model niti can talk to.
 - `tui/internal/api/client.go` — tui/internal/api/client.go and tui/internal/ui/list.go have no `_test.go` sibling; every other package under tui/internal/ has at least one. api/client.go is the entire HTTP+SSE seam between the two processes.
-- `.amux/reports/2026-08-02T19-36-29-649Z.md` — `.amux/reports/` currently contains one generated `/export` artefact, `2026-08-02T19-36-29-649Z.md` (3,726 bytes). It is gitignored as of commit f8d854c, so this is correctly untracked — but the directory name is hard-coded nowhere in .gitignore's sibling docs, so a rename of the export path silently re-exposes it.
+- `.niti/reports/2026-08-02T19-36-29-649Z.md` — `.niti/reports/` currently contains one generated `/export` artefact, `2026-08-02T19-36-29-649Z.md` (3,726 bytes). It is gitignored as of commit f8d854c, so this is correctly untracked — but the directory name is hard-coded nowhere in .gitignore's sibling docs, so a rename of the export path silently re-exposes it.
 - `README.md:152` — README.md line 152's slash-command list omits eight commands that exist in the registry: /rewind, /branch, /skills, /debate, /export, /settings, /config, /stats. A reader of the README will not discover /export at all, despite it being one of the more substantial commands.
 - `tui/internal/session/settings.go:369` — `pad(s, n)` in settings.go uses `len(s)` (bytes) where every neighbouring helper uses `lipgloss.Width`. Every current caller passes an ASCII literal label, so this is latent rather than broken — but `kv`'s 16-column label gutter will misalign the moment a label carries a non-ASCII character.
 - `src/events/bus.ts:32` — `Bus.publish` (bus.ts:32) is a bare synchronous `emitter.emit`. There is no try/catch in the file, so subscriber exceptions surface inside whichever agent published — the mechanism behind the separately-reported 'a throwing event subscriber aborts the entire run'.
@@ -1292,21 +1292,21 @@ The postinstall hook globs `node_modules/node-pty/prebuilds/*/spawn-helper` rela
 
 ## A. Complete surface inventory
 
-### `amux-core` subcommands (all of them)
+### `niti-core` subcommands (all of them)
 
 Parsed by hand in `src/cli.ts` as a chain of non-exclusive top-level `if` blocks — there is no
 dispatcher, no `--help`, and no `--version`.
 
 | Invocation | Effect | Notes |
 | --- | --- | --- |
-| `amux-core "<task>"` | one-shot headless run, plain-text progress, exit | **always `exit 0`**, even if every task failed |
-| `amux-core resume` | re-run unfinished tasks with stored history | |
-| `amux-core init` | interactive setup wizard | plain `prompt()`, keys echoed |
-| `amux-core serve [--port=N]` | start the core server | dead in the TUI flow; the TUI runs `src/server/main.ts` instead |
-| `amux-core --web ["<task>"]` | server + open the browser dashboard | silently forces `interactive:false`; ignores `--auto`/`--worktree`/`--port=` |
-| `amux-core auth login\|list\|logout <p>` | credential management | |
-| `amux-core keys set <provider>` | legacy BYOK key store | no catalog validation on `<provider>` |
-| `amux-core login copilot` | GitHub device flow | |
+| `niti-core "<task>"` | one-shot headless run, plain-text progress, exit | **always `exit 0`**, even if every task failed |
+| `niti-core resume` | re-run unfinished tasks with stored history | |
+| `niti-core init` | interactive setup wizard | plain `prompt()`, keys echoed |
+| `niti-core serve [--port=N]` | start the core server | dead in the TUI flow; the TUI runs `src/server/main.ts` instead |
+| `niti-core --web ["<task>"]` | server + open the browser dashboard | silently forces `interactive:false`; ignores `--auto`/`--worktree`/`--port=` |
+| `niti-core auth login\|list\|logout <p>` | credential management | |
+| `niti-core keys set <provider>` | legacy BYOK key store | no catalog validation on `<provider>` |
+| `niti-core login copilot` | GitHub device flow | |
 | *(anything else)* | **submitted to a paid model as task text** | a typo'd subcommand is a billable run |
 
 Flags: `--auto`, `--worktree`, `--web`, `--port=N`. Unknown flags are silently discarded, never
@@ -1328,7 +1328,7 @@ Token-gated: `GET /events` (SSE), `GET /terminal/ws` (WebSocket pty — non-func
 
 `/cancel /undo /rewind /branch /model /sessions /agents /tasks /skills /mcp /lsp /permissions
 /cost /status /debate /export /resume /clear /init /help /usage` — plus user-defined commands from
-`.amux/commands/*.md`, which override same-named builtins.
+`.niti/commands/*.md`, which override same-named builtins.
 
 The README documents `/graph` and `/panes`, which no longer exist, and omits eight that do
 (`/rewind`, `/branch`, `/debate`, `/export`, `/skills`, `/status`, `/stats`, `/dashboard`).
@@ -1396,7 +1396,7 @@ Five files are modified and uncommitted at audit time. This is not incidental �
 unfinished, materially breaking change sitting in the tree immediately before a publish.
 
 ```
- .amux/agents.yaml                  |  21 +-
+ .niti/agents.yaml                  |  21 +-
  scripts/gen-catalog.ts             |  34 +-
  src/providers/catalog.generated.ts | 908 +------------------------------------
  src/providers/catalog.test.ts      |   5 +-
@@ -1448,7 +1448,7 @@ appear in `lastminutechanges.md` because the ceiling is now being reached.
 | Observations | 179 |
 | Verification outcome | 0 refuted · 30 downgraded · 28 upheld at original severity |
 
-Hand-re-verified directly, outside the agent pipeline: the `.gitignore`/`tui/cmd/amux` exclusion,
+Hand-re-verified directly, outside the agent pipeline: the `.gitignore`/`tui/cmd/niti` exclusion,
 the compiled-binary crash, the npm name registration, the phantom `ink`/`react` dependencies, the
 catalog 149→21 collapse, the Bun-only API census, the cwd-relative path census, the dependency
 usage census, and the list of modules without tests.

@@ -32,7 +32,7 @@ function renderTurn(t: Turn): string {
   return t.results.map((r) => `> - \`${r.name}\` → ${r.output.slice(0, 300).replace(/\n/g, " ")}`).join("\n");
 }
 
-// Best-effort only: nothing in amux runs or tracks test suites. This scans task text for
+// Best-effort only: nothing in niti runs or tracks test suites. This scans task text for
 // pass/fail-shaped language and says so plainly rather than presenting it as a verified result.
 const FAIL_RE = /\b(\d+\s+failed|tests?\s+failed|✗|failing|failure)\b/i;
 const PASS_RE = /\b(\d+\s+passed|all tests pass|tests?\s+passed|✓|passing)\b/i;
@@ -46,7 +46,7 @@ function selfReportedTestStatus(t: Task): string {
 export async function buildExportReport(engine: Engine): Promise<{ path: string; message: string }> {
   const tasks = engine.orch.all;
   const lines: string[] = [
-    "# amux session export",
+    "# niti session export",
     "",
     `**Project:** ${engine.root}`,
     `**Goal:** ${engine.lastGoal || "(none submitted this session)"}`,
@@ -89,7 +89,7 @@ export async function buildExportReport(engine: Engine): Promise<{ path: string;
   }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dir = join(engine.root, ".amux", "reports");
+  const dir = join(engine.root, ".niti", "reports");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${stamp}.md`);
   writeFileSync(path, lines.join("\n"));

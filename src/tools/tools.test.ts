@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, editDiff } from "./tools.ts";
 
-const root = mkdtempSync(join(tmpdir(), "amux-tools-"));
+const root = mkdtempSync(join(tmpdir(), "niti-tools-"));
 const ALL = ["read_file", "write_file", "edit", "shell"];
 
 test("write then read within the project root", async () => {
@@ -126,11 +126,11 @@ test("a whole command line in 'command' is split rather than spawned as one bina
 });
 
 test("provider credentials are not handed to spawned commands", async () => {
-  process.env.AMUX_TEST_FAKE_KEY = "sk-should-not-leak";
+  process.env.NITI_TEST_FAKE_KEY = "sk-should-not-leak";
   const r = await shell(root, "env", []);
   expect(r.stdout).not.toContain("sk-should-not-leak");
   expect(r.stdout).toContain("PATH="); // ...but the allowlist still gets through
-  delete process.env.AMUX_TEST_FAKE_KEY;
+  delete process.env.NITI_TEST_FAKE_KEY;
 });
 
 

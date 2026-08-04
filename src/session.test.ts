@@ -7,7 +7,7 @@ import { Orchestrator } from "./orchestrator/orchestrator.ts";
 import type { Task } from "./orchestrator/task.ts";
 
 test("save then load round-trips tasks", () => {
-  const path = join(mkdtempSync(join(tmpdir(), "amux-sess-")), "session.json");
+  const path = join(mkdtempSync(join(tmpdir(), "niti-sess-")), "session.json");
   const tasks: Task[] = [
     { id: "t1", description: "a", status: "done", assignedTo: "architect" },
     { id: "t2", description: "b", status: "pending", attempts: 1 },

@@ -14,12 +14,12 @@ import {
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "amux-auth-"));
-  process.env.AMUX_AUTH_FILE = join(dir, "auth.json");
+  dir = mkdtempSync(join(tmpdir(), "niti-auth-"));
+  process.env.NITI_AUTH_FILE = join(dir, "auth.json");
 });
 
 afterEach(() => {
-  delete process.env.AMUX_AUTH_FILE;
+  delete process.env.NITI_AUTH_FILE;
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -60,12 +60,12 @@ test("remove deletes a credential and prunes the file when empty", () => {
   expect(getCredential("openai")).toBeUndefined();
   expect(resolveApiKey("groq")).toBe("gk");
   removeCredential("groq");
-  expect(existsSync(process.env.AMUX_AUTH_FILE!)).toBe(false);
+  expect(existsSync(process.env.NITI_AUTH_FILE!)).toBe(false);
 });
 
 test("store file is written with 0600 permissions", () => {
   setCredential({ provider: "openai", type: "api", key: "sk" });
-  const mode = statSync(process.env.AMUX_AUTH_FILE!).mode & 0o777;
+  const mode = statSync(process.env.NITI_AUTH_FILE!).mode & 0o777;
   expect(mode).toBe(0o600);
 });
 
@@ -80,6 +80,6 @@ test("with a test store, resolveApiKey never falls through to the real keychain/
 
 test("corrupt store is treated as empty, not fatal", () => {
   const { writeFileSync } = require("node:fs");
-  writeFileSync(process.env.AMUX_AUTH_FILE!, "{ not json");
+  writeFileSync(process.env.NITI_AUTH_FILE!, "{ not json");
   expect(listCredentials()).toEqual([]);
 });

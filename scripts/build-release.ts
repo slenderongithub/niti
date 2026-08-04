@@ -47,11 +47,11 @@ for (const t of targets) {
   mkdirSync(join(out, "bin"), { recursive: true });
   mkdirSync(join(out, "web"), { recursive: true });
 
-  await run(["go", "build", "-trimpath", "-ldflags=-s -w", "-o", join("..", out, "bin", `amux${ext}`), "./cmd/amux"], {
+  await run(["go", "build", "-trimpath", "-ldflags=-s -w", "-o", join("..", out, "bin", `niti${ext}`), "./cmd/niti"], {
     cwd: "tui",
     env: { GOOS: t.goos, GOARCH: t.goarch, CGO_ENABLED: "0" },
   });
-  await run(["bun", "build", "--compile", `--target=${t.bun}`, "./src/cli.ts", "--outfile", join(out, "bin", "amux-core")]);
+  await run(["bun", "build", "--compile", `--target=${t.bun}`, "./src/cli.ts", "--outfile", join(out, "bin", "niti-core")]);
   for (const f of WEB_FILES) cpSync(join("web", f), join(out, "web", f));
 
   writeFileSync(

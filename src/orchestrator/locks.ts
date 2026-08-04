@@ -11,7 +11,7 @@ interface LockEntry {
 // One lock per file path, held for the duration of a write_file call. acquire() blocks (polls)
 // until the path is free; a lock older than staleMs is treated as abandoned (crashed/hung agent)
 // and silently reclaimed — lazy eviction on next acquire, no background sweep timer to manage.
-// ponytail: in-memory, single process — fine since every agent runs inside one amux process.
+// ponytail: in-memory, single process — fine since every agent runs inside one niti process.
 export class LockRegistry {
   private locks = new Map<string, LockEntry>();
 

@@ -38,7 +38,7 @@ export class ApprovalQueue {
       if (s.tool !== tool && s.tool !== "*") return false;
       if (!s.pathPattern) return true;
       // normalize for the same reason as permissions.subject: a standing grant on src/** must not
-      // be satisfied by src/../.amux/agents.yaml.
+      // be satisfied by src/../.niti/agents.yaml.
       return typeof input.path === "string" && new Bun.Glob(s.pathPattern).match(normalize(input.path));
     });
   }

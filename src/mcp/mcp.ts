@@ -35,7 +35,7 @@ export class McpManager implements McpTools {
   async connect(servers: McpServerConfig[], onError?: (name: string, err: unknown) => void): Promise<void> {
     for (const s of servers) {
       try {
-        const client = new Client({ name: "amux", version: "0.0.1" }, { capabilities: {} });
+        const client = new Client({ name: "niti", version: "0.0.1" }, { capabilities: {} });
         await client.connect(new StdioClientTransport({ command: s.command, args: s.args ?? [] }));
         this.clients.set(s.name, client);
         const { tools } = await client.listTools();

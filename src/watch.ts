@@ -1,14 +1,14 @@
 import { watch, type FSWatcher } from "node:fs";
 import { normalize, sep } from "node:path";
 
-// Watch the project for edits made outside amux (a human in their editor, a git checkout, a
+// Watch the project for edits made outside niti (a human in their editor, a git checkout, a
 // formatter). Emits paths only — nothing is stuffed into any agent's context automatically, which
 // would quietly inflate every prompt; a human or the next planning pass decides what a change means.
 
 // Directories whose churn is never interesting.
 // ponytail: a fixed list instead of parsing .gitignore, and no debounce — one event per fs
 // notification. Add debouncing/gitignore parsing if watcher noise ever becomes a real problem.
-const IGNORED_SEGMENTS = new Set([".git", "node_modules", ".amux", "dist", "build", ".next", "target", "vendor"]);
+const IGNORED_SEGMENTS = new Set([".git", "node_modules", ".niti", "dist", "build", ".next", "target", "vendor"]);
 
 // How long an agent's own write suppresses the echo it causes. Long enough for the fs notification
 // to arrive, short enough that a human editing the same file right after still registers.

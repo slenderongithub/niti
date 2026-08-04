@@ -9,14 +9,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/amux/tui/internal/api"
-	"github.com/amux/tui/internal/theme"
-	"github.com/amux/tui/internal/ui"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
-// The settings overlay is amux's version of the Claude app's settings panel: one screen, tabs
+// The settings overlay is niti's version of the Claude app's settings panel: one screen, tabs
 // across the top (Settings · Status · Config · Usage · Stats), painted over the whole TUI. Every
 // panel is built from data the session already holds — the team, the live usage totals, the
 // per-agent token split — so nothing here needs a server round-trip.
@@ -120,7 +120,7 @@ func (m Model) settWelcome(w int) []string {
 	bg := theme.BgDeep
 	return []string{
 		txt(theme.Accent, bg).Bold(true).Render(truncate(greeting(), w)),
-		txt(theme.Muted, bg).Render("amux v" + version),
+		txt(theme.Muted, bg).Render("niti v" + version),
 		"",
 		m.avatarRow(w),
 		"",
@@ -173,7 +173,7 @@ func (m Model) settStatus(w int) []string {
 		kv(w, "Language servers", lsp))
 }
 
-// settConfig — amux's real, changeable settings, not a mock of Claude Code's forty toggles. Theme
+// settConfig — niti's real, changeable settings, not a mock of Claude Code's forty toggles. Theme
 // and mode are live-editable (ctrl+t / shift+tab); the model assignments are what /config exists to
 // show. ponytail: no fake switches — a config row for a value nothing reads is just decoration.
 func (m Model) settConfig(w int) []string {
@@ -219,7 +219,7 @@ func (m Model) settUsage(w int) []string {
 		lines = append(lines, txt(theme.Fg, bg).Render(truncate(fmt.Sprintf("  %s %-14s %6s in · %6s out",
 			st.avatar, st.cfg.Role, fmtTok(st.in), fmtTok(st.out)), w)))
 	}
-	// ponytail: no plan-limit / weekly bars like the screenshot — amux runs on your own API keys, so
+	// ponytail: no plan-limit / weekly bars like the screenshot — niti runs on your own API keys, so
 	// there is no quota to draw a percentage against. Add if a hosted plan ever gates usage.
 	return lines
 }
@@ -328,7 +328,7 @@ func (m Model) welcomeView(w, h int) string {
 	lines := []string{
 		"",
 		txt(theme.Accent, bg).Bold(true).Render(truncate(greeting(), w)),
-		txt(theme.Muted, bg).Render(truncate("amux v"+version+" · "+fmt.Sprintf("%d agents on %s mode", len(m.order), m.mode), w)),
+		txt(theme.Muted, bg).Render(truncate("niti v"+version+" · "+fmt.Sprintf("%d agents on %s mode", len(m.order), m.mode), w)),
 		"",
 		m.avatarRow(w),
 		"",

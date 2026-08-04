@@ -1,5 +1,5 @@
 "use strict";
-// amux live dashboard — a self-contained SSE consumer + hand-rolled canvas force graph.
+// niti live dashboard — a self-contained SSE consumer + hand-rolled canvas force graph.
 // No external libraries, no network beyond this origin's /events stream (CSP-friendly).
 
 const params = new URLSearchParams(location.search);
@@ -29,7 +29,7 @@ let openAgentId = null; // which node's detail panel is open, if any
 let pendingApprovals = []; // the FIFO queue's current snapshot — same one the TUI answers from
 
 // ---------- graph nodes ----------
-// Pseudo-senders, not teammates: "system" announces file edits made outside amux (engine.ts's
+// Pseudo-senders, not teammates: "system" announces file edits made outside niti (engine.ts's
 // watcher), "orchestrator" announces undo/rewind — neither is a configured agent.
 const NON_AGENT_IDS = new Set(["system", "orchestrator"]);
 function ensureNode(id, role, lead) {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/amux/tui/internal/api"
+	"github.com/niti/tui/internal/api"
 	tea "github.com/charmbracelet/bubbletea"
 )
 

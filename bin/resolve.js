@@ -15,7 +15,7 @@ export function binPath(exe) {
     return require.resolve(`${platformPkg}/bin/${exe}${ext}`);
   } catch {
     console.error(
-      `amux: no prebuilt binary for ${process.platform}-${process.arch} (looked for ${platformPkg}).\n` +
+      `niti: no prebuilt binary for ${process.platform}-${process.arch} (looked for ${platformPkg}).\n` +
         `Supported: darwin-arm64, darwin-x64, linux-x64, linux-arm64, win32-x64.\n` +
         `If your platform is on that list, reinstall — npm sometimes skips optional dependencies ` +
         `(https://github.com/npm/cli/issues/4828).`,

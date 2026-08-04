@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/amux/tui/internal/api"
-	"github.com/amux/tui/internal/theme"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -45,7 +45,7 @@ func model(agents int) Model {
 	ti := textinput.New()
 	ti.Focus()
 	m := Model{agents: map[string]*agentState{}, view: "panes", mode: "build", cancel: func() {},
-		root: "/Users/someone/code/amux", costKnown: true, input: ti}
+		root: "/Users/someone/code/niti", costKnown: true, input: ti}
 	for i := 0; i < agents; i++ {
 		id := string(rune('a' + i))
 		m.order = append(m.order, id)

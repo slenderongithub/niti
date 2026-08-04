@@ -3,9 +3,9 @@ package session
 import (
 	"strings"
 
-	"github.com/amux/tui/internal/api"
-	"github.com/amux/tui/internal/theme"
-	"github.com/amux/tui/internal/ui"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )

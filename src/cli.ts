@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// amux-core — the headless engine + scripting CLI. The usage text below is USAGE, printed by
+// niti-core — the headless engine + scripting CLI. The usage text below is USAGE, printed by
 // --help; keep them as one thing so the comment and the help output can't drift apart.
 import pkg from "../package.json";
 import { makeProvider } from "./providers/factory.ts";
@@ -21,23 +21,23 @@ import type { AgentEvent } from "./events/bus.ts";
 
 const args = process.argv.slice(2);
 function die(msg: string): never {
-  console.error(`amux: ${msg}`);
+  console.error(`niti: ${msg}`);
   process.exit(1);
 }
 
-const USAGE = `amux-core — the headless engine + scripting CLI.
+const USAGE = `niti-core — the headless engine + scripting CLI.
 
-  For the interactive session, run the Go TUI: amux
+  For the interactive session, run the Go TUI: niti
   This binary is for scripting, automation, and what the Go TUI spawns as its subprocess:
 
-    amux-core "<task>"            run one task headlessly and exit (plain-text progress)
-    amux-core resume              continue the last session's unfinished tasks (with their history)
-    amux-core init                setup wizard: add providers, assign models to roles
-    amux-core serve [--port=N]    start the local core server (what the Go TUI connects to)
-    amux-core --web ["<task>"]    start the server + open the live web dashboard
-    amux-core auth login|list|logout <provider>
-    amux-core keys set <provider> store a BYOK key (legacy; 'auth login' is preferred)
-    amux-core login copilot       sign in with a GitHub Copilot subscription
+    niti-core "<task>"            run one task headlessly and exit (plain-text progress)
+    niti-core resume              continue the last session's unfinished tasks (with their history)
+    niti-core init                setup wizard: add providers, assign models to roles
+    niti-core serve [--port=N]    start the local core server (what the Go TUI connects to)
+    niti-core --web ["<task>"]    start the server + open the live web dashboard
+    niti-core auth login|list|logout <provider>
+    niti-core keys set <provider> store a BYOK key (legacy; 'auth login' is preferred)
+    niti-core login copilot       sign in with a GitHub Copilot subscription
 
   Flags:
     --auto                        approve anything not explicitly denied in agents.yaml
@@ -62,7 +62,7 @@ if (args.includes("--version") || args.includes("-v")) {
 
 // A typo must never become a billed model run. Every flag is checked against this list, and a
 // bare one-word first argument that looks like a subcommand is rejected rather than submitted as
-// a prompt — `amux-core stauts` used to reach the orchestrator and cost real money.
+// a prompt — `niti-core stauts` used to reach the orchestrator and cost real money.
 const KNOWN_FLAGS = new Set(["--auto", "--worktree", "--web", "--help", "-h", "--version", "-v"]);
 const SUBCOMMANDS = new Set(["keys", "login", "auth", "serve", "init", "resume", "help"]);
 for (const a of args) {
@@ -71,10 +71,10 @@ for (const a of args) {
   }
 }
 if (args.length === 1 && /^[a-z][a-z0-9-]*$/.test(args[0]!) && !SUBCOMMANDS.has(args[0]!)) {
-  die(`unknown command '${args[0]}' — if you meant it as a task, quote it: amux-core "${args[0]}"`);
+  die(`unknown command '${args[0]}' — if you meant it as a task, quote it: niti-core "${args[0]}"`);
 }
 
-// Before any loader runs: every artefact (.amux/agents.yaml, the SQLite store, session.json) is
+// Before any loader runs: every artefact (.niti/agents.yaml, the SQLite store, session.json) is
 // resolved from cwd, so running from a subdirectory created a stray second project there.
 const projectRoot = findProjectRoot();
 if (projectRoot !== process.cwd()) process.chdir(projectRoot);
@@ -101,11 +101,11 @@ if (args[0] === "keys") {
     console.log(`Stored ${args[2]} key in the OS keychain.`);
     process.exit(0);
   }
-  die("usage: amux-core keys set <provider>");
+  die("usage: niti-core keys set <provider>");
 }
 
 if (args[0] === "login") {
-  if (args[1] !== "copilot") die("usage: amux-core login copilot");
+  if (args[1] !== "copilot") die("usage: niti-core login copilot");
   const dc = await startDeviceFlow();
   console.log(`\nOpen ${dc.verification_uri} and enter code: ${dc.user_code}\n\nWaiting for authorization…`);
   const token = await pollForToken(dc.device_code, dc.interval);
@@ -118,7 +118,7 @@ if (args[0] === "auth") {
   const sub = args[1];
   if (sub === "list") {
     const creds = listCredentials();
-    if (!creds.length) console.log("No credentials stored. Run: amux-core auth login");
+    if (!creds.length) console.log("No credentials stored. Run: niti-core auth login");
     else for (const c of creds) console.log(`  ${c.provider.padEnd(20)} ${c.type}`);
     process.exit(0);
   }
@@ -131,14 +131,14 @@ if (args[0] === "auth") {
     await authLogin(args[2]);
     process.exit(0);
   }
-  die("usage: amux-core auth login|list|logout [provider]");
+  die("usage: niti-core auth login|list|logout [provider]");
 }
 
 // --- server / dashboard ----------------------------------------------------
 if (args[0] === "serve") {
   try {
     const { engine, server } = await serveMain({ port: parsePort(), auto: args.includes("--auto"), worktree: args.includes("--worktree") });
-    console.error(`amux core server running at ${server.url} — Ctrl-C to stop`);
+    console.error(`niti core server running at ${server.url} — Ctrl-C to stop`);
     onShutdown(engine, server);
   } catch (err) {
     surfaceStartupError(err);
@@ -159,10 +159,10 @@ if (args[0] !== "serve" && args.includes("--web")) {
       worktree: args.includes("--worktree"),
     });
     const url = `${server.url}/dashboard?token=${server.token}`;
-    console.log(`\namux dashboard: ${url}\n`);
-    if (args.includes("--auto")) console.error("amux: --auto is on — writes and shell run without asking.");
+    console.log(`\nniti dashboard: ${url}\n`);
+    if (args.includes("--auto")) console.error("niti: --auto is on — writes and shell run without asking.");
     openBrowser(url);
-    if (goal) engine.submit(goal).catch((e) => console.error(`amux: ${e instanceof Error ? e.message : e}`));
+    if (goal) engine.submit(goal).catch((e) => console.error(`niti: ${e instanceof Error ? e.message : e}`));
     onShutdown(engine, server);
   } catch (err) {
     surfaceStartupError(err);
@@ -175,7 +175,7 @@ if (args[0] === "init") {
 }
 
 // --- engine-driven modes (headless one-shot / resume) -----------------------
-// No interactive mode here — that's the Go TUI (`./amux`, see tui/). This binary is scripting-only:
+// No interactive mode here — that's the Go TUI (`./niti`, see tui/). This binary is scripting-only:
 // one-shot runs to completion printing plain-text progress, or `resume` to reload prior tasks.
 if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
   const resume = args[0] === "resume";
@@ -183,9 +183,9 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
 
   if (!goal && !resume) {
     console.log(
-      "amux-core: no task given.\n\n" +
-        "  For the interactive session, run the Go TUI:  ./amux  (build with `bun run build:tui`)\n" +
-        '  For a scripted one-shot run:                   amux-core "your task"\n' +
+      "niti-core: no task given.\n\n" +
+        "  For the interactive session, run the Go TUI:  ./niti  (build with `bun run build:tui`)\n" +
+        '  For a scripted one-shot run:                   niti-core "your task"\n' +
         "  Other commands:  init · serve · auth · resume · --web\n",
     );
     process.exit(0);
@@ -219,13 +219,13 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
     else if (resume) await engine.resume(); // continue unfinished tasks with their stored conversations
   } catch (err) {
     runFailed = true;
-    console.error(`amux: ${err instanceof Error ? err.message : err}`);
+    console.error(`niti: ${err instanceof Error ? err.message : err}`);
   }
   unsubscribe();
 
   console.log("\n--- tasks ---");
   for (const t of engine.orch.all) console.log(`${t.id} [${t.status}] ${t.assignedTo ?? "-"}: ${t.description}`);
-  // Scripts need a machine-readable verdict — `amux-core "fix the test" && ./deploy.sh` used to
+  // Scripts need a machine-readable verdict — `niti-core "fix the test" && ./deploy.sh` used to
   // deploy after every task failed. 1 = something failed, 2 = ran out of turns / still pending.
   engine.close();
   void engine.mcp?.close?.();
@@ -243,7 +243,7 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
   let mcp: McpManager | undefined;
   if (mcpServers.length) {
     mcp = new McpManager();
-    await mcp.connect(mcpServers, (name, err) => console.error(`amux: MCP server '${name}' unavailable: ${err}`));
+    await mcp.connect(mcpServers, (name, err) => console.error(`niti: MCP server '${name}' unavailable: ${err}`));
   }
   return new Engine({
     configs,
@@ -268,7 +268,7 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
 async function promptSecret(label: string): Promise<string> {
   const stdin = process.stdin;
   if (!stdin.isTTY) {
-    console.error("amux: stdin is not a terminal — the value you type will be visible.");
+    console.error("niti: stdin is not a terminal — the value you type will be visible.");
     return prompt(label)?.trim() ?? "";
   }
   process.stdout.write(`${label} `);
@@ -302,7 +302,7 @@ function surfaceStartupError(err: unknown): never {
   // ENOENT only. Matching /agents\.yaml/ swallowed every *validation* error too — a one-character
   // typo in the config was reported as "no agents configured. Run init", and following that advice
   // overwrote the roster the user was trying to fix.
-  if (/ENOENT/.test(msg)) die(`no agents configured. Run 'amux-core init' to set up providers and roles.`);
+  if (/ENOENT/.test(msg)) die(`no agents configured. Run 'niti-core init' to set up providers and roles.`);
   die(msg);
 }
 
@@ -353,9 +353,9 @@ async function authLogin(providerArg?: string): Promise<void> {
 }
 
 // Minimal terminal onboarding (the rich version lives in the Go TUI). Add credentials → assign
-// models to custom roles → pick the orchestrator → write .amux/agents.yaml.
+// models to custom roles → pick the orchestrator → write .niti/agents.yaml.
 async function runInit(): Promise<void> {
-  console.log("amux-core init — add providers, assign models to roles, pick an orchestrator.\n");
+  console.log("niti-core init — add providers, assign models to roles, pick an orchestrator.\n");
   for (;;) {
     await authLogin();
     if ((prompt("Add another provider? (y/N):")?.trim().toLowerCase() ?? "") !== "y") break;
@@ -395,7 +395,7 @@ async function runInit(): Promise<void> {
   roles.forEach((r, i) => (r.lead = i === idx));
 
   saveAgents(roles);
-  console.log(`\nSaved ${roles.length} agents to .amux/agents.yaml. Start with:  amux`);
+  console.log(`\nSaved ${roles.length} agents to .niti/agents.yaml. Start with:  niti`);
 }
 
 function openBrowser(url: string): void {

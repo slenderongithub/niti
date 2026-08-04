@@ -1,17 +1,17 @@
 #!/usr/bin/env bun
 // Regenerates src/providers/catalog.generated.ts from models.dev's provider registry — the same
-// source opencode uses — so amux's BYOK list actually matches "every provider opencode has"
+// source opencode uses — so niti's BYOK list actually matches "every provider opencode has"
 // instead of a hand-curated subset. Run: bun run gen:catalog
 //
 // Providers needing non-API-key auth (AWS SigV4, Azure AD, GCP service accounts, gateway
-// abstractions) are skipped — they need a dedicated SDK/auth flow amux doesn't implement.
+// abstractions) are skipped — they need a dedicated SDK/auth flow niti doesn't implement.
 // Anthropic/OpenAI/Google themselves are hand-maintained in catalog.ts and override these
 // generated entries on id collision, so this script doesn't special-case them.
 
 interface RawModel {
   id: string;
   limit?: { context?: number };
-  tool_call?: boolean; // amux is a tool-use loop; a model without this cannot run an agent at all
+  tool_call?: boolean; // niti is a tool-use loop; a model without this cannot run an agent at all
   modalities?: { output?: string[] };
   cost?: { input?: number; output?: number }; // $ per 1M tokens, same unit as pricing.ts
 }
@@ -105,14 +105,14 @@ async function main() {
       continue;
     }
     // env[0] is not reliably the API key — some providers list an account id or a hostname first
-    // (CLOUDFLARE_ACCOUNT_ID, DATABRICKS_HOST), which shipped as the thing amux asks the user for.
+    // (CLOUDFLARE_ACCOUNT_ID, DATABRICKS_HOST), which shipped as the thing niti asks the user for.
     const envVar = p.env?.find((v) => /_(API_)?KEY$|_TOKEN$/.test(v)) ?? p.env?.at(-1);
     if (!envVar) {
       skipped++;
       continue;
     }
     // Only models that can actually call tools and emit text. Without this filter the picker
-    // offered embedding and image models that physically cannot run an amux agent.
+    // offered embedding and image models that physically cannot run an niti agent.
     const usable = Object.entries(p.models ?? {}).filter(
       ([, m]) => m.tool_call && (m.modalities?.output?.includes("text") ?? true),
     );

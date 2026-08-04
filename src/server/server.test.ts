@@ -140,8 +140,8 @@ test("mid-task agent messaging: 400 on an empty body, 409 for an idle agent (not
 });
 
 test("auth store round-trips through the API (redacted on read)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "amux-srv-"));
-  process.env.AMUX_AUTH_FILE = join(dir, "auth.json");
+  const dir = mkdtempSync(join(tmpdir(), "niti-srv-"));
+  process.env.NITI_AUTH_FILE = join(dir, "auth.json");
   try {
     const { h } = setup();
     track(h);
@@ -154,7 +154,7 @@ test("auth store round-trips through the API (redacted on read)", async () => {
     const list = await (await fetch(`${h.url}/auth?token=${h.token}`)).json();
     expect(list.credentials).toEqual([{ provider: "openai", type: "api" }]); // key redacted
   } finally {
-    delete process.env.AMUX_AUTH_FILE;
+    delete process.env.NITI_AUTH_FILE;
     rmSync(dir, { recursive: true, force: true });
   }
 });

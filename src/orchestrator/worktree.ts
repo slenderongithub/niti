@@ -34,10 +34,10 @@ export async function isGitRepo(root: string): Promise<boolean> {
   return r.code === 0 && r.stdout.trim() === "true";
 }
 
-// Create an isolated worktree on a fresh branch off the current HEAD, under .amux/worktrees/<id>.
+// Create an isolated worktree on a fresh branch off the current HEAD, under .niti/worktrees/<id>.
 export async function createWorktree(root: string, id: string): Promise<WorktreeHandle> {
-  const branch = `amux/${id}`;
-  const path = join(root, ".amux", "worktrees", id);
+  const branch = `niti/${id}`;
+  const path = join(root, ".niti", "worktrees", id);
   const head = await git(root, ["rev-parse", "HEAD"]);
   if (head.code !== 0) throw new Error(`git rev-parse HEAD failed: ${head.stderr.trim()}`);
   await pruneWorktrees(root); // clear registrations whose directories no longer exist
@@ -57,9 +57,9 @@ async function excludeWorktrees(root: string): Promise<void> {
   const excludePath = join(root, dir.stdout.trim(), "info", "exclude");
   try {
     const current = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : "";
-    if (current.includes(".amux/worktrees/")) return;
+    if (current.includes(".niti/worktrees/")) return;
     mkdirSync(dirname(excludePath), { recursive: true });
-    writeFileSync(excludePath, `${current}${current.endsWith("\n") || !current ? "" : "\n"}.amux/worktrees/\n`);
+    writeFileSync(excludePath, `${current}${current.endsWith("\n") || !current ? "" : "\n"}.niti/worktrees/\n`);
   } catch {
     // Cosmetic hygiene — never a reason to fail a run that is otherwise fine.
   }
@@ -91,7 +91,7 @@ export async function diffPatch(handle: WorktreeHandle): Promise<string> {
 
 // Commit whatever's pending in the worktree so mergeBack has something to bring across — a no-op
 // (not an error) when there's nothing staged, e.g. a task run that made no file changes.
-export async function commitPending(handle: WorktreeHandle, message = "amux: worktree changes"): Promise<void> {
+export async function commitPending(handle: WorktreeHandle, message = "niti: worktree changes"): Promise<void> {
   await git(handle.path, ["add", "-A"]);
   const staged = await git(handle.path, ["diff", "--cached", "--quiet"]); // exit 0 = clean, 1 = staged changes
   if (staged.code === 0) return;
@@ -110,7 +110,7 @@ export async function snapshotBranch(root: string, name: string): Promise<{ ok: 
   const staged = await git(root, ["diff", "--cached", "--quiet"]); // exit 0 = nothing to commit
   let message = `branch '${name}' created at the current commit (nothing uncommitted to snapshot)`;
   if (staged.code !== 0) {
-    const commit = await git(root, ["commit", "-q", "-m", `amux: branch snapshot (${name})`]);
+    const commit = await git(root, ["commit", "-q", "-m", `niti: branch snapshot (${name})`]);
     if (commit.code !== 0) {
       await git(root, ["checkout", "-"]); // best-effort return before surfacing the failure
       return { ok: false, message: commit.stderr.trim() || commit.stdout.trim() };
@@ -144,7 +144,7 @@ export async function abortMerge(root: string): Promise<void> {
   await git(root, ["merge", "--abort"]);
 }
 
-// Delete the worktree AND its branch — a discard that leaves `amux/<id>` behind is not a discard,
+// Delete the worktree AND its branch — a discard that leaves `niti/<id>` behind is not a discard,
 // and those branches accumulate one per abandoned run.
 export async function discardWorktree(root: string, handle: WorktreeHandle): Promise<void> {
   await removeWorktree(root, handle.path);

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/amux/tui/internal/api"
+	"github.com/niti/tui/internal/api"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -301,7 +301,7 @@ func cardRule(t *testing.T, view string) int {
 }
 
 // A saved roster must be reusable in one keystroke. Before this, the picker opened on the size
-// question every launch — 26 answers for a team of 6 — and ctrl+c out of it quit amux entirely.
+// question every launch — 26 answers for a team of 6 — and ctrl+c out of it quit niti entirely.
 func withExisting(t *testing.T, client *api.Client) Picker {
 	t.Helper()
 	existing := []api.AgentConfig{{ID: "fe", Provider: "anthropic", Model: "claude", Role: "Frontend"}}

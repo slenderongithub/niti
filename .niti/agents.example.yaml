@@ -1,5 +1,5 @@
-# Copy to .amux/agents.yaml and edit, or just run `amux` (the team picker writes this file for you)
-# and `amux-core init` for the headless equivalent. Only `agents:` is required — everything below it
+# Copy to .niti/agents.yaml and edit, or just run `niti` (the team picker writes this file for you)
+# and `niti-core init` for the headless equivalent. Only `agents:` is required — everything below it
 # has a working default.
 
 agents:
@@ -34,14 +34,14 @@ permissions:
   shell: { "git *": allow, "git commit *": ask, "rm -rf*": deny }
   write_file: { "src/**": allow, "*": ask }
 
-# theme: amux          # TUI palette at launch (ctrl+t opens the picker)
+# theme: niti          # TUI palette at launch (ctrl+t opens the picker)
 # auto: false          # approve anything not explicitly denied — same as --auto
 # maxTurns: 12         # tool-loop cap per agent turn
 # maxAgents: 6         # ceiling on team size
 # worktree: false      # isolate each run's writes in a throwaway git worktree
 # instructions: [AGENTS.md]   # files appended to every agent's system prompt
 
-# lsp:                 # you install the servers; amux spawns them
+# lsp:                 # you install the servers; niti spawns them
 #   typescript: { command: typescript-language-server, args: [--stdio], extensions: [.ts, .tsx] }
 
 # mcpServers:          # external MCP tools, namespaced as mcp__<name>__<tool>

@@ -1,6 +1,6 @@
-# Project Context: amux
+# Project Context: niti
 
-`amux` runs **multiple AI coding agents from different LLM providers concurrently** on one project.
+`niti` runs **multiple AI coding agents from different LLM providers concurrently** on one project.
 You assign models to custom roles, pick one as the **orchestrator** (plans a task DAG and sequences
 it), and the role-agents build together — **talking directly to each other** to align — while you
 watch live in a terminal (and an optional web dashboard).
@@ -12,24 +12,24 @@ This file is the single merged source of project history/architecture context, r
 
 ## Two front ends, one core
 
-- **`amux`** — the Go + Bubbletea terminal UI (`tui/`), the primary interactive front end. It spawns
+- **`niti`** — the Go + Bubbletea terminal UI (`tui/`), the primary interactive front end. It spawns
   the Bun core as a subprocess and drives it over a local HTTP+SSE API. Build: `bun run build:tui`.
-- **`amux-core`** — the headless Bun/TypeScript engine + scripting CLI (`src/cli.ts`). Used
-  standalone for one-shot/CI runs, `serve`, `auth`, `init`, `--web`, and it's what `amux` spawns.
+- **`niti-core`** — the headless Bun/TypeScript engine + scripting CLI (`src/cli.ts`). Used
+  standalone for one-shot/CI runs, `serve`, `auth`, `init`, `--web`, and it's what `niti` spawns.
   Build: `bun run build`.
-- **`old-tech/ink-tui/`** — the original React/Ink interactive TUI (amux v1). Archived, not deleted,
+- **`old-tech/ink-tui/`** — the original React/Ink interactive TUI (niti v1). Archived, not deleted,
   not wired into the active build — `src/cli.ts` no longer imports or renders it. Has its own
   `package.json`/`tsconfig.json` so it doesn't affect the root project's deps or `tsc`/`bun test`.
 
 ## Architecture (as built)
 
 ```
-                    Go + Bubbletea TUI (amux)         Web dashboard (optional, --web)
+                    Go + Bubbletea TUI (niti)         Web dashboard (optional, --web)
                      team picker · panes · comm-graph   localhost force-graph
                               └──────────── HTTP + SSE (src/server) ────────────┘
                                                   ▼
                                     Engine (src/engine.ts)
-   loadAgents (.amux/agents.yaml) ──▶ makeProvider (auth store) ──▶ Agent[] (+ Messenger)
+   loadAgents (.niti/agents.yaml) ──▶ makeProvider (auth store) ──▶ Agent[] (+ Messenger)
                                                   │
    orchestrator ──plan (DAG)──▶ scheduler (src/orchestrator) ◀──concurrent claim──┤
                         │                    │
@@ -64,18 +64,18 @@ This file is the single merged source of project history/architecture context, r
    Anthropic/Gemini, one OpenAI-compatible client covering a curated 29 providers / 152 models via the Models.dev catalog
    (`src/providers/catalog.ts` + generated `catalog.generated.ts`). Keys come from the OS keychain
    (`@napi-rs/keyring`) with env-var fallback, or GitHub Copilot's OAuth device-code flow.
-6. **Agent-to-agent messaging (amux's differentiator)** — agents `send_message`/`ask_agent` any
+6. **Agent-to-agent messaging (niti's differentiator)** — agents `send_message`/`ask_agent` any
    teammate directly mid-task, routed through `MessageBus` (`src/messaging/message-bus.ts`).
    Deliberately **open**, not DAG-edge-restricted (the planner can't anticipate every mid-task
    question) — a per-pair rate cap is the loop guard instead.
 7. **Persistence** — every turn decomposes into `sessions → messages → parts` in SQLite at
-   `.amux/amux.db` (`src/store/`), so conversations survive a restart (`amux resume`/`/resume`
+   `.niti/niti.db` (`src/store/`), so conversations survive a restart (`niti resume`/`/resume`
    reseed history). Each file write is checkpointed first (`checkpoints` table), which is what
-   `/undo` reverts (LIFO, one write per call). Tasks separately auto-save to `.amux/session.json`
+   `/undo` reverts (LIFO, one write per call). Tasks separately auto-save to `.niti/session.json`
    (unchanged since v1) — a session is a child concept a task *has*, not a replacement for the DAG.
 8. **LSP + MCP together** — two independent tool sources merged into the same `buildTools()`
    concatenation in `agent.ts`, neither replacing the other. LSP (`src/lsp/`) spawns
-   user-installed language servers over hand-rolled JSON-RPC (no tree-sitter — amux has no
+   user-installed language servers over hand-rolled JSON-RPC (no tree-sitter — niti has no
    syntax-highlighting UI surface to justify it) and exposes `diagnostics(path)`/`hover(path,line,col)`.
    MCP (`src/mcp/mcp.ts`) namespaces external stdio server tools as `mcp__<server>__<tool>`. A missing
    server of either kind is a message, never a crash.
@@ -83,7 +83,7 @@ This file is the single merged source of project history/architecture context, r
    tools, and permissions (no privilege escalation) — a new *session* (`kind:'fork'`), invisible to
    the DAG scheduler, capped by `MAX_FORK_DEPTH`.
 10. **File watching** — `src/watch.ts` (`node:fs.watch({recursive:true})`, no `chokidar`) announces
-    edits made outside amux as `external_change` events; a short-TTL set of the engine's own recent
+    edits made outside niti as `external_change` events; a short-TTL set of the engine's own recent
     write paths stops an agent's own `write_file` from re-triggering itself.
 
 ---
@@ -93,7 +93,7 @@ This file is the single merged source of project history/architecture context, r
 | File | Responsibility |
 |---|---|
 | `src/cli.ts` | Scripting entry point: one-shot, `serve`, `auth login/list/logout`, `init`, `resume`, `--web`, `--auto` |
-| `src/config/config.ts` | Parses/validates `.amux/agents.yaml`: agents, `permissions:`, `lsp:`, `mcpServers:`, top-level options (`loadOptions`/`loadInstructions`), `saveAgents()` (replaces only the `agents:` key so hand-written config survives a picker relaunch) |
+| `src/config/config.ts` | Parses/validates `.niti/agents.yaml`: agents, `permissions:`, `lsp:`, `mcpServers:`, top-level options (`loadOptions`/`loadInstructions`), `saveAgents()` (replaces only the `agents:` key so hand-written config survives a picker relaunch) |
 | `src/permissions.ts` | Wildcard pattern resolver (`resolve()`), `Bun.Glob`-based, layered session→agent→project→default-ask |
 | `src/engine.ts` | Wires agents + orchestrator + messaging + approvals + usage + locks + store + watcher into one `EventHub`; `submit()`/`resume()`/`undo()`/`switchModel()` |
 | `src/agent/agent.ts` | Multi-turn tool loop, `send_message`/`ask_agent`/`spawn_fork`, approval + quota checks, checkpoint-before-write, `maxTurns` override |
@@ -107,13 +107,13 @@ This file is the single merged source of project history/architecture context, r
 | `src/store/db.ts`, `src/store/session-store.ts` | SQLite (WAL) open/migrate; `SessionStore` — sessions/messages/parts, checkpoint/undo, `listSessions`, `recordMessage` |
 | `src/approval.ts` | `ApprovalQueue` — scope grants, batch dialogs, dangerous-pattern override |
 | `src/usage.ts`, `src/providers/pricing.ts` | Per-agent token/rate-limit tracking; per-model cost |
-| `src/session.ts` | `saveTasks`/`loadTasks` (`.amux/session.json`), `resumeConversation()` |
+| `src/session.ts` | `saveTasks`/`loadTasks` (`.niti/session.json`), `resumeConversation()` |
 | `src/watch.ts` | External-edit file watcher, self-write suppression |
-| `src/skills/skills.ts` | `.amux/skills/*/SKILL.md` frontmatter → system-prompt addendum |
-| `src/commands/registry.ts` | Server-side slash-command registry, shared by the TUI and the web dashboard; user commands from `.amux/commands/*.md` |
+| `src/skills/skills.ts` | `.niti/skills/*/SKILL.md` frontmatter → system-prompt addendum |
+| `src/commands/registry.ts` | Server-side slash-command registry, shared by the TUI and the web dashboard; user commands from `.niti/commands/*.md` |
 | `src/server/server.ts`, `src/server/events.ts`, `src/server/main.ts` | HTTP+SSE API, `EventHub`, headless-core bootstrap + handshake line |
-| `src/auth/auth-store.ts`, `src/keystore/keystore.ts` | Global typed credential store (`~/.config/amux/auth.json` 0600 + OS keychain), env-var fallback |
-| `tui/cmd/amux/main.go` | Spawns/attaches to the core, reads its handshake, runs the picker then the live session |
+| `src/auth/auth-store.ts`, `src/keystore/keystore.ts` | Global typed credential store (`~/.config/niti/auth.json` 0600 + OS keychain), env-var fallback |
+| `tui/cmd/niti/main.go` | Spawns/attaches to the core, reads its handshake, runs the picker then the live session |
 | `tui/internal/wizard/{picker,chrome}.go` | Every-launch team picker (size → provider → model → name → description, whole catalog, centered card UI) |
 | `tui/internal/session/{session,view,carousel}.go` | Live multi-agent view: panes/graph/usage, approvals, `ctrl+p` model carousel, `/` command menu |
 | `tui/internal/ui/list.go` | Shared filterable list + centered-box + overlay widgets used by both the picker and the session view |
@@ -124,7 +124,7 @@ This file is the single merged source of project history/architecture context, r
 
 ## Data models / schemas
 
-### `.amux/agents.yaml`
+### `.niti/agents.yaml`
 
 ```yaml
 agents:
@@ -197,7 +197,7 @@ type PartType = "text" | "tool_call" | "tool_result" | "raw" | "file_ref";
 // checkpoints(id, sessionId, path, content|null, createdAt) — undone LIFO by /undo
 ```
 
-### `.amux/session.json` (unchanged since v1 — tasks only, not conversations)
+### `.niti/session.json` (unchanged since v1 — tasks only, not conversations)
 
 ```json
 { "tasks": [{ "id": "t1", "description": "Add /health route", "assignedTo": "architect", "status": "done", "attempts": 0 }] }
@@ -217,7 +217,7 @@ type PartType = "text" | "tool_call" | "tool_result" | "raw" | "file_ref";
 
 `/help /status /agents /tasks /mcp /lsp /permissions /cost /resume /clear /init /model /sessions
 /undo /cancel /panes /graph /usage`, plus client-side `/theme` and `/quit`, plus project-defined
-commands from `.amux/commands/<name>.md` (frontmatter + `$ARGUMENTS`-interpolated body).
+commands from `.niti/commands/<name>.md` (frontmatter + `$ARGUMENTS`-interpolated body).
 
 ### TUI interaction (Go, `tui/internal/session`)
 
@@ -231,9 +231,9 @@ commands from `.amux/commands/<name>.md` (frontmatter + `$ARGUMENTS`-interpolate
 
 ### CLI (`src/cli.ts`)
 
-`amux-core "<prompt>"` (one-shot) · `amux-core resume` · `amux-core serve [--auto] [--port=]` ·
-`amux-core auth login/list/logout <provider>` · `amux-core login copilot` · `amux-core init` ·
-`amux-core --web "<prompt>"`.
+`niti-core "<prompt>"` (one-shot) · `niti-core resume` · `niti-core serve [--auto] [--port=]` ·
+`niti-core auth login/list/logout <provider>` · `niti-core login copilot` · `niti-core init` ·
+`niti-core --web "<prompt>"`.
 
 ---
 
@@ -311,7 +311,7 @@ streams over SSE — is asserted in `src/engine.test.ts` and `src/server/server.
 
 | Surface | Decision | Reason |
 |---|---|---|
-| ACP (Zed/VS Code embedding) | Out of scope | amux is a standalone CLI/TUI, no IDE host to embed into |
+| ACP (Zed/VS Code embedding) | Out of scope | niti is a standalone CLI/TUI, no IDE host to embed into |
 | Desktop app (SolidJS) | Out of scope | Terminal + optional web dashboard is the UI surface |
 | 20+ TUI themes | Deferred | Pure polish, addable to `tui/internal/theme/theme.go` any time |
 | Frecency-based autocomplete | Deferred | UX polish on top of the command registry, not parity-critical |
@@ -325,8 +325,8 @@ streams over SSE — is asserted in `src/engine.test.ts` and `src/server/server.
 
 ```sh
 bun install
-bun run build:tui                          # builds ./amux (the Go TUI) — do this once, or after tui/ changes
-./amux                                     # every launch: pick the team (1–5 models), then the live session
+bun run build:tui                          # builds ./niti (the Go TUI) — do this once, or after tui/ changes
+./niti                                     # every launch: pick the team (1–5 models), then the live session
 
 # headless/scripting:
 bun run src/cli.ts init

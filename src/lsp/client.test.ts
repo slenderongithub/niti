@@ -10,7 +10,7 @@ const FAKE = new URL("./fake-server.ts", import.meta.url).pathname;
 const fakeServer = { name: "fake", command: process.execPath, args: [FAKE], extensions: [".ts"] };
 
 function project(): string {
-  const root = mkdtempSync(join(tmpdir(), "amux-lsp-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-lsp-"));
   writeFileSync(join(root, "a.ts"), "const a = 1;\nconst b: string = 2;\n");
   return root;
 }
@@ -41,7 +41,7 @@ test("a second call re-syncs the file and still resolves (didChange path)", asyn
 
 test("a missing server binary is an error string, not a crash", async () => {
   const root = project();
-  const registry = new LspRegistry([{ name: "nope", command: "amux-no-such-language-server", extensions: [".ts"] }], root);
+  const registry = new LspRegistry([{ name: "nope", command: "niti-no-such-language-server", extensions: [".ts"] }], root);
   const out = await runLspTool(registry, "diagnostics", { path: "a.ts" }, root);
   expect(out).toMatch(/language server unavailable/);
   registry.close();

@@ -73,7 +73,7 @@ export function ModelSelector({
     if (!model) return;
     const err = onPick(agentId!, provider!, model, provider === "custom" ? baseURL : undefined);
     if (err) {
-      setError(err); // e.g. "not signed in… Run: amux login copilot" — let them pick again
+      setError(err); // e.g. "not signed in… Run: niti login copilot" — let them pick again
       setProvider(undefined);
       setBaseURLDone(false);
       setPickingCustomModel(false);

@@ -30,7 +30,7 @@ export interface EngineOptions {
   permissions?: PermissionRules; // project-level tool policy from agents.yaml
   auto?: boolean; // --auto: approve anything not explicitly denied (dangerous commands still prompt)
   lsp?: LspRegistry; // present → diagnostics/hover available to every agent, alongside MCP
-  watch?: boolean; // true → emit external_change events for edits made outside amux
+  watch?: boolean; // true → emit external_change events for edits made outside niti
   maxTurns?: number; // `maxTurns:` from agents.yaml — tool-loop cap per agent turn
   worktree?: boolean; // isolate each run's file writes in a fresh git worktree instead of the real root
 }
@@ -234,7 +234,7 @@ export class Engine {
         },
         shouldStop: () => this.cancelled,
       });
-      saveTasks(this.orch.all); // persist so `amux resume` can reload
+      saveTasks(this.orch.all); // persist so `niti resume` can reload
     } finally {
       this.busy = false;
       if (this.worktreeEnabled) for (const a of this.agents) a.setRoot(this.root); // LSP/watcher never left the real root

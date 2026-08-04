@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, rmSync } from "node:fs";
 import { getKey as keychainKey, setKey as keychainSet, deleteKey as keychainDelete } from "../keystore/keystore.ts";
 
-// Typed, global credential store — the amux equivalent of opencode's auth.json.
+// Typed, global credential store — the niti equivalent of opencode's auth.json.
 // A credential is one of three shapes: a raw API key (BYOK), an OAuth grant
 // (e.g. GitHub Copilot's long-lived token), or a local endpoint (Ollama/LM Studio).
 export type AuthCredential =
@@ -13,7 +13,7 @@ export type AuthCredential =
 
 // Global, not per-project (like opencode). Overridable via env so tests never touch a real home.
 function authFile(): string {
-  return process.env.AMUX_AUTH_FILE || join(homedir(), ".config", "amux", "auth.json");
+  return process.env.NITI_AUTH_FILE || join(homedir(), ".config", "niti", "auth.json");
 }
 
 interface StoreShape {
@@ -53,13 +53,13 @@ export function getCredential(provider: string): AuthCredential | undefined {
 }
 
 // Upsert by provider. API keys are also mirrored into the OS keychain when available so a user
-// who later runs without the file (or with `amux keys set`) still resolves. Mirroring is best
+// who later runs without the file (or with `niti keys set`) still resolves. Mirroring is best
 // effort and skipped when writing to a test store, so tests never touch the real keychain.
 export function setCredential(cred: AuthCredential): void {
   const creds = read().filter((c) => c.provider !== cred.provider);
   creds.push(cred);
   write(creds);
-  if (cred.type === "api" && !process.env.AMUX_AUTH_FILE) {
+  if (cred.type === "api" && !process.env.NITI_AUTH_FILE) {
     try {
       keychainSet(cred.provider, cred.key);
     } catch {
@@ -78,11 +78,11 @@ export function removeCredential(provider: string): void {
   }
   // Also clear the keychain mirror, or a "logged out" key would still resolve via the fallback
   // below and keep authenticating. Skipped for a test store so tests never touch the real keychain.
-  if (!process.env.AMUX_AUTH_FILE) keychainDelete(provider);
+  if (!process.env.NITI_AUTH_FILE) keychainDelete(provider);
 }
 
 // The value a provider client needs as its API key. Resolution order: typed store → keychain → env.
-// (keychain/env fallback preserves the legacy `amux keys set` and `export <ENV>` paths.)
+// (keychain/env fallback preserves the legacy `niti keys set` and `export <ENV>` paths.)
 export function resolveApiKey(provider: string): string | undefined {
   const cred = getCredential(provider);
   if (cred) {
@@ -91,13 +91,13 @@ export function resolveApiKey(provider: string): string | undefined {
     // local: no real key — the factory substitutes a "local" sentinel for keyOptional providers
     return undefined;
   }
-  // A test store (AMUX_AUTH_FILE set) is hermetic: don't fall through to the real keychain / env,
+  // A test store (NITI_AUTH_FILE set) is hermetic: don't fall through to the real keychain / env,
   // or a provider absent from the temp store would resolve a real key and make billed calls.
-  if (process.env.AMUX_AUTH_FILE) return undefined;
+  if (process.env.NITI_AUTH_FILE) return undefined;
   return keychainKey(provider); // keychain first, then env var (see keystore.getKey)
 }
 
-// A caller-supplied base URL for local/custom providers stored via `amux auth login`.
+// A caller-supplied base URL for local/custom providers stored via `niti auth login`.
 export function resolveBaseURL(provider: string): string | undefined {
   const cred = getCredential(provider);
   return cred?.type === "local" ? cred.baseURL : undefined;

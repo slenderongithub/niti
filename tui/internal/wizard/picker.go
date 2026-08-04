@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/amux/tui/internal/api"
-	"github.com/amux/tui/internal/theme"
-	"github.com/amux/tui/internal/ui"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -59,7 +59,7 @@ type Picker struct {
 
 // existing is the roster from GET /session. When it is non-empty the picker opens on a
 // "keep or re-pick" stage instead of the size question — relaunching used to cost 26 keystroked
-// answers with no way to reuse the team you already had, and ctrl+c out of it quit amux entirely.
+// answers with no way to reuse the team you already had, and ctrl+c out of it quit niti entirely.
 func NewPicker(client *api.Client, existing []api.AgentConfig) Picker {
 	ti := textinput.New()
 	ti.Focus()
@@ -124,7 +124,7 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			// On the keep-or-repick stage, backing out means "I didn't want to change anything",
-			// not "quit amux" — the saved team is right there and refusing to use it is absurd.
+			// not "quit niti" — the saved team is right there and refusing to use it is absurd.
 			if m.stage == "team" {
 				return m.keepExisting()
 			}
@@ -174,7 +174,7 @@ func (m Picker) advance(val string) (tea.Model, tea.Cmd) {
 
 	switch m.stage {
 	case "error":
-		// Was a dead end: no retry, no hint, and the only escape was ctrl+c out of amux entirely.
+		// Was a dead end: no retry, no hint, and the only escape was ctrl+c out of niti entirely.
 		m.stage = "loading"
 		m.err = ""
 		return m, fetchCatalog(m.client)
@@ -326,7 +326,7 @@ func (m *Picker) toTeam() {
 	}
 	m.list.Set([]ui.Item{
 		{Label: "Continue with this team", Value: "keep", Desc: strings.Join(summary, " · ")},
-		{Label: "Pick a new team", Value: "new", Desc: "replaces the agents: block in .amux/agents.yaml"},
+		{Label: "Pick a new team", Value: "new", Desc: "replaces the agents: block in .niti/agents.yaml"},
 	})
 	m.input.Placeholder = "enter continues with the saved team"
 }
@@ -525,7 +525,7 @@ func errText(err error) string {
 func (m Picker) View() string {
 	if m.quitting {
 		if m.Completed {
-			return lipgloss.NewStyle().Foreground(theme.Green).Render("\n✓ launching amux…\n")
+			return lipgloss.NewStyle().Foreground(theme.Green).Render("\n✓ launching niti…\n")
 		}
 		return "\ncancelled.\n"
 	}

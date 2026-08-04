@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amux/tui/internal/api"
+	"github.com/niti/tui/internal/api"
 )
 
 // Rendering every tab must not panic — against an empty roster with no history, and against a

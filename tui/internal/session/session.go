@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/amux/tui/internal/api"
-	"github.com/amux/tui/internal/theme"
-	"github.com/amux/tui/internal/ui"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -238,7 +238,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		// Mouse reporting is on so the wheel can't scroll the shell's scrollback over a live session
-		// (see cmd/amux/main.go). Having taken it, the wheel drives whatever list is on screen.
+		// (see cmd/niti/main.go). Having taken it, the wheel drives whatever list is on screen.
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
 			m.scroll(-1)
@@ -453,7 +453,7 @@ func (m Model) menuItems() []ui.Item {
 	add("config", "Theme, mode and the team's model assignments")
 	add("stats", "Token stats: favorite model and per-model breakdown")
 	add("theme", "Open the theme picker (or /theme <name> to switch directly)")
-	add("quit", "Leave amux")
+	add("quit", "Leave niti")
 	return items
 }
 
@@ -606,7 +606,7 @@ func (m *Model) apply(e api.Event) {
 			m.status = "reconnected"
 		case "dead":
 			m.disconnected = true
-			m.status = "the core exited — see .amux/core.log; restart amux"
+			m.status = "the core exited — see .niti/core.log; restart niti"
 		}
 	case "session":
 		if e.State == "started" {
@@ -652,9 +652,9 @@ func (m *Model) apply(e api.Event) {
 }
 
 func (m *Model) applyAgentEvent(ae api.AgentEvent) {
-	// Not an agent speaking: a file changed outside amux (a human's editor, a git checkout).
+	// Not an agent speaking: a file changed outside niti (a human's editor, a git checkout).
 	if ae.Type == "external_change" {
-		m.pushFeed("⟳ changed outside amux: " + truncate(ae.Payload, 60))
+		m.pushFeed("⟳ changed outside niti: " + truncate(ae.Payload, 60))
 		return
 	}
 	st := m.agents[ae.AgentID]

@@ -5,15 +5,15 @@ import (
 	"os"
 	"strings"
 
-	"github.com/amux/tui/internal/theme"
-	"github.com/amux/tui/internal/ui"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/lipgloss"
 )
 
 // Layout — the whole terminal is one painted surface, not boxes floating on the user's wallpaper:
 //
 //	┌──────────────────────────────────────────────────────────┐
-//	│ ● amux  BUILD PLAN      ~/code/amux           ███░░  45%  │  header bar
+//	│ ● niti  BUILD PLAN      ~/code/niti           ███░░  45%  │  header bar
 //	│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  mode stripe
 //	│ CONTEXT      │ ◆ Architect  google/…      ● working       │
 //	│  ███░ 25%    │ │ ⚒ read_file README.md                    │  sidebar │ work
@@ -197,11 +197,11 @@ func bar(pct, width int, fill, empty, bg lipgloss.Color) string {
 
 func (m Model) header(w int) string {
 	bg := theme.BgPane
-	// The version sits in the header rather than only behind /settings — "which amux is this?" is a
+	// The version sits in the header rather than only behind /settings — "which niti is this?" is a
 	// question worth answering without a keystroke, especially in a bug report screenshot.
-	dot, dotColor := " ● amux", theme.Accent
+	dot, dotColor := " ● niti", theme.Accent
 	if m.disconnected {
-		dot, dotColor = " ○ amux", theme.Red // hollow + error colour: the core is not answering
+		dot, dotColor = " ○ niti", theme.Red // hollow + error colour: the core is not answering
 	}
 	brand := txt(dotColor, bg).Bold(true).Render(dot) + txt(theme.Line, bg).Render(" v"+ui.Version)
 	left := brand + " " + m.pill("BUILD", "build") + m.pill("PLAN", "plan")
@@ -370,7 +370,7 @@ func (m Model) mainPane(mw, h int) string {
 func (m Model) workView(w, h int) string {
 	bg := theme.BgDeep
 	if len(m.order) == 0 {
-		return txt(theme.Muted, bg).Render(truncate("no agents configured — restart amux to pick a team", w))
+		return txt(theme.Muted, bg).Render(truncate("no agents configured — restart niti to pick a team", w))
 	}
 	// Before the first prompt there's nothing to transcribe, so the pane is the welcome: a
 	// time-of-day greeting, the version, and the roster as avatars wired together — the visual the
@@ -481,7 +481,7 @@ func (m Model) tasksStrip(w int) string {
 	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).Render(" " + strings.Join(parts, "  "))
 }
 
-// The agent-to-agent traffic — amux's whole point, so it keeps a permanent strip rather than
+// The agent-to-agent traffic — niti's whole point, so it keeps a permanent strip rather than
 // living only behind /graph.
 func (m Model) commFeed(w, lineCount int) string {
 	bg := theme.BgDeep

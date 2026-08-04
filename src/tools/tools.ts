@@ -213,7 +213,7 @@ const SPECS: Record<string, ToolSpec> = {
 
 // Appended to every agent's system prompt. Git awareness is guidance, not a tool: `shell` already
 // runs git, and a project can make it silent with `permissions: { shell: { "git diff*": allow } }`
-// in .amux/agents.yaml — a dedicated git_diff tool would be a second path to the same place.
+// in .niti/agents.yaml — a dedicated git_diff tool would be a second path to the same place.
 export const TOOL_GUIDANCE = `
 
 Working habits:

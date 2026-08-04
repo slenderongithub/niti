@@ -3,4 +3,4 @@
 import { spawnSync } from "node:child_process";
 import { binPath } from "./resolve.js";
 
-process.exit(spawnSync(binPath("amux"), process.argv.slice(2), { stdio: "inherit" }).status ?? 1);
+process.exit(spawnSync(binPath("niti"), process.argv.slice(2), { stdio: "inherit" }).status ?? 1);

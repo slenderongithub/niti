@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "amux",
+      "name": "niti",
       "devDependencies": {
         "@anthropic-ai/sdk": "^0.115.0",
         "@google/genai": "^2.13.0",

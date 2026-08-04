@@ -139,7 +139,7 @@ const MANUAL_CATALOG: Record<string, CatalogEntry> = {
   "github-copilot": {
     label: "GitHub Copilot",
     client: "copilot",
-    envVar: "GITHUB_COPILOT_TOKEN", // env fallback; normally set by `amux login copilot`
+    envVar: "GITHUB_COPILOT_TOKEN", // env fallback; normally set by `niti login copilot`
     category: "login",
     models: ["gpt-4o", "claude-3.7-sonnet", "o1", "gemini-2.0-flash"],
   },

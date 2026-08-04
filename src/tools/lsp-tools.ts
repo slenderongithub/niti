@@ -43,7 +43,7 @@ export async function runLspTool(
   const rel = String(input.path ?? "");
   const abs = safePath(root, rel); // agent-supplied path: same jail as every other tool
   const client = registry.clientFor(abs);
-  if (!client) return `no language server configured for ${rel} — add one under 'lsp:' in .amux/agents.yaml`;
+  if (!client) return `no language server configured for ${rel} — add one under 'lsp:' in .niti/agents.yaml`;
   try {
     if (name === "diagnostics") return formatDiagnostics(rel, await client.diagnostics(abs));
     const text = await client.hover(abs, Number(input.line ?? 1), Number(input.column ?? 1));

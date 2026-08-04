@@ -1,5 +1,5 @@
 "use strict";
-// amux graph — a self-contained, dependency-free interactive force graph on canvas.
+// niti graph — a self-contained, dependency-free interactive force graph on canvas.
 // Goals over Obsidian's graph: drag+pin, hover/click connection highlighting, zoom-to-cursor + pan,
 // Barnes–Hut physics (smooth at hundreds of nodes), directional edges, live "Models" mode over SSE,
 // touch + pinch, and a control panel with live force sliders. No external libraries, same-origin only.
@@ -76,7 +76,7 @@ async function loadProject() {
 let es = null;
 const mnodes = new Map(); // id -> node record (persists across toggles within models mode)
 const medges = new Map(); // "a\0b" -> {from,to}
-// Pseudo-senders, not teammates: "system" announces file edits made outside amux (engine.ts's
+// Pseudo-senders, not teammates: "system" announces file edits made outside niti (engine.ts's
 // watcher), "orchestrator" announces undo/rewind — neither is a configured agent, and treating
 // either as a graph node put phantom extras in what's supposed to be a fixed, small team.
 const NON_AGENT_IDS = new Set(["system", "orchestrator"]);

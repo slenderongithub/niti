@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { loadAgents, loadOptions, loadInstructions, loadPermissions, loadMcpServers, saveAgents, setTheme, findProjectRoot } from "./config.ts";
 
 function writeYaml(body: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "amux-cfg-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-cfg-"));
   const path = join(dir, "agents.yaml");
   writeFileSync(path, body);
   return path;
@@ -120,7 +120,7 @@ test("maxAgents is enforced when the team is loaded", () => {
 });
 
 test("loadInstructions concatenates the files that exist and skips the ones that don't", () => {
-  const dir = mkdtempSync(join(tmpdir(), "amux-inst-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-inst-"));
   writeFileSync(join(dir, "AGENTS.md"), "  build with bun test  ");
   writeFileSync(join(dir, "EMPTY.md"), "   ");
   const out = loadInstructions(["AGENTS.md", "EMPTY.md", "MISSING.md"], dir);
@@ -159,34 +159,34 @@ agents:
   expect(loadMcpServers(path)).toEqual([{ name: "code-review", command: "crg", args: undefined }]);
 });
 
-test("findProjectRoot walks up to the directory holding .amux/, like git finds .git", () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-root-"));
-  mkdirSync(join(root, ".amux"), { recursive: true });
+test("findProjectRoot walks up to the directory holding .niti/, like git finds .git", () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-root-"));
+  mkdirSync(join(root, ".niti"), { recursive: true });
   const deep = join(root, "src", "server", "nested");
   mkdirSync(deep, { recursive: true });
 
-  // Running from a subdirectory used to create a second, empty .amux/ there and start with zero
+  // Running from a subdirectory used to create a second, empty .niti/ there and start with zero
   // agents while the real config sat above it.
   expect(findProjectRoot(deep)).toBe(root);
   expect(findProjectRoot(root)).toBe(root);
 });
 
 test("findProjectRoot falls back to the enclosing git repo, then to cwd", () => {
-  const repo = mkdtempSync(join(tmpdir(), "amux-git-"));
+  const repo = mkdtempSync(join(tmpdir(), "niti-git-"));
   mkdirSync(join(repo, ".git"), { recursive: true });
   const sub = join(repo, "packages", "api");
   mkdirSync(sub, { recursive: true });
   expect(findProjectRoot(sub)).toBe(repo);
 
-  const bare = mkdtempSync(join(tmpdir(), "amux-bare-"));
+  const bare = mkdtempSync(join(tmpdir(), "niti-bare-"));
   expect(findProjectRoot(bare)).toBe(bare); // neither marker → stay put
 });
 
 test("saving config preserves comments and unrecognised keys", () => {
   // The picker runs on every launch and the theme carousel writes on every keypress — so a
   // parse→stringify round-trip meant a user who documented their roster lost every comment the
-  // first time they cycled a colour scheme. This is the file amux tells people to hand-edit.
-  const dir = mkdtempSync(join(tmpdir(), "amux-doc-"));
+  // first time they cycled a colour scheme. This is the file niti tells people to hand-edit.
+  const dir = mkdtempSync(join(tmpdir(), "niti-doc-"));
   const path = join(dir, "agents.yaml");
   writeFileSync(
     path,
@@ -202,7 +202,7 @@ test("saving config preserves comments and unrecognised keys", () => {
       "# keep the shell locked down",
       "permissions:",
       '  shell: { "rm -rf*": deny }',
-      "somethingAmuxDoesNotKnow: keepme",
+      "somethingNitiDoesNotKnow: keepme",
       "",
     ].join("\n"),
   );
@@ -212,7 +212,7 @@ test("saving config preserves comments and unrecognised keys", () => {
 
   expect(after).toContain("# my team, do not delete");
   expect(after).toContain("# keep the shell locked down");
-  expect(after).toContain("somethingAmuxDoesNotKnow: keepme");
+  expect(after).toContain("somethingNitiDoesNotKnow: keepme");
   expect(loadAgents(path).map((a) => a.id)).toEqual(["b"]); // and the roster really was replaced
   expect(loadPermissions(path)).toEqual({ shell: { "rm -rf*": "deny" } });
 

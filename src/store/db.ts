@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
-export const DEFAULT_DB = ".amux/amux.db";
+export const DEFAULT_DB = ".niti/niti.db";
 
 // Schema for the persistence substrate: sessions → messages → parts, plus per-write checkpoints.
 // A session is a child concept a task *has* (task_id), not a replacement for Task/TaskNode — the
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 );
 CREATE INDEX IF NOT EXISTS checkpoints_session ON checkpoints(session_id, id);
 
--- The persisted trail of amux's cross-provider agent-to-agent channel (messaging/message-bus.ts):
+-- The persisted trail of niti's cross-provider agent-to-agent channel (messaging/message-bus.ts):
 -- the differentiator, no longer purely ephemeral. msg_id is the bus's own id ("m3"), unique only
 -- within one process run, so the primary key is a rowid instead.
 CREATE TABLE IF NOT EXISTS bus_messages (
@@ -92,7 +92,7 @@ export function openDb(path: string = DEFAULT_DB): Database {
   const db = new Database(path, { create: true });
   db.exec("PRAGMA journal_mode = WAL;"); // concurrent agents write from one process; WAL keeps reads unblocked
   db.exec("PRAGMA foreign_keys = ON;");
-  // WAL keeps *readers* unblocked, but two writers still collide — and two amux processes on one
+  // WAL keeps *readers* unblocked, but two writers still collide — and two niti processes on one
   // project (a TUI session plus a scripted run) failed instantly with "database is locked". This
   // is the stdlib answer: wait for the other writer instead of throwing.
   db.exec("PRAGMA busy_timeout = 5000;");
@@ -102,7 +102,7 @@ export function openDb(path: string = DEFAULT_DB): Database {
 
 // Statement-at-a-time, so one failure against a drifted table can't take the whole schema (and
 // therefore the whole product) down: a v0.0.1 database that predates a column used to make every
-// later build unopenable, with "delete .amux/amux.db" — losing all history and every undo
+// later build unopenable, with "delete .niti/niti.db" — losing all history and every undo
 // checkpoint — as the only recovery. A failed statement is reported and skipped.
 function migrate(db: Database): void {
   const from = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
@@ -110,7 +110,7 @@ function migrate(db: Database): void {
     try {
       db.exec(stmt);
     } catch (err) {
-      console.error(`amux: schema step skipped (${err instanceof Error ? err.message : err})`);
+      console.error(`niti: schema step skipped (${err instanceof Error ? err.message : err})`);
     }
   }
   // Future ALTER TABLEs go here, guarded by `from`:

@@ -1,5 +1,5 @@
 {
-  "name": "amux-ink-tui-archive",
+  "name": "niti-ink-tui-archive",
   "version": "0.0.1",
   "private": true,
   "description": "Archived Ink/React terminal UI, superseded by tui/ (Go + Bubbletea). Kept for reference, not maintained or built.",

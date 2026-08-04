@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Theme is a full dark palette. Every theme is dark by design — amux paints its own background
+// Theme is a full dark palette. Every theme is dark by design — niti paints its own background
 // rather than inheriting the terminal's, so the frame reads as one surface instead of floating
 // boxes over whatever the user's terminal happens to be.
 type Theme struct {

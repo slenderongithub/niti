@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { isGitRepo, createWorktree, diffStat, commitPending, mergeBack, removeWorktree } from "./worktree.ts";
 
 function initRepo(): string {
-  const root = mkdtempSync(join(tmpdir(), "amux-worktree-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-worktree-"));
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
@@ -19,7 +19,7 @@ function initRepo(): string {
 test("isGitRepo detects a real repo and rejects a plain directory", async () => {
   const repo = initRepo();
   expect(await isGitRepo(repo)).toBe(true);
-  const plain = mkdtempSync(join(tmpdir(), "amux-plain-"));
+  const plain = mkdtempSync(join(tmpdir(), "niti-plain-"));
   expect(await isGitRepo(plain)).toBe(false);
 });
 
@@ -29,7 +29,7 @@ test("createWorktree, diffStat, commitPending, and mergeBack round-trip an UNCOM
   const repo = initRepo();
   const handle = await createWorktree(repo, "t1");
   expect(existsSync(handle.path)).toBe(true);
-  expect(handle.branch).toBe("amux/t1");
+  expect(handle.branch).toBe("niti/t1");
 
   writeFileSync(join(handle.path, "new.txt"), "added in the worktree\n");
 

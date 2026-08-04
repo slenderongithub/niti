@@ -45,7 +45,7 @@ function load(opts: { fetchOk?: boolean; savedName?: string } = {}) {
     dispatchDocClick: (target: any) => (docListeners["click"] || []).forEach((fn) => fn({ target })),
   };
   const storage = new Map<string, string>();
-  if (opts.savedName) storage.set("amux-theme", opts.savedName);
+  if (opts.savedName) storage.set("niti-theme", opts.savedName);
   const localStorage = {
     getItem: (k: string) => storage.get(k) ?? null,
     setItem: (k: string, v: string) => storage.set(k, v),
@@ -121,6 +121,6 @@ test("a theme event from another client (TUI carousel, another tab) is applied l
   es.onmessage({ data: JSON.stringify({ kind: "theme", theme: "hazard tape" }) });
 
   expect(g.rootStyle["--bg"]).toBe("#0d0d0d");
-  expect(g.storage.get("amux-theme")).toBe("hazard tape");
+  expect(g.storage.get("niti-theme")).toBe("hazard tape");
   expect(g.elFor("theme-menu").innerHTML).toContain("hazard tape ✓");
 });

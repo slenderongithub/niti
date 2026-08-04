@@ -1,8 +1,8 @@
-# amux
+# niti
 
 A terminal CLI that runs **multiple AI coding agents from different LLM providers concurrently** on one project. You assign models to **custom roles** (e.g. Gemini = Frontend Designer, Claude = Backend Engineer), pick one as the **orchestrator** that plans the work into a task DAG and sequences it, and the role-agents build together — **talking directly to each other** to align — while you watch live in the terminal (and an optional web dashboard graphing the agents as they message each other).
 
-Bring your own keys — 29 curated providers / 152 models from the [Models.dev](https://models.dev) catalog, plus **Custom** for any other OpenAI-compatible endpoint. Keys live in a global `~/.config/amux/auth.json` (0600) and your OS keychain, never a server.
+Bring your own keys — 29 curated providers / 152 models from the [Models.dev](https://models.dev) catalog, plus **Custom** for any other OpenAI-compatible endpoint. Keys live in a global `~/.config/niti/auth.json` (0600) and your OS keychain, never a server.
 
 > **v2 overhaul:** the orchestrator-DAG, agent-to-agent messaging, team picker, HTTP+SSE server,
 > Go+Bubbletea TUI, and web dashboard are new. See [`project_context.md`](./project_context.md) for
@@ -10,10 +10,10 @@ Bring your own keys — 29 curated providers / 152 models from the [Models.dev](
 
 ## Two front ends, one core
 
-- **`amux`** — the **primary, interactive** front end: a Go + Bubbletea terminal UI (`tui/`). It
+- **`niti`** — the **primary, interactive** front end: a Go + Bubbletea terminal UI (`tui/`). It
   spawns the Bun core as a subprocess and talks to it over a local HTTP+SSE API. This is what you run
   day to day.
-- **`amux-core`** — the headless Bun/TypeScript engine (`src/`). It's what `amux` spawns under the
+- **`niti-core`** — the headless Bun/TypeScript engine (`src/`). It's what `niti` spawns under the
   hood, and it's also a standalone scripting CLI (one-shot runs, `serve`, `auth`, `init`, `--web`) for
   CI or automation where an interactive terminal isn't available.
 
@@ -25,26 +25,26 @@ Go TUI is the maintained interactive front end.
 
 ```sh
 npm install -g niti                        # prebuilt binaries — no Bun, no Go, no build step
-amux                                       # pick the team, then the live session
+niti                                       # pick the team, then the live session
 ```
 
-The package is published as **`niti`** because `amux` was already taken on npm; the commands it
-installs are still `amux` (the interactive TUI) and `amux-core` (the headless engine), and the
-project's state directory is still `.amux/`.
+The package is published as **`niti`** because `niti` was already taken on npm; the commands it
+installs are still `niti` (the interactive TUI) and `niti-core` (the headless engine), and the
+project's state directory is still `.niti/`.
 
 What npm downloads is a small Node shim — the real executables ship as per-platform packages it
 picks between automatically: darwin-arm64, darwin-x64, linux-x64, linux-arm64, win32-x64.
 
 ### From source
 
-Requires [Bun](https://bun.sh) ≥ 1.3 and [Go](https://go.dev) ≥ 1.22 (only needed to build `amux`; the
+Requires [Bun](https://bun.sh) ≥ 1.3 and [Go](https://go.dev) ≥ 1.22 (only needed to build `niti`; the
 core itself is pure Bun/TypeScript).
 
 ```sh
 bun install
-bun run build:tui                          # builds ./amux (the Go TUI) — do this once, or after tui/ changes
+bun run build:tui                          # builds ./niti (the Go TUI) — do this once, or after tui/ changes
 
-./amux                                     # every launch: pick the team (1–6 models, one prompt each), then the live session
+./niti                                     # every launch: pick the team (1–6 models, one prompt each), then the live session
                                             #   type a goal, watch the agents plan + build + talk to each other
                                             #   "/" for commands · ctrl+p switches models · Tab cycles views · y/a/n answers approvals
 ```
@@ -56,13 +56,13 @@ bun run src/cli.ts init                    # headless setup wizard (plain prompt
 bun run src/cli.ts "Build a clothing website for gen-z."           # one-shot, prints plain-text progress, exits
 bun run src/cli.ts --web "Build a clothing website for gen-z."     # + live web dashboard (localhost)
 bun run src/cli.ts login copilot           # sign in with a GitHub Copilot subscription (no API key)
-bun run src/server/main.ts                 # headless core server (prints a handshake; what `amux` connects to)
+bun run src/server/main.ts                 # headless core server (prints a handshake; what `niti` connects to)
                                             #   swap /dashboard for /graph/view in the printed URL to open the graph page instead
 ```
 
 ### Picking the team
 
-`./amux` opens the picker on every launch, centred on screen — a static `agents.yaml` stops being
+`./niti` opens the picker on every launch, centred on screen — a static `agents.yaml` stops being
 useful the moment you want to try a different model. It asks:
 
 1. **how many teammates** (1–6 — each gets its own pixel-avatar color: blue, yellow, red, purple, green, pink),
@@ -74,24 +74,24 @@ in "what it does" becomes that agent's system prompt, so it's worth a sentence.
 
 ### Three ways to supply models
 
-1. **API key (BYOK)** — Anthropic, OpenAI, Google, DeepSeek, Groq, OpenRouter, Moonshot/Kimi, xAI, Mistral, Together, Fireworks, Cerebras, plus **Custom (OpenAI-compatible)** — pick "Custom", enter any base URL, and reach any OpenAI-compatible endpoint the picker doesn't list (the built-in catalog is a curated 29 providers / 152 models, not the ~180 Models.dev knows about). `amux-core auth login <provider>` (global `~/.config/amux/auth.json` 0600 + OS keychain) or the matching env var.
+1. **API key (BYOK)** — Anthropic, OpenAI, Google, DeepSeek, Groq, OpenRouter, Moonshot/Kimi, xAI, Mistral, Together, Fireworks, Cerebras, plus **Custom (OpenAI-compatible)** — pick "Custom", enter any base URL, and reach any OpenAI-compatible endpoint the picker doesn't list (the built-in catalog is a curated 29 providers / 152 models, not the ~180 Models.dev knows about). `niti-core auth login <provider>` (global `~/.config/niti/auth.json` 0600 + OS keychain) or the matching env var.
 2. **Local (offline, no key)** — Ollama (`:11434`) and LM Studio (`:1234`), routed at their local OpenAI-compatible endpoints. Nothing leaves your machine.
-3. **Sign in (subscription)** — **GitHub Copilot** via OAuth: `amux-core login copilot` runs GitHub's device flow (open the URL, enter the code); the token is stored and refreshed automatically. Then pick GitHub Copilot as a role's model.
+3. **Sign in (subscription)** — **GitHub Copilot** via OAuth: `niti-core login copilot` runs GitHub's device flow (open the URL, enter the code); the token is stored and refreshed automatically. Then pick GitHub Copilot as a role's model.
 
 Under the hood: Anthropic and Google use native clients; Copilot wraps the OpenAI client with a self-refreshing token; everything else is OpenAI-compatible (one client, different `baseURL`). See `src/providers/catalog.ts`.
 
 Or build a distributable headless binary of just the core (no Bun runtime needed to run it):
 
 ```sh
-bun run build         # → ./amux-core
-./amux-core "Add a health check endpoint and a test for it."
+bun run build         # → ./niti-core
+./niti-core "Add a health check endpoint and a test for it."
 ```
 
 Keys can also come from env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) — handy for CI.
 
 ## Configure agents
 
-Edit `.amux/agents.yaml` — one entry per role. The `lead` agent decomposes your prompt into tasks; every agent then drains the shared queue.
+Edit `.niti/agents.yaml` — one entry per role. The `lead` agent decomposes your prompt into tasks; every agent then drains the shared queue.
 
 ```yaml
 agents:
@@ -114,7 +114,7 @@ permissions:                            # project-wide default policy
   shell:      { "git *": allow, "git commit *": ask, "rm -rf*": deny }
   write_file: { "src/**": allow, "*": ask }
 
-lsp:                                    # optional language servers (you install them; amux spawns them)
+lsp:                                    # optional language servers (you install them; niti spawns them)
   typescript: { command: typescript-language-server, args: [--stdio], extensions: [.ts, .tsx] }
   go:         { command: gopls, extensions: [.go] }
 
@@ -124,9 +124,9 @@ mcpServers:                             # optional MCP servers, merged into the 
     args: [--stdio]
 
 # --- options: everything else is optional and has a working default ---
-theme: amux                             # TUI colours at launch (ctrl+t or /theme opens a carousel; synced live to the web dashboard/graph)
+theme: niti                             # TUI colours at launch (ctrl+t or /theme opens a carousel; synced live to the web dashboard/graph)
 auto: false                             # approve anything not explicitly denied (same as --auto)
-watch: true                             # announce edits made outside amux as external_change events
+watch: true                             # announce edits made outside niti as external_change events
 instructions: [AGENTS.md, CLAUDE.md]    # appended to every agent's system prompt (missing files are skipped)
 maxTurns: 12                            # tool-loop iterations per agent turn
 maxAgents: 6                            # refuse to load a bigger team than this (the picker itself caps at 6 — one per avatar color)
@@ -147,12 +147,12 @@ nowhere, which made a broken install hard to diagnose.
 
 | Variable | What it does |
 |---|---|
-| `AMUX_CORE_ENTRY` | Run the core from this entry point instead of the resolved `amux-core` binary (dev override). |
-| `AMUX_BUN` | The `bun` executable used with `AMUX_CORE_ENTRY`. Default: `bun` on `$PATH`. |
-| `AMUX_SERVER_URL` / `AMUX_SERVER_TOKEN` | Attach the TUI to an already-running core instead of spawning one. Note that a core started this way cannot be restarted by the picker, so a new team needs a manual restart. |
-| `AMUX_WEB_DIR` | Where the dashboard's static files live. Resolved automatically; set it only for an unusual layout. |
-| `AMUX_AUTH_FILE` | Path to the credential store. Default: `~/.config/amux/auth.json` (0600). |
-| `AMUX_NO_MOUSE` | Set to `1` to give the wheel and drag-to-select back to your terminal. amux takes mouse reporting so the wheel scrolls the session rather than the shell's scrollback; if you would rather select text with the mouse, set this. |
+| `NITI_CORE_ENTRY` | Run the core from this entry point instead of the resolved `niti-core` binary (dev override). |
+| `NITI_BUN` | The `bun` executable used with `NITI_CORE_ENTRY`. Default: `bun` on `$PATH`. |
+| `NITI_SERVER_URL` / `NITI_SERVER_TOKEN` | Attach the TUI to an already-running core instead of spawning one. Note that a core started this way cannot be restarted by the picker, so a new team needs a manual restart. |
+| `NITI_WEB_DIR` | Where the dashboard's static files live. Resolved automatically; set it only for an unusual layout. |
+| `NITI_AUTH_FILE` | Path to the credential store. Default: `~/.config/niti/auth.json` (0600). |
+| `NITI_NO_MOUSE` | Set to `1` to give the wheel and drag-to-select back to your terminal. niti takes mouse reporting so the wheel scrolls the session rather than the shell's scrollback; if you would rather select text with the mouse, set this. |
 
 Provider keys are read from the usual per-provider variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
 `GEMINI_API_KEY`, …) when nothing is stored in the auth file or the keychain.
@@ -160,12 +160,12 @@ Provider keys are read from the usual per-provider variables (`ANTHROPIC_API_KEY
 ## How it works
 
 ```
-                    Go + Bubbletea TUI (amux)         Web dashboard (optional, --web)
+                    Go + Bubbletea TUI (niti)         Web dashboard (optional, --web)
                      team picker · panes · comm-graph    localhost force-graph
                               └──────────── HTTP + SSE (src/server) ────────────┘
                                                   ▼
                                     Engine (src/engine.ts)
-   loadAgents (.amux/agents.yaml) ──▶ makeProvider (auth store) ──▶ Agent[] (+ Messenger)
+   loadAgents (.niti/agents.yaml) ──▶ makeProvider (auth store) ──▶ Agent[] (+ Messenger)
                                                   │
    orchestrator ──plan (DAG)──▶ scheduler (src/orchestrator) ◀──concurrent claim──┤
                         │                    │
@@ -177,14 +177,14 @@ Provider keys are read from the usual per-provider variables (`ANTHROPIC_API_KEY
 - **Providers** — one `Provider` interface; native clients for Anthropic/Gemini, one OpenAI-compatible client covering the rest of the catalog (29 providers / 152 models total, generated from Models.dev) and any custom base URL.
 - **Event bus → SSE** — agents publish to a typed `Bus`; the `Engine` fans that (plus orchestration lifecycle, agent messages, usage, approvals) into one `EventHub` served over Server-Sent Events to both the Go TUI and the web dashboard.
 - **Tools** — sandboxed `read_file` / `write_file` / `edit` / `shell`, gated per-agent by `allowedTools` *and* by the wildcard permission policy above. `allowedTools` bounds MCP tools too: add `mcp` to grant every configured server's tools, or name one as `mcp__<server>__<tool>`. Every path is jailed to the project root and shell exec via `spawn` (no shell string → no injection). `edit` replaces an exact snippet (unique match required) instead of overwriting a whole file.
-- **Persistence** — every turn is decomposed into parts and written to SQLite at `.amux/amux.db` (`src/store/`), so conversations survive a restart: `amux-core resume` re-runs unfinished tasks with their history seeded. Each file write is checkpointed first, which is what `/undo` reverts.
+- **Persistence** — every turn is decomposed into parts and written to SQLite at `.niti/niti.db` (`src/store/`), so conversations survive a restart: `niti-core resume` re-runs unfinished tasks with their history seeded. Each file write is checkpointed first, which is what `/undo` reverts.
 - **LSP + MCP together** — MCP servers and language servers are two independent tool sources merged into the same loop. LSP adds `diagnostics(path)` and `hover(path,line,col)` over hand-rolled JSON-RPC (`src/lsp/`); a missing server is a message, never a crash.
 - **Sub-agent forking** — `spawn_fork` runs a child loop on the same model, tools, and permissions, and returns just its findings. It's a child *session*, invisible to the DAG scheduler, capped by `MAX_FORK_DEPTH`.
-- **Slash commands** — defined server-side (`src/commands/registry.ts`) so the TUI and the web dashboard share one implementation. Typing `/` opens a filtered menu above the prompt with a description per command, so nothing has to be memorised. Server-side: `/usage /cancel /undo /rewind /branch /model /sessions /agents /tasks /skills /mcp /lsp /permissions /cost /status /debate /export /resume /clear /init /help`. Client-side (the TUI implements these itself): `/graph /dashboard /settings /config /stats /theme /quit`. Plus your own in `.amux/commands/<name>.md` (frontmatter + a prompt body, `$ARGUMENTS` interpolated).
+- **Slash commands** — defined server-side (`src/commands/registry.ts`) so the TUI and the web dashboard share one implementation. Typing `/` opens a filtered menu above the prompt with a description per command, so nothing has to be memorised. Server-side: `/usage /cancel /undo /rewind /branch /model /sessions /agents /tasks /skills /mcp /lsp /permissions /cost /status /debate /export /resume /clear /init /help`. Client-side (the TUI implements these itself): `/graph /dashboard /settings /config /stats /theme /quit`. Plus your own in `.niti/commands/<name>.md` (frontmatter + a prompt body, `$ARGUMENTS` interpolated).
 - **Model carousel** — `ctrl+p` pops a picker in the middle of the screen: choose the teammate, then its model, with type-to-filter over every model on a provider you have a key for. `/model <agentId> <provider/model>` still works for scripting.
-- **Theme carousel** — `ctrl+t` or `/theme` pops a centred carousel: `←→`/`hjkl` slides between palettes with a live preview before you commit, `esc` reverts. The choice persists to `.amux/agents.yaml` and syncs live (over the same SSE stream) to any open web dashboard or graph page — pick a theme in the TUI and an open browser tab updates without a reload.
+- **Theme carousel** — `ctrl+t` or `/theme` pops a centred carousel: `←→`/`hjkl` slides between palettes with a live preview before you commit, `esc` reverts. The choice persists to `.niti/agents.yaml` and syncs live (over the same SSE stream) to any open web dashboard or graph page — pick a theme in the TUI and an open browser tab updates without a reload.
 - **Pixel-art agent avatars** — every agent in the web dashboard and the graph page's Models view renders as a small pixel mascot, one of 6 fixed identity colors by team position (blue, yellow, red, purple, green, pink — wraps past 6), each with its own face. Status (idle/working/done/failed) is a small corner dot, not the sprite's fill, so identity and status never fight for the same pixel.
-- **File watching** — edits made outside amux (your editor, a `git checkout`) surface as `external_change` events; an agent's own writes are suppressed so it never hears its own echo.
+- **File watching** — edits made outside niti (your editor, a `git checkout`) surface as `external_change` events; an agent's own writes are suppressed so it never hears its own echo.
 
 ## Status
 
@@ -198,7 +198,7 @@ the task is done (Anthropic `tool_use`, OpenAI `tool_calls`, Gemini `functionCal
 
 **Streaming**: agent output streams token-by-token to both front ends, across all providers — Anthropic `.stream()`, OpenAI/Gemini/Copilot incremental deltas.
 
-**Approval gates**: agents pause before `write_file`/`shell` and ask `[y] approve · [n] deny · [a] always` — in the Go TUI, and in the web dashboard (`--web`), which answers the same queue. A headless run (`amux-core "task"`) has nobody to ask, so it **refuses** gated tools unless you pass `--auto` or pre-grant them via `permissions:`/`autoApprove:` in agents.yaml. Dangerous shell patterns (`rm -rf`, `git push --force`, …) always prompt, even with a standing grant.
+**Approval gates**: agents pause before `write_file`/`shell` and ask `[y] approve · [n] deny · [a] always` — in the Go TUI, and in the web dashboard (`--web`), which answers the same queue. A headless run (`niti-core "task"`) has nobody to ask, so it **refuses** gated tools unless you pass `--auto` or pre-grant them via `permissions:`/`autoApprove:` in agents.yaml. Dangerous shell patterns (`rm -rf`, `git push --force`, …) always prompt, even with a standing grant.
 
 **Token safeguards & failover**: agents report token usage and get pre-emptive `warning`s — at ~85% of the context window, *and* when the account's rate-limit headers show requests running out. When one hits a 429 / overload / context-limit, its task is requeued (not failed) and another agent picks it up — a `failover` event shows the handoff; an attempt cap (3) prevents loops.
 
@@ -206,11 +206,11 @@ the task is done (Anthropic `tool_use`, OpenAI `tool_calls`, Gemini `functionCal
 
 **Graph view**: `/graph` opens the interactive agent→task graph **in your browser** (the core serves it at `/graph/view`) — the terminal can't do the drag/hover/zoom the graph is built around. `/dashboard` opens the full control centre the same way. On a headless box with no browser, both report the failure rather than opening anything.
 
-**MCP**: declare `mcpServers` in `.amux/agents.yaml`; each server's tools appear to agents as `mcp__<server>__<tool>` and route through the same tool loop (gated for approval like other external actions). Verified end-to-end against a live stdio MCP server.
+**MCP**: declare `mcpServers` in `.niti/agents.yaml`; each server's tools appear to agents as `mcp__<server>__<tool>` and route through the same tool loop (gated for approval like other external actions). Verified end-to-end against a live stdio MCP server.
 
-**Skills**: drop `.amux/skills/<name>/SKILL.md` (YAML frontmatter) — descriptions are injected into every agent's system prompt; agents read the full file on demand.
+**Skills**: drop `.niti/skills/<name>/SKILL.md` (YAML frontmatter) — descriptions are injected into every agent's system prompt; agents read the full file on demand.
 
-**Session persistence**: tasks (and the DAG) auto-save to `.amux/session.json`; conversations (sessions → messages → parts, plus per-write checkpoints and the agent-to-agent message trail) go to SQLite at `.amux/amux.db`. `amux-core resume` continues the unfinished tasks with their stored history, rather than starting them over.
+**Session persistence**: tasks (and the DAG) auto-save to `.niti/session.json`; conversations (sessions → messages → parts, plus per-write checkpoints and the agent-to-agent message trail) go to SQLite at `.niti/niti.db`. `niti-core resume` continues the unfinished tasks with their stored history, rather than starting them over.
 
 Intentional ceilings (deliberate, not gaps — see `project_context.md` for the full list): the tool sandbox is path-prefix jailed, not container/seccomp isolated (symlink escapes are possible); MCP servers are shared across agents, not per-agent scoped; skills are prompt-injected + read-on-demand, not sandboxed execution; Gemini pairs parallel tool calls by name (a rare edge when the same tool is called twice in one turn); agent-to-agent messaging is open within a run rather than restricted to the plan's declared edges (the planner can't anticipate every mid-task question, so only a per-pair rate cap guards against loops); and of the three sign-in options, only GitHub Copilot's OAuth is wired.
 

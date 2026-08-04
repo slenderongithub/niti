@@ -15,7 +15,7 @@ const COPILOT_HEADERS: Record<string, string> = {
   "User-Agent": "GitHubCopilotChat/0.26.0",
 };
 
-const JSON_HEADERS = { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "amux" };
+const JSON_HEADERS = { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "niti" };
 
 export interface DeviceCode {
   device_code: string;
@@ -82,9 +82,9 @@ export async function pollForToken(deviceCode: string, interval: number): Promis
 // Exchange the GitHub OAuth token for a short-lived Copilot API token.
 export async function fetchCopilotToken(githubToken: string): Promise<{ token: string; expiresAt: number }> {
   const res = await fetch(COPILOT_TOKEN_URL, {
-    headers: { Authorization: `token ${githubToken}`, "User-Agent": "amux", Accept: "application/json" },
+    headers: { Authorization: `token ${githubToken}`, "User-Agent": "niti", Accept: "application/json" },
   });
-  if (!res.ok) throw new Error(`Copilot token exchange failed: ${res.status} (re-run: amux login copilot)`);
+  if (!res.ok) throw new Error(`Copilot token exchange failed: ${res.status} (re-run: niti login copilot)`);
   const data = (await res.json()) as { token: string; expires_at?: number };
   return { token: data.token, expiresAt: (data.expires_at ?? 0) * 1000 };
 }

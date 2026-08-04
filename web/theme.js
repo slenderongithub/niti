@@ -11,7 +11,7 @@
 (function () {
   const params = new URLSearchParams(location.search);
   const TOKEN = params.get("token") || "";
-  const STORAGE_KEY = "amux-theme";
+  const STORAGE_KEY = "niti-theme";
   const SWATCH_KEYS = ["accent", "alt", "green", "blue", "pink"];
 
   const $ = (id) => document.getElementById(id);

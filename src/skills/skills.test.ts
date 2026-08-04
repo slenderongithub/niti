@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { loadSkills, skillsPrompt } from "./skills.ts";
 
 function makeSkillsDir(): string {
-  const root = mkdtempSync(join(tmpdir(), "amux-skills-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-skills-"));
   const dir = join(root, "skills");
   mkdirSync(join(dir, "testing"), { recursive: true });
   writeFileSync(
@@ -32,7 +32,7 @@ test("loadSkills returns [] when the dir is absent; skillsPrompt is empty then",
 });
 
 test("skillsPrompt lists each skill with its file path", () => {
-  const text = skillsPrompt([{ name: "testing", description: "d", path: ".amux/skills/testing/SKILL.md" }]);
+  const text = skillsPrompt([{ name: "testing", description: "d", path: ".niti/skills/testing/SKILL.md" }]);
   expect(text).toContain("testing: d");
-  expect(text).toContain(".amux/skills/testing/SKILL.md");
+  expect(text).toContain(".niti/skills/testing/SKILL.md");
 });

@@ -1,15 +1,15 @@
 node_modules/
-# anchored: unanchored `amux` matched any path component, which silently ignored
-# tui/cmd/amux/ — the Go TUI's main package — so a clean clone could not build it.
-/amux
-/amux-core
+# anchored: unanchored `niti` matched any path component, which silently ignored
+# tui/cmd/niti/ — the Go TUI's main package — so a clean clone could not build it.
+/niti
+/niti-core
 /npm/
 *.tgz
 *.log
 .DS_Store
-.amux/agents.yaml
-.amux/session.json
-.amux/amux.db*
-.amux/reports/
+.niti/agents.yaml
+.niti/session.json
+.niti/niti.db*
+.niti/reports/
 .env
 .env.*

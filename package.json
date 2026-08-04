@@ -4,8 +4,8 @@
   "description": "A terminal CLI that runs multiple AI coding agents from different LLM providers concurrently on one project.",
   "type": "module",
   "bin": {
-    "amux": "bin/amux.js",
-    "amux-core": "bin/amux-core.js"
+    "niti": "bin/niti.js",
+    "niti-core": "bin/niti-core.js"
   },
   "files": [
     "bin/",
@@ -15,8 +15,8 @@
   "scripts": {
     "dev": "bun run src/cli.ts",
     "serve": "bun run src/server/main.ts",
-    "build": "bun build --compile ./src/cli.ts --outfile amux-core",
-    "build:tui": "cd tui && go mod tidy && go build -o ../amux ./cmd/amux",
+    "build": "bun build --compile ./src/cli.ts --outfile niti-core",
+    "build:tui": "cd tui && go mod tidy && go build -o ../niti ./cmd/niti",
     "build:all": "bun run build:tui && bun run build",
     "build:release": "bun run scripts/build-release.ts",
     "test": "bun test src web",
@@ -28,11 +28,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/slenderongithub/amux.git"
+    "url": "git+https://github.com/slenderongithub/niti.git"
   },
-  "homepage": "https://github.com/slenderongithub/amux#readme",
+  "homepage": "https://github.com/slenderongithub/niti#readme",
   "bugs": {
-    "url": "https://github.com/slenderongithub/amux/issues"
+    "url": "https://github.com/slenderongithub/niti/issues"
   },
   "keywords": [
     "ai",

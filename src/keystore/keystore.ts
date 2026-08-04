@@ -1,12 +1,12 @@
 import { CATALOG } from "../providers/catalog.ts";
 
-const SERVICE = "amux";
+const SERVICE = "niti";
 
 // @napi-rs/keyring is a native .node binding, resolved at runtime for one platform only. As a
 // top-level `import` it took the whole process down with "Cannot find native binding" on any
 // binary that wasn't compiled on the machine it runs on — the same failure that node-pty caused,
 // and the thing that makes a cross-compiled release impossible. So: loaded on first use, and
-// allowed to be absent. Without it, keys come from ~/.config/amux/auth.json and the env vars,
+// allowed to be absent. Without it, keys come from ~/.config/niti/auth.json and the env vars,
 // which is already the documented path for headless boxes.
 type EntryCtor = new (service: string, user: string) => {
   getPassword(): string | null;
@@ -48,7 +48,7 @@ export function getKey(provider: string): string | undefined {
 
 export function setKey(provider: string, key: string): void {
   const Entry = keychain();
-  if (!Entry) throw new Error("no OS keychain available here — set the provider's env var, or use `amux-core auth login`");
+  if (!Entry) throw new Error("no OS keychain available here — set the provider's env var, or use `niti-core auth login`");
   new Entry(SERVICE, provider).setPassword(key);
 }
 

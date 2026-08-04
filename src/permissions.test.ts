@@ -71,7 +71,7 @@ test("path subjects are normalized, so ./x and a/../x cannot dodge a rule", () =
   // ...and the inverse: an allow scoped to src/** must not cover an escape out of src/.
   const allow: PermissionRules = { write_file: { "src/**": "allow" } };
   expect(resolve([allow], "write_file", { path: "src/api.ts" })).toBe("allow");
-  expect(resolve([allow], "write_file", { path: "src/../.amux/agents.yaml" })).not.toBe("allow");
+  expect(resolve([allow], "write_file", { path: "src/../.niti/agents.yaml" })).not.toBe("allow");
 
   expect(subject("write_file", { path: "./a/../b.txt" })).toBe("b.txt");
 });

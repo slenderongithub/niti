@@ -1,4 +1,4 @@
-module github.com/amux/tui
+module github.com/niti/tui
 
 go 1.22
 

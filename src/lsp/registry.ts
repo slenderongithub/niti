@@ -1,6 +1,6 @@
 import { LspClient } from "./client.ts";
 
-// Extension → language server, from the `lsp:` block in .amux/agents.yaml:
+// Extension → language server, from the `lsp:` block in .niti/agents.yaml:
 //
 //   lsp:
 //     typescript: { command: typescript-language-server, args: [--stdio], extensions: [.ts, .tsx] }

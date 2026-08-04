@@ -8,12 +8,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/amux/tui/internal/theme"
+	"github.com/niti/tui/internal/theme"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Version is the amux release string. It lives here because both the setup screens and the live
+// Version is the niti release string. It lives here because both the setup screens and the live
 // session view put it on screen, and `ui` is the one package both already import.
 const Version = "0.2.0"
 

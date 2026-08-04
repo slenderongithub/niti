@@ -121,13 +121,13 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: "skills",
-    description: "List the skills agents can read from .amux/skills/",
+    description: "List the skills agents can read from .niti/skills/",
     async run() {
       // Read from disk rather than off the engine: skills are files, and a skill added mid-session
       // should show up without a restart. The list is small and this is a manual command.
       const skills = loadSkills();
       if (!skills.length) {
-        return { ok: true, message: "no skills yet — add .amux/skills/<name>/SKILL.md (name + description frontmatter)" };
+        return { ok: true, message: "no skills yet — add .niti/skills/<name>/SKILL.md (name + description frontmatter)" };
       }
       return { ok: true, message: skills.map((s) => `${s.name.padEnd(20)} ${s.description || "(no description)"}`).join("\n") };
     },
@@ -137,7 +137,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: "List connected MCP servers and how many tools each contributes",
     async run(engine) {
       const servers = engine.mcp?.servers?.() ?? [];
-      if (!servers.length) return { ok: true, message: "no MCP servers connected (configure them under mcpServers: in .amux/agents.yaml)" };
+      if (!servers.length) return { ok: true, message: "no MCP servers connected (configure them under mcpServers: in .niti/agents.yaml)" };
       return { ok: true, message: servers.map((s) => `${s.name}  ${s.tools} tools`).join("\n") };
     },
   },
@@ -146,7 +146,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: "List configured language servers and whether each is running",
     async run(engine) {
       const servers = engine.lsp?.list() ?? [];
-      if (!servers.length) return { ok: true, message: "no language servers configured (add an lsp: block to .amux/agents.yaml)" };
+      if (!servers.length) return { ok: true, message: "no language servers configured (add an lsp: block to .niti/agents.yaml)" };
       return {
         ok: true,
         message: servers.map((s) => `${s.running ? "●" : "○"} ${s.name}  ${s.command}  ${s.extensions.join(" ")}`).join("\n"),
@@ -228,7 +228,7 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: "export",
-    description: "Write a session audit report (tasks, transcripts, cost, diff) to .amux/reports/",
+    description: "Write a session audit report (tasks, transcripts, cost, diff) to .niti/reports/",
     async run(engine) {
       const { message } = await buildExportReport(engine);
       return { ok: true, message };
@@ -274,11 +274,11 @@ const INIT_PROMPT =
   "how to build, how to test, how the code is organised, and any conventions a newcomer would " +
   "otherwise get wrong. If AGENTS.md already exists, update it rather than duplicating it.";
 
-// User-defined commands: .amux/commands/<name>.md, YAML frontmatter (name/description) + a prompt
-// body. Deliberately the same shape as .amux/skills/<name>/SKILL.md (see skills/skills.ts) rather
+// User-defined commands: .niti/commands/<name>.md, YAML frontmatter (name/description) + a prompt
+// body. Deliberately the same shape as .niti/skills/<name>/SKILL.md (see skills/skills.ts) rather
 // than a second config format to learn. `$ARGUMENTS` in the body is replaced with whatever the user
 // typed after the command.
-export function loadCommands(dir = ".amux/commands"): Command[] {
+export function loadCommands(dir = ".niti/commands"): Command[] {
   if (!existsSync(dir)) return [];
   const commands: Command[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -303,7 +303,7 @@ export function loadCommands(dir = ".amux/commands"): Command[] {
         },
       });
     } catch (err) {
-      console.error(`amux: skipping ${join(dir, entry.name)}: ${err instanceof Error ? err.message : err}`);
+      console.error(`niti: skipping ${join(dir, entry.name)}: ${err instanceof Error ? err.message : err}`);
     }
   }
   return commands;
@@ -316,7 +316,7 @@ export class CommandRegistry {
   constructor(commands: Command[] = [...BUILTIN_COMMANDS, ...loadCommands()]) {
     for (const c of commands) this.byName.set(c.name, c);
     // /help lives here rather than in BUILTIN_COMMANDS because it's the one command that has to
-    // see the finished registry — including whatever .amux/commands/ added.
+    // see the finished registry — including whatever .niti/commands/ added.
     if (!this.byName.has("help")) {
       this.byName.set("help", {
         name: "help",

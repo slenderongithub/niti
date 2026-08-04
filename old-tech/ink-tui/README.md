@@ -1,6 +1,6 @@
 # Archived: Ink/React terminal UI
 
-This is the original amux interactive terminal UI, built with [Ink](https://github.com/vadimdemedes/ink)
+This is the original niti interactive terminal UI, built with [Ink](https://github.com/vadimdemedes/ink)
 (React for CLIs). It has been **superseded by `tui/`** (Go + Bubbletea) as the primary interactive
 front end, per the v2 client/server overhaul (see `../../project_context.md`).
 

@@ -25,7 +25,7 @@ const COMMANDS: { cmd: string; desc: string }[] = [
   { cmd: "/status", desc: "Show agent and task status" },
   { cmd: "/skills", desc: "List available skills" },
   { cmd: "/clear", desc: "Start a new session (clears tasks & logs)" },
-  { cmd: "/exit", desc: "Exit amux" },
+  { cmd: "/exit", desc: "Exit niti" },
 ];
 
 function HelpView() {
@@ -66,7 +66,7 @@ function SkillsView() {
     <Box flexDirection="column" borderStyle="round" borderColor={theme.border} marginTop={1} paddingX={1}>
       <Text bold>Skills (/skills to toggle)</Text>
       {skills.length === 0 ? (
-        <Text dimColor>(none — add .amux/skills/&lt;name&gt;/SKILL.md)</Text>
+        <Text dimColor>(none — add .niti/skills/&lt;name&gt;/SKILL.md)</Text>
       ) : (
         skills.map((s) => (
           <Text key={s.name}>

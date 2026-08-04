@@ -12,7 +12,7 @@ export interface FileGraph {
 }
 
 const SRC_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go"]);
-const IGNORE = new Set(["node_modules", ".git", "dist", "build", ".amux", "vendor", ".next", "out", "target", "coverage", "old-tech"]);
+const IGNORE = new Set(["node_modules", ".git", "dist", "build", ".niti", "vendor", ".next", "out", "target", "coverage", "old-tech"]);
 
 export function buildFileGraph(root: string, maxFiles = 400): FileGraph {
   const files: string[] = [];

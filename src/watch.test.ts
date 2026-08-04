@@ -18,7 +18,7 @@ async function until(pred: () => boolean, ms = 5000): Promise<boolean> {
 }
 
 test("a change inside the project is reported", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-watch-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
   const seen: string[] = [];
   const w = watchProject(root, (p) => seen.push(p));
 
@@ -28,7 +28,7 @@ test("a change inside the project is reported", async () => {
 });
 
 test("noise directories never fire", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-watch-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
   const seen: string[] = [];
   const w = watchProject(root, (p) => seen.push(p));
 
@@ -42,7 +42,7 @@ test("noise directories never fire", async () => {
 });
 
 test("an agent's own write is not reported back as an external change", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-watch-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
   const seen: string[] = [];
   const w = watchProject(root, (p) => seen.push(p));
 
@@ -67,13 +67,13 @@ test("an agent's own write is not reported back as an external change", async ()
 test("isIgnored matches on any path segment", () => {
   expect(isIgnored(".git/HEAD")).toBe(true);
   expect(isIgnored("src/node_modules/x/index.js")).toBe(true);
-  expect(isIgnored(".amux/amux.db")).toBe(true);
+  expect(isIgnored(".niti/niti.db")).toBe(true);
   expect(isIgnored("src/agent/agent.ts")).toBe(false);
   expect(isIgnored("gitignore.md")).toBe(false); // segment match, not substring
 });
 
 test("close() stops further reports", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-watch-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
   const seen: string[] = [];
   const w = watchProject(root, (p) => seen.push(p));
   w.close();

@@ -36,7 +36,7 @@ test("/rewind defaults to one step and reports nothing to rewind when the queue 
 });
 
 test("/rewind n pops n checkpoints in one call", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "amux-rewind-cmd-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-rewind-cmd-"));
   const file = join(dir, "f.txt");
   writeFileSync(file, "v2");
   const store = new SessionStore(openDb(":memory:"));
@@ -52,7 +52,7 @@ test("/branch requires a name and a git repo", async () => {
   const r = new CommandRegistry(BUILTIN_COMMANDS);
   expect(await r.run(engine(), "branch", "")).toEqual({ ok: false, message: "usage: /branch <name>" });
 
-  const nonGitRoot = mkdtempSync(join(tmpdir(), "amux-branch-nongit-"));
+  const nonGitRoot = mkdtempSync(join(tmpdir(), "niti-branch-nongit-"));
   const notGit = await r.run(new Engine({ configs: [], makeProvider: () => stub, root: nonGitRoot }), "branch", "my-snapshot");
   expect(notGit).toEqual({ ok: false, message: "not a git repository" });
 });
@@ -107,8 +107,8 @@ test("an unknown command is reported, not thrown", async () => {
   expect(await new CommandRegistry(BUILTIN_COMMANDS).run(engine(), "nope")).toEqual({ ok: false, message: "unknown command: /nope" });
 });
 
-test("a .amux/commands/*.md file becomes a command that submits its body", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "amux-cmds-"));
+test("a .niti/commands/*.md file becomes a command that submits its body", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-cmds-"));
   writeFileSync(join(dir, "review.md"), "---\nname: review\ndescription: Review the diff\n---\nReview the changes in $ARGUMENTS and report problems.\n");
 
   const [cmd] = loadCommands(dir);
@@ -123,14 +123,14 @@ test("a .amux/commands/*.md file becomes a command that submits its body", async
 });
 
 test("a file without frontmatter still works, named after the file", () => {
-  const dir = mkdtempSync(join(tmpdir(), "amux-cmds-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-cmds-"));
   writeFileSync(join(dir, "ship.md"), "Ship it.");
   expect(loadCommands(dir).map((c) => c.name)).toEqual(["ship"]);
   expect(loadCommands("/no/such/dir")).toEqual([]);
 });
 
 test("a user command overrides a built-in of the same name", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "amux-cmds-"));
+  const dir = mkdtempSync(join(tmpdir(), "niti-cmds-"));
   writeFileSync(join(dir, "undo.md"), "---\ndescription: mine\n---\nbody\n");
   const r = new CommandRegistry([...BUILTIN_COMMANDS, ...loadCommands(dir)]);
   expect(r.list().find((c) => c.name === "undo")?.description).toBe("mine");
@@ -148,8 +148,8 @@ test("list() is what a client renders for autocomplete", () => {
   expect(new Set(names).size).toBe(names.length); // every name unique — one keystroke, one command
 });
 
-test("/help lists every command, including ones loaded from .amux/commands", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "amux-cmd-"));
+test("/help lists every command, including ones loaded from .niti/commands", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-cmd-"));
   writeFileSync(join(dir, "ship.md"), "---\nname: ship\ndescription: Ship it\n---\nDo the thing");
   const r = new CommandRegistry([...BUILTIN_COMMANDS, ...loadCommands(dir)]);
 

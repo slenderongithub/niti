@@ -4,7 +4,7 @@ import type { Task } from "./orchestrator/task.ts";
 import type { Turn } from "./providers/provider.ts";
 import type { SessionStore } from "./store/session-store.ts";
 
-const DEFAULT = ".amux/session.json";
+const DEFAULT = ".niti/session.json";
 
 // The task board stays JSON (small, human-readable, hand-editable); conversation history lives in
 // SQLite (store/), because it's large, append-heavy, and queried by session rather than read whole.
@@ -25,7 +25,7 @@ export function loadTasks(path = DEFAULT): Task[] {
     const data = JSON.parse(readFileSync(path, "utf8")) as { tasks?: Task[] };
     return Array.isArray(data.tasks) ? data.tasks : [];
   } catch {
-    console.error(`amux: ignoring unreadable ${path}`);
+    console.error(`niti: ignoring unreadable ${path}`);
     return [];
   }
 }

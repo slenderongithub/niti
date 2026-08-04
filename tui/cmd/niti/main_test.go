@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-// The resolution order in coreCmd is the whole difference between an amux that runs anywhere and
+// The resolution order in coreCmd is the whole difference between an niti that runs anywhere and
 // one that only runs inside the git checkout, so pin it. os.Executable() here is the test binary
-// in go's build cache, which has no amux-core sibling — the sibling branch is covered by the
+// in go's build cache, which has no niti-core sibling — the sibling branch is covered by the
 // install smoke test, these two cover the fallbacks and the failure message.
-func TestCoreCmdFindsAmuxCoreOnPath(t *testing.T) {
+func TestCoreCmdFindsNitiCoreOnPath(t *testing.T) {
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "amux-core")
+	bin := filepath.Join(dir, "niti-core")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestCoreCmdFindsAmuxCoreOnPath(t *testing.T) {
 
 func TestCoreCmdReportsEveryCandidateWhenNothingIsFound(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PATH", dir) // empty: no amux-core anywhere
+	t.Setenv("PATH", dir) // empty: no niti-core anywhere
 	chdir(t, dir)         // and no src/server/main.ts either
 
 	cmd, tried := coreCmd()

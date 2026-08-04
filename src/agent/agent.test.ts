@@ -21,7 +21,7 @@ const cfg: AgentConfig = {
 };
 
 test("agent runs the full tool loop: request → sandboxed execute → feed back → finish", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
 
   // First call asks to write a file; second call (after seeing the result) finishes.
   let n = 0;
@@ -98,7 +98,7 @@ test("emits a single context warning when usage crosses the threshold", async ()
 });
 
 test("auto-compacts turns once usage crosses 95% of the context window", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   const bus = new Bus();
   const warnings: string[] = [];
   bus.subscribe((e) => {
@@ -201,7 +201,7 @@ test("busy stays true if run() and respond() overlap — one finishing must not 
 });
 
 test("a denied gated tool is not executed and 'not approved' is fed back", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   let n = 0;
   const stub: Provider = {
     async send() {
@@ -220,7 +220,7 @@ test("a denied gated tool is not executed and 'not approved' is fed back", async
 });
 
 test("an approved gated tool runs normally", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   let n = 0;
   const stub: Provider = {
     async send() {
@@ -235,7 +235,7 @@ test("an approved gated tool runs normally", async () => {
 });
 
 test("write_file waits on a lock another agent holds, via a shared LockRegistry", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   const bus = new Bus();
   const locks = new LockRegistry(bus);
   // Lock keys are resolved absolute paths, so that two agents spelling the same file differently
@@ -266,7 +266,7 @@ test("write_file waits on a lock another agent holds, via a shared LockRegistry"
 });
 
 test("a differently-spelled path takes the same lock", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   const bus = new Bus();
   const locks = new LockRegistry(bus);
   await locks.acquire(join(root, "shared.txt"), "other-agent");
@@ -329,7 +329,7 @@ test("isDangerousShellCall flags destructive patterns and ignores everything els
 });
 
 test("a dangerous shell command still prompts even with a standing 'always allow shell' grant", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   const bus = new Bus();
   const approvals = new ApprovalQueue();
   approvals.grant("a", "shell"); // as if the user had already clicked "always allow shell for a"
@@ -355,7 +355,7 @@ test("a dangerous shell command still prompts even with a standing 'always allow
 });
 
 test("with a store, loadTurns reconstructs exactly what was fed to provider.send()", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   const store = new SessionStore(openDb(":memory:"));
   let n = 0;
   let lastSeen: Turn[] = [];
@@ -405,7 +405,7 @@ test("priorTurns seed a resumed run without being persisted twice", async () => 
 });
 
 test("a config 'allow' runs the tool without ever queuing an approval", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   const approvals = new ApprovalQueue();
   let n = 0;
   const stub: Provider = {
@@ -427,7 +427,7 @@ test("a config 'allow' runs the tool without ever queuing an approval", async ()
 });
 
 test("a config 'deny' short-circuits without queuing — and holds in headless mode (no approver)", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   let n = 0;
   const stub: Provider = {
     async send() {
@@ -470,7 +470,7 @@ test("a dangerous shell command still prompts despite a blanket allow rule", asy
 });
 
 test("an edit is checkpointed before it runs, shows a diff in the approval, and undoes cleanly", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   writeFileSync(join(root, "app.ts"), "const port = 3000;\n");
   const store = new SessionStore(openDb(":memory:"));
   const approvals = new ApprovalQueue();
@@ -503,7 +503,7 @@ test("an edit is checkpointed before it runs, shows a diff in the approval, and 
 });
 
 test("a denied write is never checkpointed — undo has nothing to revert", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   const store = new SessionStore(openDb(":memory:"));
   let n = 0;
   const stub: Provider = {
@@ -562,7 +562,7 @@ test("forks stop at MAX_FORK_DEPTH instead of nesting forever", async () => {
 });
 
 test("a fork inherits the parent's tool permissions — no privilege escalation", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   let call = 0;
   const stub: Provider = {
     async send() {
@@ -579,7 +579,7 @@ test("a fork inherits the parent's tool permissions — no privilege escalation"
 });
 
 test("a disallowed tool surfaces an error and doesn't crash the loop", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-agent-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   let n = 0;
   const stub: Provider = {
     async send() {
@@ -637,7 +637,7 @@ test("cancel stops an in-flight agent between turns instead of paying for the re
       return { text: "", toolCalls: [{ id: String(calls), name: "write_file", input: { path: `f${calls}.txt`, content: "x" } }] };
     },
   };
-  const root = mkdtempSync(join(tmpdir(), "amux-cancel-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-cancel-"));
   const agent = new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), {
     root,
     approve: async () => true,

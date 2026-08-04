@@ -15,7 +15,7 @@ export interface ServeResult {
   server: ServerHandle;
 }
 
-// Boot the headless core: build the engine from .amux/agents.yaml, start the local server, and
+// Boot the headless core: build the engine from .niti/agents.yaml, start the local server, and
 // print the handshake line the Go TUI parses from stdout. Everything else logs to stderr so the
 // first stdout line is always the handshake.
 export async function serveMain(opts: { port?: number; interactive?: boolean; auto?: boolean; worktree?: boolean } = {}): Promise<ServeResult> {
@@ -24,8 +24,8 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   if (projectRoot !== process.cwd()) process.chdir(projectRoot);
   // Setup mode: with no config yet, start empty so the onboarding wizard can drive /auth and
   // /agents against a live server. Once agents.yaml exists we load it (invalid files still throw).
-  const configs = existsSync(".amux/agents.yaml") ? loadAgents() : [];
-  if (!configs.length) console.error("amux: no agents configured yet — running in setup mode");
+  const configs = existsSync(".niti/agents.yaml") ? loadAgents() : [];
+  if (!configs.length) console.error("niti: no agents configured yet — running in setup mode");
   const options = loadOptions();
   const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions);
 
@@ -33,7 +33,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   let mcp: McpManager | undefined;
   if (mcpServers.length) {
     mcp = new McpManager();
-    await mcp.connect(mcpServers, (name, err) => console.error(`amux: MCP server '${name}' unavailable: ${err}`));
+    await mcp.connect(mcpServers, (name, err) => console.error(`niti: MCP server '${name}' unavailable: ${err}`));
   }
 
   const engine = new Engine({
@@ -56,7 +56,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
 
   const server = startServer(engine, { port: opts.port, theme: options.theme });
   // Handshake — the ONLY thing on stdout, first line, machine-readable for the Go TUI.
-  process.stdout.write(JSON.stringify({ amuxServer: { url: server.url, token: server.token } }) + "\n");
+  process.stdout.write(JSON.stringify({ nitiServer: { url: server.url, token: server.token } }) + "\n");
   return { engine, server };
 }
 
@@ -64,7 +64,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
 if (import.meta.main) {
   const portArg = process.argv.find((a) => a.startsWith("--port="));
   serveMain({ port: portArg ? Number(portArg.slice(7)) : undefined, auto: process.argv.includes("--auto") }).catch((err) => {
-    console.error(`amux-core serve: ${err instanceof Error ? err.message : err}`);
+    console.error(`niti-core serve: ${err instanceof Error ? err.message : err}`);
     process.exit(1);
   });
 }

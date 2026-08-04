@@ -7,18 +7,18 @@ import type { LspServerConfig } from "../lsp/registry.ts";
 import { parsePermissions, type PermissionRules } from "../permissions.ts";
 import { CATALOG, providerKeys } from "../providers/catalog.ts";
 
-// Find the project root the way git finds a repo: walk up for the first ancestor holding .amux/
-// (or, failing that, .git/). Every path in amux is cwd-relative, so running from a subdirectory
-// used to create a second, empty .amux/ there and start with zero agents — while the real config
+// Find the project root the way git finds a repo: walk up for the first ancestor holding .niti/
+// (or, failing that, .git/). Every path in niti is cwd-relative, so running from a subdirectory
+// used to create a second, empty .niti/ there and start with zero agents — while the real config
 // sat one level up. Call this once at process start, before any loader runs.
 export function findProjectRoot(from = process.cwd()): string {
   for (let dir = resolvePath(from); ; ) {
-    if (existsSync(join(dir, ".amux"))) return dir;
+    if (existsSync(join(dir, ".niti"))) return dir;
     const parent = dirname(dir);
     if (parent === dir) break; // hit the filesystem root
     dir = parent;
   }
-  // No .amux/ anywhere: fall back to the enclosing git repo, so `amux "task"` in a fresh checkout
+  // No .niti/ anywhere: fall back to the enclosing git repo, so `niti "task"` in a fresh checkout
   // roots itself at the project rather than at whatever subdirectory you happened to be in.
   for (let dir = resolvePath(from); ; ) {
     if (existsSync(join(dir, ".git"))) return dir;
@@ -28,8 +28,8 @@ export function findProjectRoot(from = process.cwd()): string {
   }
 }
 
-// Loads and validates .amux/agents.yaml. User-authored → validate required fields with clear errors.
-export function loadAgents(path = ".amux/agents.yaml"): AgentConfig[] {
+// Loads and validates .niti/agents.yaml. User-authored → validate required fields with clear errors.
+export function loadAgents(path = ".niti/agents.yaml"): AgentConfig[] {
   // Explicit, so "missing" is distinguishable from "invalid" upstream. readFileSync's own ENOENT
   // message names the path, but every validation error below names it too — and the CLI used to
   // treat both as "no agents configured", telling users to re-run init and overwrite the config
@@ -47,20 +47,20 @@ export function loadAgents(path = ".amux/agents.yaml"): AgentConfig[] {
   return agents.map((a, i) => validate(a, i, path));
 }
 
-// Everything in .amux/agents.yaml that isn't an agent, a permission rule or a server: the knobs
+// Everything in .niti/agents.yaml that isn't an agent, a permission rule or a server: the knobs
 // that used to be constants or CLI-only flags. All optional — an agents.yaml with none of them
 // behaves exactly as before.
-export interface AmuxOptions {
+export interface NitiOptions {
   theme?: string; // TUI colour scheme, applied at launch (see tui/internal/theme)
   auto?: boolean; // approve anything not explicitly denied (same as --auto; dangerous commands still prompt)
-  watch?: boolean; // false → stop announcing edits made outside amux
+  watch?: boolean; // false → stop announcing edits made outside niti
   instructions?: string[]; // files (AGENTS.md, CLAUDE.md, …) appended to every agent's system prompt
   maxTurns?: number; // tool-loop cap per agent turn; the built-in default is 12
   maxAgents?: number; // ceiling on team size, enforced when agents.yaml is loaded
   worktree?: boolean; // isolate each run's file writes in a fresh git worktree (same as --worktree)
 }
 
-export function loadOptions(path = ".amux/agents.yaml"): AmuxOptions {
+export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
   if (!existsSync(path)) return {};
   const raw = (parse(readFileSync(path, "utf8")) ?? {}) as Record<string, unknown>;
   const num = (v: unknown): number | undefined => (typeof v === "number" && v > 0 ? v : undefined);
@@ -91,7 +91,7 @@ export function loadInstructions(files: string[] = [], root = process.cwd()): st
 
 // Project-wide tool policy under a top-level `permissions:` block — the layer consulted when an
 // agent's own `permissions:` has nothing to say about a call.
-export function loadPermissions(path = ".amux/agents.yaml"): PermissionRules | undefined {
+export function loadPermissions(path = ".niti/agents.yaml"): PermissionRules | undefined {
   if (!existsSync(path)) return undefined;
   const raw = parse(readFileSync(path, "utf8")) as { permissions?: unknown };
   return parsePermissions(raw?.permissions, path);
@@ -102,7 +102,7 @@ export function loadPermissions(path = ".amux/agents.yaml"): PermissionRules | u
 //     typescript: { command: typescript-language-server, args: [--stdio], extensions: [.ts, .tsx] }
 // Servers are user-installed; a malformed entry is skipped rather than blocking startup, exactly
 // like mcpServers above.
-export function loadLspServers(path = ".amux/agents.yaml"): LspServerConfig[] {
+export function loadLspServers(path = ".niti/agents.yaml"): LspServerConfig[] {
   if (!existsSync(path)) return [];
   const raw = parse(readFileSync(path, "utf8")) as { lsp?: unknown };
   if (typeof raw?.lsp !== "object" || raw.lsp == null || Array.isArray(raw.lsp)) return [];
@@ -115,7 +115,7 @@ export function loadLspServers(path = ".amux/agents.yaml"): LspServerConfig[] {
 }
 
 // MCP servers declared under `mcpServers:` in the same file. Skips malformed entries.
-export function loadMcpServers(path = ".amux/agents.yaml"): McpServerConfig[] {
+export function loadMcpServers(path = ".niti/agents.yaml"): McpServerConfig[] {
   if (!existsSync(path)) return [];
   const raw = parse(readFileSync(path, "utf8")) as { mcpServers?: unknown };
   if (!Array.isArray(raw.mcpServers)) return [];
@@ -126,20 +126,20 @@ export function loadMcpServers(path = ".amux/agents.yaml"): McpServerConfig[] {
   });
 }
 
-// Persist role assignments back to .amux/agents.yaml (written by the team picker and the live
+// Persist role assignments back to .niti/agents.yaml (written by the team picker and the live
 // /model switcher so changes survive a restart). Keys never land here — they're in auth.json.
 //
 // Only the `agents:` key is replaced: the picker runs on every launch, and rewriting the file from
 // scratch would silently delete the permissions/lsp/mcpServers blocks and every option next to
 // them — config the user hand-wrote and never asked to have touched.
-export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): void {
+export function saveAgents(agents: AgentConfig[], path = ".niti/agents.yaml"): void {
   // The read path validated carefully and the write path validated nothing — yet the write path is
   // the one facing untrusted input (POST /agents). One guard here covers all three writers: the
   // HTTP route, the init wizard, and the TUI team picker.
   agents.forEach((a, i) => validate(a, i, path));
   mkdirSync(dirname(path), { recursive: true });
   // Only the `agents:` key is replaced, and only through the Document API — so comments elsewhere
-  // in the file (and any top-level key amux does not know about) survive a picker relaunch.
+  // in the file (and any top-level key niti does not know about) survive a picker relaunch.
   const doc = existsSync(path) ? parseDocument(readFileSync(path, "utf8")) : parseDocument("{}");
   const next = {
     agents: agents.map((a) => ({
@@ -160,10 +160,10 @@ export function saveAgents(agents: AgentConfig[], path = ".amux/agents.yaml"): v
   writeFileSync(path, doc.toString());
 }
 
-// Persist the active theme name back to .amux/agents.yaml (written by the TUI's theme carousel so
+// Persist the active theme name back to .niti/agents.yaml (written by the TUI's theme carousel so
 // the choice survives a restart and the web dashboard can read it back via loadOptions()). Same
 // read-merge-write shape as saveAgents — only the `theme` key is touched.
-export function setTheme(theme: string, path = ".amux/agents.yaml"): void {
+export function setTheme(theme: string, path = ".niti/agents.yaml"): void {
   mkdirSync(dirname(path), { recursive: true });
   // parse→stringify round-trips *data*, discarding every comment in the file. This runs on every
   // keypress of the theme carousel, so a user who documented their roster lost all of it the first

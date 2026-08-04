@@ -224,7 +224,7 @@ test("plan mode publishes the DAG and runs nothing", async () => {
 });
 
 test("worktree isolation writes into a throwaway git worktree until explicitly merged", async () => {
-  const repo = mkdtempSync(join(tmpdir(), "amux-engine-worktree-"));
+  const repo = mkdtempSync(join(tmpdir(), "niti-engine-worktree-"));
   execFileSync("git", ["init", "-q"], { cwd: repo });
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
@@ -272,7 +272,7 @@ test("worktree isolation writes into a throwaway git worktree until explicitly m
 });
 
 test("a headless engine denies gated tools unless --auto is set", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-headless-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-headless-"));
   const writer: Provider = {
     async send(_sys, turns) {
       const lastUser = [...turns].reverse().find((t) => t.role === "user");
@@ -296,7 +296,7 @@ test("a headless engine denies gated tools unless --auto is set", async () => {
 });
 
 test("a conflicted merge restores the tree and the worktree can be discarded", async () => {
-  const repo = mkdtempSync(join(tmpdir(), "amux-conflict-"));
+  const repo = mkdtempSync(join(tmpdir(), "niti-conflict-"));
   execFileSync("git", ["init", "-q"], { cwd: repo });
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
@@ -333,5 +333,5 @@ test("a conflicted merge restores the tree and the worktree can be discarded", a
   expect(discarded.ok).toBe(true);
   expect(engine.worktreeHandle).toBeUndefined();
   // ...and a fresh worktree run is possible again, which the old wedge made impossible.
-  expect(execFileSync("git", ["branch", "--list"], { cwd: repo, encoding: "utf8" })).not.toContain("amux/");
+  expect(execFileSync("git", ["branch", "--list"], { cwd: repo, encoding: "utf8" })).not.toContain("niti/");
 });

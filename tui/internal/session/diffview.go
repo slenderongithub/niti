@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/amux/tui/internal/api"
-	"github.com/amux/tui/internal/theme"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

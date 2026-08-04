@@ -39,7 +39,7 @@ export function subject(tool: string, input: Record<string, unknown>): string {
   }
   // Normalized, because the pattern is matched against raw model output and the *executed* path is
   // resolved later by safePath. Unnormalized, `./secret.txt` slipped past a `secret*` deny and
-  // `src/../.amux/agents.yaml` satisfied an `src/**` allow — both writing the same file the rule
+  // `src/../.niti/agents.yaml` satisfied an `src/**` allow — both writing the same file the rule
   // was protecting.
   return typeof input.path === "string" ? normalize(input.path) : "";
 }

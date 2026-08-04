@@ -1,4 +1,4 @@
-// Package api is the typed client for the amux core server (the TS↔Go seam). It mirrors the JSON
+// Package api is the typed client for the niti core server (the TS↔Go seam). It mirrors the JSON
 // contract in src/server/events.ts and src/server/server.ts.
 package api
 
@@ -301,7 +301,7 @@ func (c *Client) SwitchModel(agentID, provider, model, baseURL string) error {
 	return c.do("POST", "/model", map[string]string{"agentId": agentID, "provider": provider, "model": model, "baseURL": baseURL}, nil)
 }
 
-// SetTheme persists the active theme to .amux/agents.yaml and broadcasts it over SSE so the web
+// SetTheme persists the active theme to .niti/agents.yaml and broadcasts it over SSE so the web
 // dashboard and graph page pick it up live (see the theme carousel's enter handler).
 func (c *Client) SetTheme(name string) error {
 	return c.do("POST", "/theme", map[string]string{"theme": name}, nil)
@@ -380,7 +380,7 @@ func (c *Client) Credentials() ([]Credential, error) {
 	return r.Credentials, err
 }
 
-// SaveAgents persists role assignments to .amux/agents.yaml (POST /agents).
+// SaveAgents persists role assignments to .niti/agents.yaml (POST /agents).
 func (c *Client) SaveAgents(agents []AgentConfig) error {
 	return c.do("POST", "/agents", map[string]any{"agents": agents}, nil)
 }

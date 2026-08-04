@@ -8,7 +8,7 @@ export type EventType =
   | "message" // agent text output (final)
   | "failover" // task reassigned after an agent exhausted its quota
   | "warning" // pre-emptive heads-up (e.g. approaching context limit)
-  | "external_change" // a file changed outside amux (human edit, git checkout, formatter)
+  | "external_change" // a file changed outside niti (human edit, git checkout, formatter)
   | "done"
   | "error";
 
@@ -41,7 +41,7 @@ export class Bus {
       try {
         fn(ev);
       } catch (err) {
-        console.error(`amux: event subscriber threw: ${err instanceof Error ? err.message : err}`);
+        console.error(`niti: event subscriber threw: ${err instanceof Error ? err.message : err}`);
       }
     };
     this.emitter.on("event", guarded);

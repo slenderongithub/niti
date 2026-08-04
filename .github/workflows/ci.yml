@@ -60,10 +60,10 @@ jobs:
       # reproduced everywhere *except* where anyone thought to look.
       - name: compiled core runs outside the checkout
         run: |
-          bun build --compile ./src/cli.ts --outfile "$RUNNER_TEMP/amux-core"
+          bun build --compile ./src/cli.ts --outfile "$RUNNER_TEMP/niti-core"
           cd "$RUNNER_TEMP"
-          ./amux-core --version
-          ./amux-core --help > /dev/null
+          ./niti-core --version
+          ./niti-core --help > /dev/null
 
       # Pack the real artefacts, install the tarballs into a scratch project, and run the shims.
       - name: npm pack → install → run
@@ -78,9 +78,9 @@ jobs:
           cd "$RUNNER_TEMP/install"
           npm init -y > /dev/null
           npm install ./*.tgz
-          ./node_modules/.bin/amux-core --version
+          ./node_modules/.bin/niti-core --version
 
-      # The tarball must contain the launcher and nothing personal — no .amux/, no .claude/,
+      # The tarball must contain the launcher and nothing personal — no .niti/, no .claude/,
       # no tests, no Go source.
       - name: tarball contains only what it should
         if: runner.os == 'Linux'
@@ -90,8 +90,8 @@ jobs:
           files=$(npm pack --dry-run --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].files.map(f=>f.path).join("\n")))')
           echo "$files"
           # -F: these are paths, not patterns. An unescaped "." here matches any character, so
-          # ".amux" happily matches "bin/amux.js" and the check fails on a correct tarball.
-          for bad in .amux/ .claude/ old-tech/ tui/ project_context.md bun.lock .test.ts; do
+          # ".niti" happily matches "bin/niti.js" and the check fails on a correct tarball.
+          for bad in .niti/ .claude/ old-tech/ tui/ project_context.md bun.lock .test.ts; do
             if grep -qF "$bad" <<< "$files"; then echo "::error::tarball contains $bad"; exit 1; fi
           done
-          grep -qF "bin/amux.js" <<< "$files" || { echo "::error::tarball is missing the launcher"; exit 1; }
+          grep -qF "bin/niti.js" <<< "$files" || { echo "::error::tarball is missing the launcher"; exit 1; }

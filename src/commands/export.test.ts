@@ -11,7 +11,7 @@ import type { Provider } from "../providers/provider.ts";
 const stub: Provider = { async send() { return { text: "ok", toolCalls: [] }; } };
 
 test("buildExportReport writes a markdown report covering goal, tasks, cost and transcripts", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-export-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-export-"));
   const store = new SessionStore(openDb(":memory:"));
   const engine = new Engine({ configs: [{ id: "a", provider: "anthropic", model: "claude-opus-4-8", role: "r", systemPrompt: "s" }], makeProvider: () => stub, root, store });
 
@@ -22,7 +22,7 @@ test("buildExportReport writes a markdown report covering goal, tasks, cost and 
   const { path, message } = await buildExportReport(engine);
   expect(message).toContain(path);
   const report = readFileSync(path, "utf8");
-  expect(report).toContain("# amux session export");
+  expect(report).toContain("# niti session export");
   expect(report).toContain(root);
   expect(report).toContain("t1");
   expect(report).toContain("say hi");
@@ -33,7 +33,7 @@ test("buildExportReport writes a markdown report covering goal, tasks, cost and 
 });
 
 test("without a store, /export still writes a report and says transcripts aren't available", async () => {
-  const root = mkdtempSync(join(tmpdir(), "amux-export-nostore-"));
+  const root = mkdtempSync(join(tmpdir(), "niti-export-nostore-"));
   const engine = new Engine({ configs: [], makeProvider: () => stub, root });
   engine.orch.load([{ id: "t1", description: "solo task", status: "pending", role: "a", dependsOn: [] }]);
 

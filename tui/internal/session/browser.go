@@ -7,7 +7,7 @@ import (
 )
 
 // openBrowser launches the OS default browser at url. The interactive graph is a web page served by
-// the amux core; the terminal only needs to point a browser at it. Fire-and-forget from the caller's
+// the niti core; the terminal only needs to point a browser at it. Fire-and-forget from the caller's
 // side — any launch error is surfaced through the usual actionResultMsg status line.
 func openBrowser(url string) error {
 	var cmd *exec.Cmd
