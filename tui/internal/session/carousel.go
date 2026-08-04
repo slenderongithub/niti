@@ -131,8 +131,14 @@ func (m *Model) carouselKey(k tea.KeyMsg) tea.Cmd {
 	case "enter":
 		return m.carouselConfirm()
 	}
-	if s := k.String(); len([]rune(s)) == 1 || s == " " {
-		m.car.query += s
+	// Runes, not the stringified key: a paste arrives as one KeyRunes message carrying every
+	// character, whose String() is the whole pasted text and so failed the len==1 test entirely.
+	// This covers single keystrokes, spaces and pastes with one branch.
+	if k.Type == tea.KeyRunes {
+		m.car.query += string(k.Runes)
+		m.car.list.SetQuery(m.car.query)
+	} else if k.Type == tea.KeySpace {
+		m.car.query += " "
 		m.car.list.SetQuery(m.car.query)
 	}
 	return nil

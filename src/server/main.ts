@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { Engine } from "../engine.ts";
-import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions } from "../config/config.ts";
+import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions, findProjectRoot } from "../config/config.ts";
 import { LspRegistry } from "../lsp/registry.ts";
 import { makeProvider } from "../providers/factory.ts";
 import { McpManager } from "../mcp/mcp.ts";
@@ -19,6 +19,9 @@ export interface ServeResult {
 // print the handshake line the Go TUI parses from stdout. Everything else logs to stderr so the
 // first stdout line is always the handshake.
 export async function serveMain(opts: { port?: number; interactive?: boolean; auto?: boolean; worktree?: boolean } = {}): Promise<ServeResult> {
+  // Same root discovery as the CLI: the TUI spawns this directly, so it needs it too.
+  const projectRoot = findProjectRoot();
+  if (projectRoot !== process.cwd()) process.chdir(projectRoot);
   // Setup mode: with no config yet, start empty so the onboarding wizard can drive /auth and
   // /agents against a live server. Once agents.yaml exists we load it (invalid files still throw).
   const configs = existsSync(".amux/agents.yaml") ? loadAgents() : [];
@@ -61,7 +64,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
 if (import.meta.main) {
   const portArg = process.argv.find((a) => a.startsWith("--port="));
   serveMain({ port: portArg ? Number(portArg.slice(7)) : undefined, auto: process.argv.includes("--auto") }).catch((err) => {
-    console.error(`amux serve: ${err instanceof Error ? err.message : err}`);
+    console.error(`amux-core serve: ${err instanceof Error ? err.message : err}`);
     process.exit(1);
   });
 }

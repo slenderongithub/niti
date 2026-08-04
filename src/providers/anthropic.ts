@@ -18,11 +18,19 @@ export class AnthropicProvider implements Provider {
   private client: Anthropic;
   private lastRateLimit?: RateLimit; // captured at the fetch layer → works for streaming too
 
+  // True only for api.anthropic.com. Anthropic-format third parties (MiniMax's shim, and anything
+  // a user points at with a custom baseURL) get the portable subset: `thinking` is Anthropic-
+  // proprietary and a strict shim 400s on it, and a fixed 16k max_tokens exceeds the output cap of
+  // plenty of non-Anthropic models.
+  private readonly native: boolean;
+
   constructor(
     private model: string,
     apiKey?: string,
     baseURL?: string, // set for Anthropic-format providers other than Anthropic itself
+    private maxOutput = 16000,
   ) {
+    this.native = !baseURL;
     const trackedFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
       const res = await fetch(url, init);
       this.lastRateLimit = parseRateLimit(res.headers, "anthropic");
@@ -61,8 +69,9 @@ export class AnthropicProvider implements Provider {
 
     const params: Anthropic.MessageCreateParamsNonStreaming = {
       model: this.model,
-      max_tokens: 16000,
-      thinking: { type: "adaptive" }, // safe now: assistant turns replay native blocks (Turn.raw)
+      max_tokens: this.maxOutput,
+      // safe now: assistant turns replay native blocks (Turn.raw) — but only Anthropic defines it
+      ...(this.native ? { thinking: { type: "adaptive" as const } } : {}),
       system: sysPrompt,
       messages,
       ...(tools.length
@@ -86,7 +95,10 @@ export class AnthropicProvider implements Provider {
 
     return {
       ...blocksToReply(msg.content),
-      usage: { inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens },
+      // Optional. Anthropic itself always sends usage, but the Anthropic-*format* third parties
+      // this class also serves are under no obligation to, and an unguarded read threw a
+      // TypeError from inside the provider — surfacing as a failed task, not a missing metric.
+      usage: msg.usage ? { inputTokens: msg.usage.input_tokens ?? 0, outputTokens: msg.usage.output_tokens ?? 0 } : undefined,
       rateLimit: this.lastRateLimit,
     };
   }

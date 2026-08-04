@@ -99,6 +99,10 @@ function toRow(r: SessionDbRow): SessionRow {
 
 // Conversation persistence over the schema in db.ts. The in-memory `turns: Turn[]` array still
 // drives the agent loop; every append here is a side-effect mirror of it, never a behaviour change.
+// How many undo checkpoints to retain, globally. Undo is LIFO and shallow; older rows are
+// unreachable in practice and were the main driver of database growth.
+const CHECKPOINT_KEEP = 200;
+
 export class SessionStore {
   constructor(private db: Database) {}
 
@@ -244,10 +248,15 @@ export class SessionStore {
   // Record what a file looked like before an agent wrote to it. `content` is null when the file
   // didn't exist yet, which is what tells undo to delete rather than restore. Paths are absolute
   // (already through safePath) so undo doesn't need to know the project root.
-  // ponytail: full prior contents, never pruned — one row per write, so a long session's .amux/amux.db
-  // grows with total bytes written. Add age/count-based pruning if that ever matters.
+  // ponytail: full prior contents, pruned to the most recent CHECKPOINT_KEEP rows. Undo/rewind are
+  // LIFO and shallow by design (/rewind's default is 1), so older rows are dead weight that grew
+  // the database by *total bytes ever written* — a long session rewriting a large file repeatedly
+  // was the pathological case. Raise the constant if deeper history is ever wanted.
   checkpoint(sessionId: string, path: string, content: string | null): void {
     this.db.query("INSERT INTO checkpoints (session_id, path, content, created_at) VALUES (?, ?, ?, ?)").run(sessionId, path, content, Date.now());
+    this.db
+      .query("DELETE FROM checkpoints WHERE id <= (SELECT MAX(id) - ? FROM checkpoints)")
+      .run(CHECKPOINT_KEEP);
   }
 
   // Revert the most recent recorded write (LIFO) — one undo = one prior write, not "undo the whole

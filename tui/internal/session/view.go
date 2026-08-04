@@ -199,7 +199,11 @@ func (m Model) header(w int) string {
 	bg := theme.BgPane
 	// The version sits in the header rather than only behind /settings — "which amux is this?" is a
 	// question worth answering without a keystroke, especially in a bug report screenshot.
-	brand := txt(theme.Accent, bg).Bold(true).Render(" ● amux") + txt(theme.Line, bg).Render(" v"+ui.Version)
+	dot, dotColor := " ● amux", theme.Accent
+	if m.disconnected {
+		dot, dotColor = " ○ amux", theme.Red // hollow + error colour: the core is not answering
+	}
+	brand := txt(dotColor, bg).Bold(true).Render(dot) + txt(theme.Line, bg).Render(" v"+ui.Version)
 	left := brand + " " + m.pill("BUILD", "build") + m.pill("PLAN", "plan")
 
 	pb := bar(m.progress, clamp(w/8, 5, 18), theme.Accent, theme.Line, bg)

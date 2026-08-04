@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -207,7 +208,7 @@ func TestSlashMenuFiltersAndCompletes(t *testing.T) {
 		t.Fatal("the menu must stay closed until a / is typed")
 	}
 	m = typing(m, "/")
-	if !m.menuOpen || m.menu.Len() != 11 { // /help + 3 server commands + /graph /dashboard /settings /config /stats /theme /quit
+	if !m.menuOpen || m.menu.Len() != 12 { // /help + 3 server commands + /transcript /graph /dashboard /settings /config /stats /theme /quit
 		t.Fatalf("expected all commands offered on /, open=%v len=%d", m.menuOpen, m.menu.Len())
 	}
 	m = typing(m, "m")
@@ -360,5 +361,33 @@ func TestMenuAndCarouselStayInsideTheTerminal(t *testing.T) {
 				t.Errorf("%s at %dx%d is %d rows tall", name, size.w, size.h, got)
 			}
 		}
+	}
+}
+
+// The panes render only the tail of an agent's log, so without a way to page back, output that
+// scrolled off was simply gone — for a tool whose whole product is agent output.
+func TestTranscriptCommandOpensTheFullLogInThePager(t *testing.T) {
+	m := Model{height: 30, agents: map[string]*agentState{}, order: []string{"a"}}
+	st := &agentState{cfg: api.AgentConfig{ID: "a"}}
+	for i := 0; i < 200; i++ {
+		st.push(fmt.Sprintf("line %d", i))
+	}
+	st.pending = "still streaming"
+	m.agents["a"] = st
+
+	m.submit("/transcript a")
+	if !m.out.open {
+		t.Fatal("/transcript must open the pager")
+	}
+	if len(m.out.lines) != 201 { // 200 logged + the in-flight line
+		t.Fatalf("expected the whole transcript, got %d lines", len(m.out.lines))
+	}
+	if m.out.top != m.outputMaxTop() {
+		t.Fatalf("should open at the newest output, got top=%d max=%d", m.out.top, m.outputMaxTop())
+	}
+
+	m.submit("/transcript nope")
+	if !strings.Contains(m.status, "unknown agent") {
+		t.Fatalf("an unknown agent should say so, got %q", m.status)
 	}
 }

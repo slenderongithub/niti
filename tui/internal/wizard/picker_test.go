@@ -54,7 +54,7 @@ func fakeCore(t *testing.T) (client *api.Client, saved func() []api.AgentConfig,
 // (anthropic) and one that still needs a key (openai) — the two paths every test below exercises.
 func loaded(t *testing.T, client *api.Client) Picker {
 	t.Helper()
-	next, _ := NewPicker(client).Update(providersMsg{
+	next, _ := NewPicker(client, nil).Update(providersMsg{
 		creds: []api.Credential{{Provider: "anthropic", Type: "api"}},
 		providers: []api.ProviderInfo{
 			{ID: "openai", Label: "OpenAI", Category: "byok"},
@@ -298,4 +298,57 @@ func cardRule(t *testing.T, view string) int {
 	}
 	t.Fatal("no card in the view")
 	return 0
+}
+
+// A saved roster must be reusable in one keystroke. Before this, the picker opened on the size
+// question every launch — 26 answers for a team of 6 — and ctrl+c out of it quit amux entirely.
+func withExisting(t *testing.T, client *api.Client) Picker {
+	t.Helper()
+	existing := []api.AgentConfig{{ID: "fe", Provider: "anthropic", Model: "claude", Role: "Frontend"}}
+	next, _ := NewPicker(client, existing).Update(providersMsg{
+		creds:     []api.Credential{{Provider: "anthropic", Type: "api"}},
+		providers: []api.ProviderInfo{{ID: "anthropic", Label: "Anthropic", Category: "byok"}},
+	})
+	m := next.(Picker)
+	if m.stage != "team" {
+		t.Fatalf("expected the keep-or-repick prompt with a saved roster, got %q", m.stage)
+	}
+	return m
+}
+
+func TestEnterKeepsTheSavedTeamWithoutRewritingTheConfig(t *testing.T) {
+	client, saved, _ := fakeCore(t)
+	m := step(t, withExisting(t, client), "")
+
+	if !m.Completed || !m.Kept {
+		t.Fatalf("expected the saved team to be kept, got Completed=%v Kept=%v", m.Completed, m.Kept)
+	}
+	if len(m.roles) != 1 || m.roles[0].ID != "fe" {
+		t.Fatalf("expected the existing roster to carry through, got %+v", m.roles)
+	}
+	if got := saved(); len(got) != 0 {
+		t.Fatalf("keeping the team must not POST /agents, but it saved %+v", got)
+	}
+}
+
+func TestChoosingANewTeamFallsThroughToTheSizePrompt(t *testing.T) {
+	client, _, _ := fakeCore(t)
+	m := withExisting(t, client)
+	m.list.Move(1) // "Pick a new team"
+	next := step(t, m, "")
+	if next.stage != "size" {
+		t.Fatalf("expected the size prompt after choosing a new team, got %q", next.stage)
+	}
+	if next.Completed {
+		t.Fatal("picking a new team should not finish the picker")
+	}
+}
+
+func TestBackingOutOfTheKeepPromptKeepsRatherThanQuitting(t *testing.T) {
+	client, _, _ := fakeCore(t)
+	next, _ := withExisting(t, client).back()
+	m := next.(Picker)
+	if !m.Completed || !m.Kept {
+		t.Fatalf("esc on the keep prompt should keep the team, got Completed=%v Kept=%v", m.Completed, m.Kept)
+	}
 }

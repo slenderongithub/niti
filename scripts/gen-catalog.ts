@@ -11,6 +11,9 @@
 interface RawModel {
   id: string;
   limit?: { context?: number };
+  tool_call?: boolean; // amux is a tool-use loop; a model without this cannot run an agent at all
+  modalities?: { output?: string[] };
+  cost?: { input?: number; output?: number }; // $ per 1M tokens, same unit as pricing.ts
 }
 interface RawProvider {
   id: string;
@@ -35,6 +38,29 @@ const SKIP_IDS = new Set([
   "v0",
 ]);
 
+// Recognizable inference providers worth offering unprompted. models.dev's registry is 149+ wide
+// and mostly small resellers/gateways (LucidQuery, Claudinio, ...) — noise in a picker a new user
+// sees on first launch. Anything not listed here is still usable via "custom…"; this only trims
+// what's shown by default. Extend as providers earn a spot.
+const ALLOW_IDS = new Set([
+  "deepseek",
+  "openrouter",
+  "perplexity-agent",
+  "huggingface",
+  "novita-ai",
+  "baseten",
+  "nvidia",
+  "scaleway",
+  "digitalocean",
+  "siliconflow",
+  "minimax",
+  "zai",
+  "alibaba",
+  "requesty",
+  "ollama-cloud",
+  "lmstudio",
+]);
+
 function clientFor(npm: string | undefined): "anthropic" | "openai" | "skip" {
   if (!npm) return "skip";
   if (npm.includes("@ai-sdk/anthropic")) return "anthropic";
@@ -48,11 +74,13 @@ async function main() {
   const data = (await res.json()) as Record<string, RawProvider>;
 
   const entries: string[] = [];
+  const prices: string[] = [];
+  const hostsById: [string, string][] = []; // id → host, for the duplicate-vendor check below
   let skipped = 0;
   let generated = 0;
 
   for (const p of Object.values(data)) {
-    if (SKIP_IDS.has(p.id)) {
+    if (SKIP_IDS.has(p.id) || !ALLOW_IDS.has(p.id)) {
       skipped++;
       continue;
     }
@@ -68,17 +96,45 @@ async function main() {
       skipped++;
       continue;
     }
-    const envVar = p.env?.[0];
+    // models.dev publishes some base URLs with a shell-style placeholder for an account id or
+    // workspace host (Cloudflare, Databricks). Nothing here substitutes them, so shipping one
+    // means a provider that appears in the picker as an ordinary choice and resolves DNS for the
+    // literal string "${databricks_host}". Skip until per-provider URL templating exists.
+    if (p.api.includes("${")) {
+      skipped++;
+      continue;
+    }
+    // env[0] is not reliably the API key — some providers list an account id or a hostname first
+    // (CLOUDFLARE_ACCOUNT_ID, DATABRICKS_HOST), which shipped as the thing amux asks the user for.
+    const envVar = p.env?.find((v) => /_(API_)?KEY$|_TOKEN$/.test(v)) ?? p.env?.at(-1);
     if (!envVar) {
       skipped++;
       continue;
     }
-    const models = Object.keys(p.models ?? {}).slice(0, 8); // cap for a scannable selector list
+    // Only models that can actually call tools and emit text. Without this filter the picker
+    // offered embedding and image models that physically cannot run an amux agent.
+    const usable = Object.entries(p.models ?? {}).filter(
+      ([, m]) => m.tool_call && (m.modalities?.output?.includes("text") ?? true),
+    );
+    const models = usable.map(([id]) => id).slice(0, 8); // cap for a scannable selector list
     if (models.length === 0) {
       skipped++;
       continue;
     }
     generated++;
+    try {
+      hostsById.push([p.id, new URL(p.api).host]);
+    } catch {
+      /* unparsable URL — the ${ } guard above already covers the realistic case */
+    }
+    // models.dev publishes cost per 1M tokens, the same unit pricing.ts uses. Emitting it turns
+    // the cost meter from "$0.00+ for every model the hand-written prefix table missed" into a
+    // real number, and it stays in step with the catalog because it is regenerated with it.
+    for (const [id, m] of usable.slice(0, 8)) {
+      if (typeof m.cost?.input === "number" && typeof m.cost?.output === "number") {
+        prices.push(`  ${JSON.stringify(`${p.id}/${id}`)}: { input: ${m.cost.input}, output: ${m.cost.output} },`);
+      }
+    }
     const label = JSON.stringify(p.name || p.id);
     const baseURL = p.api ? `\n    baseURL: ${JSON.stringify(p.api)},` : "";
     entries.push(
@@ -86,13 +142,30 @@ async function main() {
     );
   }
 
+  // The hand-maintained entries in catalog.ts carry client/category information the generator
+  // cannot infer, so they win — but a *different* generated id pointing at the same host is not an
+  // id collision and slipped straight through, putting one vendor in the picker twice with two
+  // labels and two model counts. Fail the generation instead of shipping that again.
+  const seenHosts = new Map<string, string>();
+  for (const [id, url] of hostsById) {
+    const prev = seenHosts.get(url);
+    if (prev) throw new Error(`two providers resolve to ${url}: '${prev}' and '${id}' — fold one into the other or drop it from ALLOW_IDS`);
+    seenHosts.set(url, id);
+  }
+
   const out = `// GENERATED — do not hand-edit. Regenerate with: bun run gen:catalog
-// Source: https://models.dev/api.json (the same provider registry opencode uses).
-// ${generated} providers included, ${skipped} skipped (need a dedicated SDK/auth flow, or missing an env var/base URL/model list).
+// Source: https://models.dev/api.json (the same provider registry opencode uses), filtered to ALLOW_IDS.
+// ${generated} providers included, ${skipped} skipped (unlisted, need a dedicated SDK/auth flow, or missing an env var/base URL/model list).
 import type { CatalogEntry } from "./catalog.ts";
 
 export const GENERATED_CATALOG: Record<string, CatalogEntry> = {
 ${entries.join("\n")}
+};
+
+// Exact "provider/model" → USD per 1M tokens, straight from models.dev. pricing.ts consults this
+// before its hand-maintained prefix table.
+export const GENERATED_PRICES: Record<string, { input: number; output: number }> = {
+${prices.join("\n")}
 };
 `;
   await Bun.write("src/providers/catalog.generated.ts", out);

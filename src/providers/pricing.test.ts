@@ -1,5 +1,7 @@
 import { test, expect } from "bun:test";
 import { priceFor, costOf } from "./pricing.ts";
+import { CATALOG } from "./catalog.ts";
+import { GENERATED_PRICES } from "./catalog.generated.ts";
 
 test("longest matching prefix wins, so a family's variants don't all collapse to one price", () => {
   expect(priceFor("anthropic", "claude-opus-4-8")).toEqual({ input: 15, output: 75 });
@@ -25,4 +27,20 @@ test("cost is per million tokens, input and output billed separately", () => {
   const { usd, priced } = costOf("anthropic", "claude-sonnet-5", 1_000_000, 200_000);
   expect(priced).toBe(true);
   expect(usd).toBeCloseTo(3 + 0.2 * 15, 6); // $3 in + $3 out
+});
+
+test("the shipped default models are priced, not silently $0.00", () => {
+  // Google is hand-maintained in catalog.ts, so GENERATED_PRICES never covers it — and the
+  // `-latest` aliases match no version-prefixed entry. The default team read "$0.00+" out of the box.
+  for (const model of CATALOG["google"]!.models) {
+    expect(priceFor("google", model)).toBeDefined();
+  }
+  expect(priceFor("google", "gemini-flash-lite-latest")).toEqual({ input: 0.1, output: 0.4 });
+});
+
+test("models.dev prices are used for generated providers", () => {
+  const [pair] = Object.keys(GENERATED_PRICES);
+  expect(pair).toBeDefined();
+  const [provider, ...rest] = pair!.split("/");
+  expect(priceFor(provider!, rest.join("/"))).toEqual(GENERATED_PRICES[pair!]!);
 });

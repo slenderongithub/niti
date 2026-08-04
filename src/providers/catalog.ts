@@ -30,7 +30,7 @@ export function contextWindow(provider: string): number {
 // "custom…" entry is the escape hatch for any model id not listed here.
 // Hand-maintained entries — native clients, local runtimes, and Copilot login — take priority
 // over the generated list below on id collision (they carry client/category info the generator
-// can't infer). Everything else (161+ providers, incl. z.ai) comes from GENERATED_CATALOG.
+// can't infer). Everything else (a curated slice of models.dev, incl. z.ai) comes from GENERATED_CATALOG.
 const MANUAL_CATALOG: Record<string, CatalogEntry> = {
   anthropic: {
     label: "Anthropic",
@@ -71,7 +71,9 @@ const MANUAL_CATALOG: Record<string, CatalogEntry> = {
     client: "openai",
     baseURL: "https://api.moonshot.ai/v1",
     envVar: "MOONSHOT_API_KEY",
-    models: ["kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k"],
+    // Folded in from models.dev (the generator no longer emits a second "moonshotai" entry,
+    // which put the same vendor in the picker twice).
+    models: ["kimi-k2.5", "kimi-k2-thinking-turbo", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2-turbo-preview", "kimi-k2-0905-preview", "kimi-k2-0711-preview", "moonshot-v1-128k"],
   },
   groq: {
     label: "Groq",
@@ -106,7 +108,8 @@ const MANUAL_CATALOG: Record<string, CatalogEntry> = {
     client: "openai",
     baseURL: "https://api.fireworks.ai/inference/v1",
     envVar: "FIREWORKS_API_KEY",
-    models: ["accounts/fireworks/models/llama-v3p3-70b-instruct"],
+    // Folded in from models.dev, same reason as moonshot above.
+    models: ["accounts/fireworks/routers/kimi-k3-fast", "accounts/fireworks/routers/glm-5p2-fast", "accounts/fireworks/routers/kimi-k2p7-code-fast", "accounts/fireworks/models/qwen3p7-plus", "accounts/fireworks/models/deepseek-v4-flash", "accounts/fireworks/models/gpt-oss-20b", "accounts/fireworks/models/llama-v3p3-70b-instruct"],
   },
   cerebras: {
     label: "Cerebras",

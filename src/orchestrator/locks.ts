@@ -18,6 +18,9 @@ export class LockRegistry {
   constructor(
     private bus?: Bus,
     private staleMs = STALE_MS,
+    // Liveness of a holder id. The Engine passes one backed by Agent.busy; without it a stale
+    // lock is never reclaimed at all, which is the safe default for a bare registry.
+    private isAlive?: (holder: string) => boolean,
   ) {}
 
   async acquire(path: string, holder: string): Promise<void> {
@@ -28,11 +31,16 @@ export class LockRegistry {
         this.locks.set(path, { holder, acquiredAt: Date.now() });
         return;
       }
-      if (Date.now() - entry.acquiredAt > this.staleMs) {
+      // "Held for 60s" is not the same as "abandoned" — a slow shell or a long provider call is
+      // exactly that, and reclaiming there handed the same file to a second writer, which is the
+      // one thing this registry exists to prevent. Only reclaim from a holder that is genuinely
+      // gone; if it is still alive, keep waiting however long it takes.
+      const stale = Date.now() - entry.acquiredAt > this.staleMs;
+      if (stale && !(this.isAlive?.(entry.holder) ?? false)) {
         this.bus?.publish({
           agentId: entry.holder,
           type: "warning",
-          payload: `stale lock reclaimed: ${path} (held ${Math.round((Date.now() - entry.acquiredAt) / 1000)}s)`,
+          payload: `stale lock reclaimed: ${path} (held ${Math.round((Date.now() - entry.acquiredAt) / 1000)}s by a finished agent)`,
           time: Date.now(),
         });
         this.locks.set(path, { holder, acquiredAt: Date.now() });

@@ -5,6 +5,8 @@
 // wrong number. Upgrade path: models.dev — already the source for catalog.generated.ts — ships a
 // per-model `cost` block; teach scripts/gen-catalog.ts to emit it and read from there instead.
 
+import { GENERATED_PRICES } from "./catalog.generated.ts";
+
 export interface Price {
   input: number; // USD per 1M input tokens
   output: number; // USD per 1M output tokens
@@ -29,6 +31,12 @@ const PRICES: Record<string, Price> = {
   "gemini-2.5-pro": { input: 1.25, output: 10 },
   "gemini-3": { input: 0.3, output: 2.5 },
   "gemini-3.6-flash": { input: 0.3, output: 2.5 },
+  // The `-latest` aliases are what the catalog actually ships for Google, and Google is
+  // hand-maintained in catalog.ts, so GENERATED_PRICES never covers it. Without these three the
+  // cost meter read "$0.00+" for the project's own default team.
+  "gemini-flash-lite": { input: 0.1, output: 0.4 },
+  "gemini-flash": { input: 0.3, output: 2.5 },
+  "gemini-pro": { input: 1.25, output: 10 },
   "deepseek-chat": { input: 0.27, output: 1.1 },
   "deepseek-reasoner": { input: 0.55, output: 2.19 },
   "glm-4": { input: 0.6, output: 2.2 },
@@ -49,6 +57,10 @@ const FREE_PROVIDERS = new Set(["ollama", "lmstudio"]);
 
 export function priceFor(provider: string, model: string): Price | undefined {
   if (FREE_PROVIDERS.has(provider)) return { input: 0, output: 0 };
+  // Exact match from models.dev first — it knows the actual per-model price, including for names
+  // the prefix table below has no hope of matching (`gemini-flash-latest`, `nvidia/nemotron-…`).
+  const exact = GENERATED_PRICES[`${provider}/${model}`];
+  if (exact) return exact;
   // Provider-prefixed ids ("anthropic/claude-opus-4-8" via OpenRouter) match on the model half.
   const name = (model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model).toLowerCase();
   let best: Price | undefined;

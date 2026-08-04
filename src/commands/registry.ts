@@ -176,7 +176,16 @@ export const BUILTIN_COMMANDS: Command[] = [
       let complete = true;
       for (const { agentId, usage } of engine.usage.snapshot()) {
         const cfg = engine.configs.find((c) => c.id === agentId);
-        if (!cfg) continue;
+        // `continue` here silently dropped real spend: an agent that ran and was then removed from
+        // the roster (or whose id changed via the picker) still has usage recorded against it, and
+        // skipping it under-reported the session total with no indication anything was missing.
+        if (!cfg) {
+          const tokens = usage.inputTokens + usage.outputTokens;
+          if (tokens === 0) continue;
+          complete = false;
+          lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  (no longer on the team — unpriced)`);
+          continue;
+        }
         const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens);
         total += usd;
         if (!priced) complete = false;
@@ -274,21 +283,28 @@ export function loadCommands(dir = ".amux/commands"): Command[] {
   const commands: Command[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    const raw = readFileSync(join(dir, entry.name), "utf8");
-    const m = raw.match(/^---\n([\s\S]*?)\n---\n?/);
-    const fm = (m ? (parse(m[1]!) ?? {}) : {}) as Record<string, unknown>;
-    const body = (m ? raw.slice(m[0].length) : raw).trim();
-    const name = typeof fm.name === "string" ? fm.name : entry.name.replace(/\.md$/, "");
-    commands.push({
-      name,
-      description: typeof fm.description === "string" ? fm.description : `Run the ${name} prompt`,
-      async run(engine, args) {
-        const prompt = body.replaceAll("$ARGUMENTS", args.trim());
-        if (engine.running) return { ok: false, message: "a task is already running" };
-        engine.submit(prompt).catch(() => {}); // long-running: progress arrives over the event stream
-        return { ok: true, message: `running /${name}` };
-      },
-    });
+    // Command *execution* was already guarded; loading was not, so one stray `[` in a hand-edited
+    // frontmatter threw out of the constructor and took down the whole core with a bare YAML error
+    // naming no file. A bad command file costs you that command, not the session.
+    try {
+      const raw = readFileSync(join(dir, entry.name), "utf8");
+      const m = raw.match(/^---\n([\s\S]*?)\n---\n?/);
+      const fm = (m ? (parse(m[1]!) ?? {}) : {}) as Record<string, unknown>;
+      const body = (m ? raw.slice(m[0].length) : raw).trim();
+      const name = typeof fm.name === "string" ? fm.name : entry.name.replace(/\.md$/, "");
+      commands.push({
+        name,
+        description: typeof fm.description === "string" ? fm.description : `Run the ${name} prompt`,
+        async run(engine, args) {
+          const prompt = body.replaceAll("$ARGUMENTS", args.trim());
+          if (engine.running) return { ok: false, message: "a task is already running" };
+          engine.submit(prompt).catch(() => {}); // long-running: progress arrives over the event stream
+          return { ok: true, message: `running /${name}` };
+        },
+      });
+    } catch (err) {
+      console.error(`amux: skipping ${join(dir, entry.name)}: ${err instanceof Error ? err.message : err}`);
+    }
   }
   return commands;
 }

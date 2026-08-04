@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 // Git isolation for a run: agents write into a throwaway worktree/branch instead of the real root,
 // merged back only on explicit user action (never automatically — this is a consequential action,
@@ -39,9 +40,29 @@ export async function createWorktree(root: string, id: string): Promise<Worktree
   const path = join(root, ".amux", "worktrees", id);
   const head = await git(root, ["rev-parse", "HEAD"]);
   if (head.code !== 0) throw new Error(`git rev-parse HEAD failed: ${head.stderr.trim()}`);
+  await pruneWorktrees(root); // clear registrations whose directories no longer exist
   const r = await git(root, ["worktree", "add", "-b", branch, path]);
   if (r.code !== 0) throw new Error(`git worktree add failed: ${r.stderr.trim() || r.stdout.trim()}`);
+  await excludeWorktrees(root);
   return { path, branch, baseSha: head.stdout.trim() };
+}
+
+// A worktree inside the repo is a nested checkout: to the outer repo it looks like a gitlink, so
+// `git add -A` (an agent's, or the user's) commits an embedded-repo entry that breaks clones.
+// .git/info/exclude rather than .gitignore, because this is a local mechanical detail — it should
+// not appear in the user's tracked ignore file or in their next diff.
+async function excludeWorktrees(root: string): Promise<void> {
+  const dir = await git(root, ["rev-parse", "--git-common-dir"]);
+  if (dir.code !== 0) return;
+  const excludePath = join(root, dir.stdout.trim(), "info", "exclude");
+  try {
+    const current = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : "";
+    if (current.includes(".amux/worktrees/")) return;
+    mkdirSync(dirname(excludePath), { recursive: true });
+    writeFileSync(excludePath, `${current}${current.endsWith("\n") || !current ? "" : "\n"}.amux/worktrees/\n`);
+  } catch {
+    // Cosmetic hygiene — never a reason to fail a run that is otherwise fine.
+  }
 }
 
 // What changed in the worktree since it branched off — surfaced to the user before they decide
@@ -49,17 +70,23 @@ export async function createWorktree(root: string, id: string): Promise<Worktree
 // as they go, so this stages everything first: a plain `git diff` against a commit ignores
 // untracked files entirely, which would hide every new file an agent created.
 export async function diffStat(handle: WorktreeHandle): Promise<string> {
-  await git(handle.path, ["add", "-A"]);
-  const r = await git(handle.path, ["diff", "--stat", "--cached", handle.baseSha]);
+  return await stagedDiff(handle, ["--stat"]);
+}
+
+// `git add -A` was the trick for including untracked files, but it is a *write*: GET /worktree
+// (a status read, polled by the dashboard) was silently staging the user's work-in-progress, so
+// a later `git commit` in that worktree committed more than they had chosen. `--intent-to-add`
+// records the paths without staging content, which is exactly what a diff needs and nothing more.
+async function stagedDiff(handle: WorktreeHandle, flags: string[]): Promise<string> {
+  await git(handle.path, ["add", "--intent-to-add", "-A"]);
+  const r = await git(handle.path, ["diff", ...flags, handle.baseSha]);
   return r.stdout.trim();
 }
 
 // The full patch (not just the stat summary) for /export's report — same staging as diffStat, so
 // new/untracked files show up too.
 export async function diffPatch(handle: WorktreeHandle): Promise<string> {
-  await git(handle.path, ["add", "-A"]);
-  const r = await git(handle.path, ["diff", "--cached", handle.baseSha]);
-  return r.stdout.trim();
+  return await stagedDiff(handle, []);
 }
 
 // Commit whatever's pending in the worktree so mergeBack has something to bring across — a no-op
@@ -109,4 +136,24 @@ export async function mergeBack(root: string, branch: string): Promise<{ ok: boo
 // fate; this is cleanup, not a second chance to save work.
 export async function removeWorktree(root: string, path: string): Promise<void> {
   await git(root, ["worktree", "remove", "--force", path]);
+}
+
+// Undo a conflicted merge so the user's working tree is not left full of conflict markers they
+// never asked for. `|| true` in spirit: if there is no merge in progress this is a harmless no-op.
+export async function abortMerge(root: string): Promise<void> {
+  await git(root, ["merge", "--abort"]);
+}
+
+// Delete the worktree AND its branch — a discard that leaves `amux/<id>` behind is not a discard,
+// and those branches accumulate one per abandoned run.
+export async function discardWorktree(root: string, handle: WorktreeHandle): Promise<void> {
+  await removeWorktree(root, handle.path);
+  await git(root, ["branch", "-D", handle.branch]);
+}
+
+// Worktrees whose directory is gone (a crash, a manual rm -rf, a machine reboot mid-run) stay
+// registered in .git/worktrees forever and make `git worktree add` fail on the same id later.
+// `prune` is git's own answer; run it before creating a new one.
+export async function pruneWorktrees(root: string): Promise<void> {
+  await git(root, ["worktree", "prune"]);
 }

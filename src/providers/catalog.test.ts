@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { CATALOG, providersByCategory } from "./catalog.ts";
+import { GENERATED_CATALOG } from "./catalog.generated.ts";
 
 test("every catalog entry is well-formed", () => {
   for (const [key, e] of Object.entries(CATALOG)) {
@@ -40,12 +41,43 @@ test("z.ai is present via the generated catalog (models.dev), routed as OpenAI-c
   expect(CATALOG["zai"]!.models.length).toBeGreaterThan(0);
 });
 
-test("the catalog covers well over 100 providers (matches opencode/models.dev breadth)", () => {
-  expect(Object.keys(CATALOG).length).toBeGreaterThan(100);
+test("the catalog stays curated, not the full models.dev breadth", () => {
+  expect(Object.keys(CATALOG).length).toBeGreaterThan(20);
+  expect(Object.keys(CATALOG).length).toBeLessThan(60);
 });
 
 test("hand-maintained entries override generated ones on id collision", () => {
   // "anthropic" exists in models.dev too, but ours must keep the native client + context window.
   expect(CATALOG["anthropic"]!.client).toBe("anthropic");
   expect(CATALOG["anthropic"]!.context).toBe(1_000_000);
+});
+
+test("no shipped baseURL contains an unsubstituted template placeholder", () => {
+  // models.dev publishes some URLs with ${ACCOUNT_ID}/${HOST} placeholders. Nothing substitutes
+  // them, so such a provider appears in the picker and then resolves DNS for the literal string.
+  for (const [id, entry] of Object.entries(CATALOG)) {
+    expect(`${id}: ${entry.baseURL ?? ""}`).not.toContain("${");
+  }
+});
+
+test("every generated envVar is actually a key/token variable", () => {
+  // models.dev lists env vars in arbitrary order; taking env[0] blindly shipped providers whose
+  // "API key" prompt was really asking for an account id or a hostname.
+  for (const [id, entry] of Object.entries(GENERATED_CATALOG)) {
+    expect(`${id}: ${entry.envVar}`).toMatch(/(_KEY|_TOKEN)$/);
+  }
+});
+
+test("no two providers point at the same host", () => {
+  // A generated id and a hand-maintained one pointing at the same vendor is not an id collision,
+  // so nothing caught it: the picker showed "Fireworks" and "Fireworks AI" as separate providers,
+  // one with 1 model and one with 8, and picking the wrong one was a silent downgrade.
+  const byHost = new Map<string, string>();
+  for (const [id, entry] of Object.entries(CATALOG)) {
+    if (!entry.baseURL) continue;
+    const host = new URL(entry.baseURL).host;
+    const prev = byHost.get(host);
+    expect(prev ? `${prev} and ${id} both claim ${host}` : host).toBe(host);
+    byHost.set(host, id);
+  }
 });

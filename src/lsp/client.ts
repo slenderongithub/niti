@@ -87,7 +87,18 @@ export class LspClient {
   // Idempotent and concurrency-safe: two agents asking for diagnostics at once share one handshake.
   start(): Promise<void> {
     if (this.dead) return Promise.reject(this.dead);
-    return (this.starting ??= this.spawnAndInitialize());
+    // Self-clearing memo. `??=` cached the *rejection* too, so one slow or crashed handshake
+    // disabled this language server for the rest of the session — every later call replayed the
+    // same stale failure and the server was never given another chance.
+    if (!this.starting) {
+      this.starting = this.spawnAndInitialize().catch((err) => {
+        this.starting = undefined;
+        this.dead = undefined; // a crash is not permanent; the next caller respawns
+        this.proc = undefined;
+        throw err;
+      });
+    }
+    return this.starting;
   }
 
   private async spawnAndInitialize(): Promise<void> {

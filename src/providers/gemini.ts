@@ -7,8 +7,16 @@ export class GeminiProvider implements Provider {
   constructor(
     private model: string,
     apiKey: string, // required — the SDK has no env fallback
+    baseURL?: string, // a Gemini-compatible proxy; the factory computes it and used to drop it here
   ) {
-    this.client = new GoogleGenAI({ apiKey });
+    // The @google/genai transport falls back to a bare fetch() — no retries, no timeout — unless
+    // httpOptions.retryOptions is set. Anthropic and OpenAI's SDKs both retry twice by default, so
+    // a routine Flash 503 was the one blip that threw all the way out to the scheduler and re-ran
+    // the entire task from turn zero, re-billing every tool call it had already made.
+    this.client = new GoogleGenAI({
+      apiKey,
+      httpOptions: { timeout: 120_000, retryOptions: { attempts: 3 }, ...(baseURL ? { baseUrl: baseURL } : {}) },
+    });
   }
 
   async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {

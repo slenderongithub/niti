@@ -24,7 +24,9 @@ function fakeMcp(): McpTools & { calls: string[] } {
   };
 }
 
-const cfg: AgentConfig = { id: "a", provider: "anthropic", model: "x", role: "r", systemPrompt: "s", allowedTools: [] };
+// "mcp" is the opt-in for every MCP tool. It has to be listed, because allowedTools now bounds
+// MCP the same way it bounds the sandbox tools.
+const cfg: AgentConfig = { id: "a", provider: "anthropic", model: "x", role: "r", systemPrompt: "s", allowedTools: ["mcp"] };
 
 test("agent routes an MCP tool call to the manager, not the sandbox, and feeds the result back", async () => {
   const mcp = fakeMcp();
@@ -58,7 +60,30 @@ test("MCP and LSP tools are offered side by side — adding LSP replaces nothing
   };
   const lsp = new LspRegistry([{ name: "fake", command: "does-not-need-to-exist", extensions: [".ts"] }], ".");
 
-  await new Agent({ ...cfg, allowedTools: ["read_file", "edit"] }, stub, new Bus(), { mcp: fakeMcp(), lsp }).run("look around");
+  await new Agent({ ...cfg, allowedTools: ["read_file", "edit", "mcp"] }, stub, new Bus(), { mcp: fakeMcp(), lsp }).run("look around");
   expect(offered).toEqual(["read_file", "edit", "mcp__demo__ping", "diagnostics", "hover", "spawn_fork"]);
   lsp.close();
+});
+
+test("allowedTools bounds MCP too — an agent without it is neither offered nor allowed the tool", async () => {
+  const mcp = fakeMcp();
+  let offered: string[] = [];
+  const stub: Provider = {
+    async send(_sys, _turns, tools) {
+      offered = tools.map((t) => t.name);
+      // ...and a model that names it anyway (hallucination, replayed history) must still be refused.
+      return offered.includes("mcp__demo__ping")
+        ? { text: "done", toolCalls: [] }
+        : { text: "", toolCalls: [{ id: "1", name: "mcp__demo__ping", input: {} }] };
+    },
+  };
+  const seen: string[] = [];
+  const bus = new Bus();
+  bus.subscribe((e) => { if (e.type === "error") seen.push(e.payload ?? ""); });
+
+  await new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, bus, { mcp }).run("try it");
+
+  expect(offered).not.toContain("mcp__demo__ping"); // never offered
+  expect(mcp.calls).toEqual([]); // and never executed
+  expect(seen.join(" ")).toContain("not in this agent's allowedTools");
 });

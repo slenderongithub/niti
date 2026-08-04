@@ -47,18 +47,25 @@ type Picker struct {
 	pendRole  string
 	roles     []api.AgentConfig
 	usedIDs   map[string]bool
+	existing  []api.AgentConfig // the roster already in agents.yaml, offered as "keep this"
 	Completed bool
-	quitting  bool
-	width     int
-	height    int
+	// Kept means the user chose the existing roster: agents.yaml was not rewritten, so the caller
+	// can skip restarting the core to reload a file that didn't change.
+	Kept     bool
+	quitting bool
+	width    int
+	height   int
 }
 
-func NewPicker(client *api.Client) Picker {
+// existing is the roster from GET /session. When it is non-empty the picker opens on a
+// "keep or re-pick" stage instead of the size question — relaunching used to cost 26 keystroked
+// answers with no way to reuse the team you already had, and ctrl+c out of it quit amux entirely.
+func NewPicker(client *api.Client, existing []api.AgentConfig) Picker {
 	ti := textinput.New()
 	ti.Focus()
 	ti.CharLimit = 200
 	ti.Prompt = "" // the card draws its own ▸
-	return Picker{client: client, input: ti, stage: "loading", usedIDs: map[string]bool{}, creds: map[string]bool{}}
+	return Picker{client: client, input: ti, stage: "loading", usedIDs: map[string]bool{}, creds: map[string]bool{}, existing: existing}
 }
 
 func (m Picker) Init() tea.Cmd {
@@ -101,7 +108,11 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.creds[c.Provider] = true
 		}
 		m.providers = sortProviders(msg.providers, m.creds)
-		m.toSize()
+		if len(m.existing) > 0 {
+			m.toTeam()
+		} else {
+			m.toSize()
+		}
 		return m, nil
 
 	case modelsMsg:
@@ -112,6 +123,11 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			// On the keep-or-repick stage, backing out means "I didn't want to change anything",
+			// not "quit amux" — the saved team is right there and refusing to use it is absurd.
+			if m.stage == "team" {
+				return m.keepExisting()
+			}
 			m.quitting = true
 			return m, tea.Quit
 		case "up", "ctrl+p", "shift+tab":
@@ -136,7 +152,7 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Picker) listStage() bool {
 	switch m.stage {
-	case "size", "provider", "model", "orchestrator":
+	case "team", "size", "provider", "model", "orchestrator":
 		return true
 	}
 	return false
@@ -157,6 +173,19 @@ func (m Picker) advance(val string) (tea.Model, tea.Cmd) {
 	m.input.SetValue("")
 
 	switch m.stage {
+	case "error":
+		// Was a dead end: no retry, no hint, and the only escape was ctrl+c out of amux entirely.
+		m.stage = "loading"
+		m.err = ""
+		return m, fetchCatalog(m.client)
+
+	case "team":
+		if pick == "new" {
+			m.toSize()
+			return m, nil
+		}
+		return m.keepExisting() // "keep", and anything unrecognised — the safe default is to not rewrite
+
 	case "size":
 		n, err := strconv.Atoi(pick)
 		if err != nil || n < 1 || n > MaxAgents {
@@ -178,6 +207,7 @@ func (m Picker) advance(val string) (tea.Model, tea.Cmd) {
 			// separate onboarding run just because they picked something new.
 			m.stage = "key"
 			m.list.Set(nil)
+			m.maskInput(true)
 			m.input.Placeholder = "API key for " + pick + " (or a base URL for a local endpoint)"
 			return m, nil
 		}
@@ -252,6 +282,14 @@ func (m Picker) back() (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.input.SetValue("")
 	switch m.stage {
+	case "team":
+		return m.keepExisting() // esc here is "leave it alone", same as ctrl+c
+	case "size":
+		// esc on the first question used to do nothing at all. With a saved roster there is now
+		// somewhere to go back *to*.
+		if len(m.existing) > 0 {
+			m.toTeam()
+		}
 	case "provider":
 		if len(m.roles) > 0 { // undo the last completed teammate rather than re-picking the size
 			last := m.roles[len(m.roles)-1]
@@ -279,7 +317,22 @@ func (m Picker) back() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Picker) toTeam() {
+	m.maskInput(false)
+	m.stage = "team"
+	summary := make([]string, 0, len(m.existing))
+	for _, a := range m.existing {
+		summary = append(summary, a.Role+" ("+a.Provider+"/"+a.Model+")")
+	}
+	m.list.Set([]ui.Item{
+		{Label: "Continue with this team", Value: "keep", Desc: strings.Join(summary, " · ")},
+		{Label: "Pick a new team", Value: "new", Desc: "replaces the agents: block in .amux/agents.yaml"},
+	})
+	m.input.Placeholder = "enter continues with the saved team"
+}
+
 func (m *Picker) toSize() {
+	m.maskInput(false)
 	m.stage = "size"
 	items := make([]ui.Item, 0, MaxAgents)
 	for i := 1; i <= MaxAgents; i++ {
@@ -304,7 +357,22 @@ func teamHint(n int) string {
 	}
 }
 
+// A pasted key sat in the terminal in cleartext — visible over a shoulder and, worse, left in the
+// scrollback of whatever terminal recording or shared session was running. 4000 chars because a
+// service-account JSON or a long JWT is a legitimate credential and 200 silently clipped them.
+func (m *Picker) maskInput(on bool) {
+	if on {
+		m.input.EchoMode = textinput.EchoPassword
+		m.input.EchoCharacter = '•'
+		m.input.CharLimit = 4000
+		return
+	}
+	m.input.EchoMode = textinput.EchoNormal
+	m.input.CharLimit = 200
+}
+
 func (m *Picker) toProvider() {
+	m.maskInput(false)
 	m.stage = "provider"
 	items := make([]ui.Item, 0, len(m.providers))
 	for _, p := range m.providers {
@@ -319,6 +387,7 @@ func (m *Picker) toProvider() {
 }
 
 func (m *Picker) toModel() {
+	m.maskInput(false)
 	m.stage = "model"
 	items := make([]ui.Item, 0, len(m.models))
 	for _, mo := range m.models {
@@ -348,6 +417,16 @@ func (m Picker) toOrchestratorOrFinish() (tea.Model, tea.Cmd) {
 	m.list.Set(items)
 	m.input.Placeholder = "who looks over everything?"
 	return m, nil
+}
+
+// Keep the saved roster: no SaveAgents call, because nothing changed and rewriting the file would
+// drop any hand-edited keys it carries.
+func (m Picker) keepExisting() (tea.Model, tea.Cmd) {
+	m.roles = m.existing
+	m.Completed = true
+	m.Kept = true
+	m.quitting = true
+	return m, tea.Quit
 }
 
 func (m Picker) finish() (tea.Model, tea.Cmd) {
@@ -451,8 +530,10 @@ func (m Picker) View() string {
 		return "\ncancelled.\n"
 	}
 	if m.stage == "error" {
+		// The hint is the whole point: without it the screen states a problem and offers no verb.
 		return screen(m.width, m.height, "pick your team", fit(m.width, widest(m.err)),
-			lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.BgPane).Render(m.err), "", "")
+			lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.BgPane).Render(m.err),
+			"enter retries · ctrl+c quits", "")
 	}
 	if m.stage == "loading" {
 		return screen(m.width, m.height, "pick your team", cardMin, "loading…", "", "")
@@ -492,6 +573,10 @@ func (m Picker) View() string {
 // stages that show a value instead of a list — that value.
 func (m Picker) stageText() (head, hint, fixed string) {
 	switch m.stage {
+	case "error":
+		return section("PROBLEM"), "enter retries · ctrl+c quits", ""
+	case "team":
+		return section("YOUR TEAM"), "enter keeps the saved team · ↑↓ to re-pick instead", ""
 	case "size":
 		return section("HOW MANY"), "↑↓ choose · enter confirms — each teammate gets its own model", ""
 	case "provider":

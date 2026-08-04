@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -246,7 +246,9 @@ test("worktree isolation writes into a throwaway git worktree until explicitly m
     },
   };
   const single: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: ["write_file"] }];
-  const engine = new Engine({ configs: single, makeProvider: () => provider, interactive: false, root: repo, worktree: true });
+  // auto: true because a headless engine now *denies* gated tools instead of silently allowing
+  // them — this test is about worktree isolation, so it opts in explicitly.
+  const engine = new Engine({ configs: single, makeProvider: () => provider, interactive: false, auto: true, root: repo, worktree: true });
 
   await engine.submit("add a file");
 
@@ -267,4 +269,69 @@ test("worktree isolation writes into a throwaway git worktree until explicitly m
   expect(engine.worktreeHandle).toBeUndefined();
   expect(existsSync(join(repo, "out.txt"))).toBe(true); // now merged into the real root
   expect(existsSync(worktreePath)).toBe(false); // cleaned up after a successful merge
+});
+
+test("a headless engine denies gated tools unless --auto is set", async () => {
+  const root = mkdtempSync(join(tmpdir(), "amux-headless-"));
+  const writer: Provider = {
+    async send(_sys, turns) {
+      const lastUser = [...turns].reverse().find((t) => t.role === "user");
+      const text = lastUser && "text" in lastUser ? lastUser.text : "";
+      if (text.includes("orchestrator of a team")) return { text: '[{"description":"write a file","role":"a"}]', toolCalls: [] };
+      if (!turns.some((t) => t.role === "tool")) {
+        return { text: "", toolCalls: [{ id: "c1", name: "write_file", input: { path: "out.txt", content: "hi" } }] };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const single: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: ["write_file"] }];
+
+  const denied = new Engine({ configs: single, makeProvider: () => writer, interactive: false, root });
+  await denied.submit("write it");
+  expect(existsSync(join(root, "out.txt"))).toBe(false); // no approver, no --auto → refused
+
+  const allowed = new Engine({ configs: single, makeProvider: () => writer, interactive: false, auto: true, root });
+  await allowed.submit("write it");
+  expect(existsSync(join(root, "out.txt"))).toBe(true); // --auto is the explicit opt-in
+});
+
+test("a conflicted merge restores the tree and the worktree can be discarded", async () => {
+  const repo = mkdtempSync(join(tmpdir(), "amux-conflict-"));
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  writeFileSync(join(repo, "f.txt"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repo });
+
+  const provider: Provider = {
+    async send(_sys, turns) {
+      const lastUser = [...turns].reverse().find((t) => t.role === "user");
+      const text = lastUser && "text" in lastUser ? lastUser.text : "";
+      if (text.includes("orchestrator of a team")) return { text: '[{"description":"edit","role":"a"}]', toolCalls: [] };
+      if (!turns.some((t) => t.role === "tool")) {
+        return { text: "", toolCalls: [{ id: "c1", name: "write_file", input: { path: "f.txt", content: "from the agent\n" } }] };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const single: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: ["write_file"] }];
+  const engine = new Engine({ configs: single, makeProvider: () => provider, interactive: false, auto: true, root: repo, worktree: true });
+  await engine.submit("edit it");
+
+  // Meanwhile the user changed the same line on main — the merge must conflict.
+  writeFileSync(join(repo, "f.txt"), "from the user\n");
+  execFileSync("git", ["commit", "-qam", "user edit"], { cwd: repo });
+
+  const merged = await engine.mergeWorktree();
+  expect(merged.ok).toBe(false);
+  // The tree is restored, not left mid-merge with conflict markers in it.
+  expect(readFileSync(join(repo, "f.txt"), "utf8")).toBe("from the user\n");
+  expect(engine.worktreeHandle).toBeDefined();
+
+  const discarded = await engine.discardWorktree();
+  expect(discarded.ok).toBe(true);
+  expect(engine.worktreeHandle).toBeUndefined();
+  // ...and a fresh worktree run is possible again, which the old wedge made impossible.
+  expect(execFileSync("git", ["branch", "--list"], { cwd: repo, encoding: "utf8" })).not.toContain("amux/");
 });

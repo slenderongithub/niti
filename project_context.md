@@ -61,7 +61,7 @@ This file is the single merged source of project history/architecture context, r
    or `--auto`. File access is jailed via `safePath` prefix validation; shell exec uses `spawn` with
    array arguments (no shell string → no injection).
 5. **Provider abstraction & keychain storage** — one `Provider` interface; native clients for
-   Anthropic/Gemini, one OpenAI-compatible client covering 150+ providers via the Models.dev catalog
+   Anthropic/Gemini, one OpenAI-compatible client covering a curated 29 providers / 152 models via the Models.dev catalog
    (`src/providers/catalog.ts` + generated `catalog.generated.ts`). Keys come from the OS keychain
    (`@napi-rs/keyring`) with env-var fallback, or GitHub Copilot's OAuth device-code flow.
 6. **Agent-to-agent messaging (amux's differentiator)** — agents `send_message`/`ask_agent` any

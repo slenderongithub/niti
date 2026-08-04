@@ -24,22 +24,86 @@ export function safePath(root: string, p: string): string {
   return abs;
 }
 
-function shell(
+// ponytail: fixed ceilings, not per-agent configurable — move to agents.yaml if a real project
+// needs a longer build than this.
+export const SHELL_TIMEOUT_MS = 120_000;
+export const SHELL_MAX_OUTPUT = 100_000;
+
+// What a spawned command is allowed to inherit. An allowlist, not a denylist, because the thing
+// being kept out (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, …) grows with every provider
+// added to the catalog, and a denylist would silently fall behind.
+// ponytail: build tools that need more (npm_config_*, CI, proxy vars) will hit this — widen the
+// list when someone reports it, rather than guessing at it now.
+const ENV_PASSTHROUGH = ["PATH", "HOME", "LANG", "LC_ALL", "TZ", "TERM", "TMPDIR", "SHELL", "USER"];
+
+function childEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const k of ENV_PASSTHROUGH) {
+    const v = process.env[k];
+    if (v !== undefined) env[k] = v;
+  }
+  return env;
+}
+
+export function shell(
   root: string,
   command: string,
   args: string[],
+  limits: { timeoutMs?: number; maxOutput?: number } = {}, // overridden only by the tests, which can't wait 120s
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  // spawn (never exec/shell:true) with args as an array → no shell metacharacter injection.
-  // cwd pinned to root; there is no shell to `cd` out of.
+  const timeoutMs = limits.timeoutMs ?? SHELL_TIMEOUT_MS;
+  const maxOutput = limits.maxOutput ?? SHELL_MAX_OUTPUT;
+  // spawn (never exec/shell:true) with args as an array → no shell *metacharacter* injection.
+  //
+  // SCOPE OF THE JAIL — read this before trusting it. `cwd` is pinned to root, but that is not a
+  // sandbox: `{command:"bash",args:["-c","…"]}` is a shell, and `{command:"cat",args:["../../.ssh/id_rsa"]}`
+  // needs no shell at all. Granting an agent `shell` is granting it your machine, and the docs say
+  // so. What we CAN cheaply remove is the credential handoff: an inherited environment carried
+  // every provider API key into the child, so one `env` call exfiltrated the lot into a model's
+  // context. The child now gets an explicit allowlist.
+  //
+  // The three bounds below are what stop one command from wedging an agent forever: stdin is
+  // /dev/null so anything prompting for input reads EOF instead of blocking; `timeout` +
+  // SIGKILL caps wall-clock; and the accumulators are capped so `find /` can't grow a string
+  // until the process dies (and can't be re-sent as tool output on every later turn).
   return new Promise((res) => {
-    const child = spawn(command, args, { cwd: root });
+    const child = spawn(command, args, {
+      cwd: root,
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: childEnv(),
+    });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (d) => (stdout += d));
-    child.stderr.on("data", (d) => (stderr += d));
-    child.on("close", (code) => res({ stdout, stderr, code: code ?? -1 }));
-    child.on("error", (err) => res({ stdout, stderr: String(err), code: -1 }));
+    const cap = (buf: string, d: unknown) => (buf.length >= maxOutput ? buf : (buf + d).slice(0, maxOutput));
+    const mark = (buf: string) => (buf.length >= maxOutput ? `${buf}\n[output truncated]` : buf);
+    child.stdout.on("data", (d) => (stdout = cap(stdout, d)));
+    child.stderr.on("data", (d) => (stderr = cap(stderr, d)));
+    child.on("close", (code, signal) => {
+      // node kills a timed-out child with killSignal; nothing else in this process sends SIGKILL.
+      const timedOut = signal === "SIGKILL";
+      res({
+        stdout: mark(stdout),
+        stderr: mark(stderr) + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : ""),
+        code: code ?? -1,
+      });
+    });
+    child.on("error", (err) => res({ stdout: mark(stdout), stderr: String(err), code: -1 }));
   });
+}
+
+// A tool result is pushed into `turns` and re-sent on every later iteration of the loop, so an
+// unbounded read is not one big response — it is one big response per turn, forever. Cap it, and
+// refuse binaries outright rather than feeding a model a screenful of replacement characters.
+export const READ_FILE_MAX = 256_000;
+
+async function readCapped(abs: string, shown: string): Promise<string> {
+  const buf = await readFile(abs);
+  if (buf.includes(0)) return `error: ${shown} looks like a binary file (${buf.length} bytes) — not read`;
+  const text = buf.toString("utf8");
+  if (text.length <= READ_FILE_MAX) return text;
+  return `${text.slice(0, READ_FILE_MAX)}\n[truncated: ${shown} is ${text.length} characters, showing the first ${READ_FILE_MAX}]`;
 }
 
 // Gate on allowedTools, then dispatch. Returns a string result for feeding back to the model.
@@ -53,7 +117,7 @@ export async function runTool(
   }
   switch (call.tool) {
     case "read_file":
-      return await readFile(safePath(root, call.path), "utf8");
+      return await readCapped(safePath(root, call.path), call.path);
     case "write_file":
       await writeFile(safePath(root, call.path), call.content);
       return `wrote ${call.path}`;
@@ -137,7 +201,8 @@ const SPECS: Record<string, ToolSpec> = {
   },
   shell: {
     name: "shell",
-    description: "Run a command in the project root. Args are passed literally (no shell interpretation).",
+    description:
+      "Run a command in the project root. 'command' must be a single executable name — put every argument in 'args', which is passed literally (no shell interpretation, no globbing).",
     parameters: {
       type: "object",
       properties: { command: { type: "string" }, args: { type: "array", items: { type: "string" } } },
@@ -177,12 +242,21 @@ export function toSandboxCall(c: ProviderCall): ToolCall {
         newString: String(i.newString ?? ""),
         replaceAll: i.replaceAll === true,
       };
-    case "shell":
+    case "shell": {
+      // Models routinely encode a whole command line as `{"command":"git status"}`, which spawned
+      // a binary literally named "git status" and failed with a PATH error blaming the user. The
+      // args[] array is the documented shape and always wins; splitting only fills in for the
+      // other guess.
+      // ponytail: whitespace split, no quote handling — `{"command":"echo 'a b'"}` still splits
+      // naively. Anything needing quoting has args[] available and gets it right.
+      const parts = String(i.command ?? "").trim().split(/\s+/);
+      const given = Array.isArray(i.args) && i.args.length ? i.args.map(String) : undefined;
       return {
         tool: "shell",
-        command: String(i.command ?? ""),
-        args: Array.isArray(i.args) ? i.args.map(String) : [],
+        command: parts[0] ?? "",
+        args: given ?? parts.slice(1),
       };
+    }
     default:
       throw new Error(`unknown tool: ${c.name}`);
   }

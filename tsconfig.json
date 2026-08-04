@@ -7,6 +7,7 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
     "noEmit": true,
     "types": ["bun"]
   },

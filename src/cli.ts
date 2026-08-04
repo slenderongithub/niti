@@ -1,21 +1,10 @@
 #!/usr/bin/env bun
-// amux-core — the headless engine + scripting CLI.
-//
-//   For the interactive session, run the Go TUI: ./amux (build with `bun run build:tui`).
-//   This binary is for scripting, automation, and what the Go TUI spawns as its subprocess:
-//     amux-core "<task>"           → run one task headlessly and exit (plain-text progress)
-//     amux-core resume             → continue the last session's unfinished tasks (with their history)
-//     ... --auto                   → approve anything not explicitly denied in agents.yaml
-//     ... --worktree               → isolate this run's writes in a fresh git worktree (manual merge)
-//     amux-core init               → setup wizard: add providers, assign models to roles, pick orchestrator
-//     amux-core serve [--port=N]   → start the local core server (what the Go TUI connects to)
-//     amux-core --web ["<task>"]   → start the server + open the live web dashboard
-//     amux-core auth login|list|logout <provider>
-//     amux-core keys set <provider> → store a BYOK key (legacy; `amux-core auth login` is preferred)
-//     amux-core login copilot       → sign in with a GitHub Copilot subscription
+// amux-core — the headless engine + scripting CLI. The usage text below is USAGE, printed by
+// --help; keep them as one thing so the comment and the help output can't drift apart.
+import pkg from "../package.json";
 import { makeProvider } from "./providers/factory.ts";
 import { Engine } from "./engine.ts";
-import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions, saveAgents } from "./config/config.ts";
+import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions, saveAgents, findProjectRoot } from "./config/config.ts";
 import { LspRegistry } from "./lsp/registry.ts";
 import { McpManager } from "./mcp/mcp.ts";
 import { setKey } from "./keystore/keystore.ts";
@@ -36,10 +25,77 @@ function die(msg: string): never {
   process.exit(1);
 }
 
+const USAGE = `amux-core — the headless engine + scripting CLI.
+
+  For the interactive session, run the Go TUI: amux
+  This binary is for scripting, automation, and what the Go TUI spawns as its subprocess:
+
+    amux-core "<task>"            run one task headlessly and exit (plain-text progress)
+    amux-core resume              continue the last session's unfinished tasks (with their history)
+    amux-core init                setup wizard: add providers, assign models to roles
+    amux-core serve [--port=N]    start the local core server (what the Go TUI connects to)
+    amux-core --web ["<task>"]    start the server + open the live web dashboard
+    amux-core auth login|list|logout <provider>
+    amux-core keys set <provider> store a BYOK key (legacy; 'auth login' is preferred)
+    amux-core login copilot       sign in with a GitHub Copilot subscription
+
+  Flags:
+    --auto                        approve anything not explicitly denied in agents.yaml
+    --worktree                    isolate this run's writes in a fresh git worktree (manual merge)
+    --port=N                      port for serve/--web (default: an ephemeral one)
+    --help, -h · --version, -v
+
+  Exit codes (headless runs): 0 all tasks done · 1 a task failed · 2 unfinished (turn cap/pending).`;
+
+// Bundled at compile time (same trick as the theme palettes), so the compiled binary carries the
+// version without a package.json beside it and there is still exactly one place to bump.
+const VERSION = pkg.version;
+
+if (args[0] === "help" || args.includes("--help") || args.includes("-h")) {
+  console.log(USAGE);
+  process.exit(0);
+}
+if (args.includes("--version") || args.includes("-v")) {
+  console.log(VERSION);
+  process.exit(0);
+}
+
+// A typo must never become a billed model run. Every flag is checked against this list, and a
+// bare one-word first argument that looks like a subcommand is rejected rather than submitted as
+// a prompt — `amux-core stauts` used to reach the orchestrator and cost real money.
+const KNOWN_FLAGS = new Set(["--auto", "--worktree", "--web", "--help", "-h", "--version", "-v"]);
+const SUBCOMMANDS = new Set(["keys", "login", "auth", "serve", "init", "resume", "help"]);
+for (const a of args) {
+  if (a.startsWith("-") && !KNOWN_FLAGS.has(a) && !a.startsWith("--port=")) {
+    die(`unknown flag '${a}'\n\n${USAGE}`);
+  }
+}
+if (args.length === 1 && /^[a-z][a-z0-9-]*$/.test(args[0]!) && !SUBCOMMANDS.has(args[0]!)) {
+  die(`unknown command '${args[0]}' — if you meant it as a task, quote it: amux-core "${args[0]}"`);
+}
+
+// Before any loader runs: every artefact (.amux/agents.yaml, the SQLite store, session.json) is
+// resolved from cwd, so running from a subdirectory created a stray second project there.
+const projectRoot = findProjectRoot();
+if (projectRoot !== process.cwd()) process.chdir(projectRoot);
+
+function parsePort(): number | undefined {
+  const arg = args.find((a) => a.startsWith("--port="));
+  if (!arg) return undefined;
+  const port = Number(arg.slice(7));
+  if (!Number.isInteger(port) || port < 0 || port > 65535) die(`invalid --port '${arg.slice(7)}'`);
+  return port;
+}
+
 // --- credential commands ---------------------------------------------------
 if (args[0] === "keys") {
   if (args[1] === "set" && args[2]) {
-    const key = prompt(`Enter API key for ${args[2]}:`)?.trim();
+    // A typo here stores a key under a provider id nothing ever looks up — silently, and the user
+    // then debugs "why is my key not being used".
+    if (!Object.hasOwn(CATALOG, args[2])) {
+      die(`unknown provider '${args[2]}'. Try one of: ${providerKeys().slice(0, 16).join(", ")}, …`);
+    }
+    const key = await promptSecret(`Enter API key for ${args[2]}:`);
     if (!key) die("no key entered");
     setKey(args[2], key!);
     console.log(`Stored ${args[2]} key in the OS keychain.`);
@@ -80,14 +136,10 @@ if (args[0] === "auth") {
 
 // --- server / dashboard ----------------------------------------------------
 if (args[0] === "serve") {
-  const portArg = args.find((a) => a.startsWith("--port="));
   try {
-    const { server } = await serveMain({ port: portArg ? Number(portArg.slice(7)) : undefined, auto: args.includes("--auto"), worktree: args.includes("--worktree") });
+    const { engine, server } = await serveMain({ port: parsePort(), auto: args.includes("--auto"), worktree: args.includes("--worktree") });
     console.error(`amux core server running at ${server.url} — Ctrl-C to stop`);
-    process.on("SIGINT", () => {
-      server.stop();
-      process.exit(0);
-    });
+    onShutdown(engine, server);
   } catch (err) {
     surfaceStartupError(err);
   }
@@ -95,18 +147,23 @@ if (args[0] === "serve") {
 }
 
 if (args[0] !== "serve" && args.includes("--web")) {
-  const goal = args.filter((a) => a !== "--web").join(" ").trim();
+  const goal = args.filter((a) => !a.startsWith("-")).join(" ").trim();
   try {
-    // The web dashboard is read-only (no approver in this process), so run headless/auto-approve.
-    const { engine, server } = await serveMain({ interactive: false });
+    // The dashboard implements the full approval flow against POST /approval (web/app.js), and the
+    // queue is the same FIFO the TUI answers — so this process gets a real approver. It used to
+    // pass interactive:false, which silently ran every write and shell unattended.
+    const { engine, server } = await serveMain({
+      port: parsePort(),
+      interactive: true,
+      auto: args.includes("--auto"),
+      worktree: args.includes("--worktree"),
+    });
     const url = `${server.url}/dashboard?token=${server.token}`;
     console.log(`\namux dashboard: ${url}\n`);
+    if (args.includes("--auto")) console.error("amux: --auto is on — writes and shell run without asking.");
     openBrowser(url);
-    if (goal) engine.submit(goal).catch((e) => console.error("run error:", e));
-    process.on("SIGINT", () => {
-      server.stop();
-      process.exit(0);
-    });
+    if (goal) engine.submit(goal).catch((e) => console.error(`amux: ${e instanceof Error ? e.message : e}`));
+    onShutdown(engine, server);
   } catch (err) {
     surfaceStartupError(err);
   }
@@ -136,13 +193,15 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
 
   let engine: Engine;
   try {
-    engine = await buildEngine(false); // headless: auto-approve gated tools, no interactive approver
+    // Not interactive (there's no TTY to prompt on), but not a blanket auto-approve either: the
+    // engine denies anything resolving to `ask` unless --auto was typed. See engine.ts.
+    engine = await buildEngine(false);
   } catch (err) {
     surfaceStartupError(err);
     throw err; // unreachable (surfaceStartupError exits)
   }
   if (resume) engine.orch.load(loadTasks());
-
+  onShutdown(engine);
 
   // Plain-text progress: one line per non-streaming event, so scripting/CI output stays readable.
   const unsubscribe = engine.bus.subscribe((e: AgentEvent) => {
@@ -151,13 +210,28 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
     (e.type === "error" ? console.error : console.log)(line);
   });
 
-  if (goal) await engine.submit(goal);
-  else if (resume) await engine.resume(); // continue unfinished tasks with their stored conversations
+  // A provider failure during *planning* throws straight out of submit() — before any task exists
+  // — and used to surface as an unhandled rejection with a full stack trace, which is not how any
+  // other error in this file is reported.
+  let runFailed = false;
+  try {
+    if (goal) await engine.submit(goal);
+    else if (resume) await engine.resume(); // continue unfinished tasks with their stored conversations
+  } catch (err) {
+    runFailed = true;
+    console.error(`amux: ${err instanceof Error ? err.message : err}`);
+  }
   unsubscribe();
 
   console.log("\n--- tasks ---");
   for (const t of engine.orch.all) console.log(`${t.id} [${t.status}] ${t.assignedTo ?? "-"}: ${t.description}`);
-  process.exit(0);
+  // Scripts need a machine-readable verdict — `amux-core "fix the test" && ./deploy.sh` used to
+  // deploy after every task failed. 1 = something failed, 2 = ran out of turns / still pending.
+  engine.close();
+  void engine.mcp?.close?.();
+  const failed = engine.orch.all.filter((t) => t.status === "failed").length;
+  const unfinished = engine.orch.all.filter((t) => t.status !== "done").length;
+  process.exit(runFailed || failed ? 1 : unfinished ? 2 : 0);
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -187,10 +261,68 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
   });
 }
 
+// Bun's prompt() echoes. For a credential that means the key sits in the terminal in cleartext and
+// then in the shell's scrollback — and in whatever terminal recording or shared session happened to
+// be running. Read it with echo off when we own a TTY; fall back to the plain prompt (with a
+// warning) when stdin is a pipe, where masking is neither possible nor meaningful.
+async function promptSecret(label: string): Promise<string> {
+  const stdin = process.stdin;
+  if (!stdin.isTTY) {
+    console.error("amux: stdin is not a terminal — the value you type will be visible.");
+    return prompt(label)?.trim() ?? "";
+  }
+  process.stdout.write(`${label} `);
+  stdin.setRawMode(true);
+  stdin.resume();
+  let value = "";
+  try {
+    for await (const chunk of stdin) {
+      const text = String(chunk);
+      if (text.includes("\u0003")) {
+        // ctrl+c inside raw mode never reaches the default handler.
+        process.stdout.write("\n");
+        process.exit(130);
+      }
+      const end = text.search(/[\r\n]/);
+      value += end === -1 ? text : text.slice(0, end);
+      // Backspace/delete, so a typo is fixable rather than fatal.
+      while (/[\u0008\u007f]/.test(value)) value = value.replace(/.?[\u0008\u007f]/, "");
+      if (end !== -1) break;
+    }
+  } finally {
+    stdin.setRawMode(false);
+    stdin.pause();
+  }
+  process.stdout.write("\n");
+  return value.trim();
+}
+
 function surfaceStartupError(err: unknown): never {
   const msg = err instanceof Error ? err.message : String(err);
-  if (/ENOENT|agents\.yaml/.test(msg)) die(`no agents configured. Run 'amux-core init' to set up providers and roles.`);
+  // ENOENT only. Matching /agents\.yaml/ swallowed every *validation* error too — a one-character
+  // typo in the config was reported as "no agents configured. Run init", and following that advice
+  // overwrote the roster the user was trying to fix.
+  if (/ENOENT/.test(msg)) die(`no agents configured. Run 'amux-core init' to set up providers and roles.`);
   die(msg);
+}
+
+// One shutdown path for every long-lived mode. Engine.close() and McpManager.close() existed but
+// were never called anywhere, so Ctrl-C orphaned every LSP and MCP child process.
+function onShutdown(engine?: Engine, server?: { stop: () => void }): void {
+  let closing = false;
+  const shutdown = () => {
+    if (closing) process.exit(130); // second Ctrl-C: stop waiting, just go
+    closing = true;
+    try {
+      server?.stop();
+      engine?.close();
+      void engine?.mcp?.close?.();
+    } finally {
+      process.exit(130); // 128 + SIGINT, the shell convention
+    }
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 // One provider through the opencode-style flow: pick auth method by category, validate-on-first-use.
@@ -214,7 +346,7 @@ async function authLogin(providerArg?: string): Promise<void> {
       return;
     }
   }
-  const key = prompt(`API key for ${entry!.label}:`)?.trim();
+  const key = await promptSecret(`API key for ${entry!.label}:`);
   if (!key) die("no key entered");
   setCredential({ provider, type: "api", key: key! });
   console.log(`Saved ${entry!.label} key.`);
@@ -223,7 +355,7 @@ async function authLogin(providerArg?: string): Promise<void> {
 // Minimal terminal onboarding (the rich version lives in the Go TUI). Add credentials → assign
 // models to custom roles → pick the orchestrator → write .amux/agents.yaml.
 async function runInit(): Promise<void> {
-  console.log("amux setup — add providers, assign models to roles, pick an orchestrator.\n");
+  console.log("amux-core init — add providers, assign models to roles, pick an orchestrator.\n");
   for (;;) {
     await authLogin();
     if ((prompt("Add another provider? (y/N):")?.trim().toLowerCase() ?? "") !== "y") break;
@@ -267,9 +399,17 @@ async function runInit(): Promise<void> {
 }
 
 function openBrowser(url: string): void {
-  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  // `start` is a cmd.exe builtin, not an executable — spawning it directly fails on Windows. It
+  // has to be run *through* cmd, and the empty "" is the title argument `start` would otherwise
+  // eat the URL as. (tui/internal/session already gets this right; this is the copy that didn't.)
+  const argv =
+    process.platform === "darwin"
+      ? ["open", url]
+      : process.platform === "win32"
+        ? ["cmd", "/c", "start", "", url]
+        : ["xdg-open", url];
   try {
-    Bun.spawn([cmd, url], { stdout: "ignore", stderr: "ignore" });
+    Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" });
   } catch {
     /* headless — the URL is printed above */
   }

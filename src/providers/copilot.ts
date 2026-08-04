@@ -47,8 +47,20 @@ export function interpretPollResponse(data: Record<string, unknown>): PollOutcom
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Poll until the user authorizes; returns the long-lived GitHub OAuth token.
+// GitHub's documented floor is 5s; the value arrives in a network response, so a hostile or
+// broken one (0, -1, NaN, "fast") must not turn this into an unbounded tight loop against an
+// auth endpoint. Clamped into a sane band, with the documented default when it isn't a number.
+const MIN_POLL_S = 5;
+const MAX_POLL_S = 60;
+
+function pollSeconds(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return MIN_POLL_S;
+  return Math.min(Math.max(n, MIN_POLL_S), MAX_POLL_S);
+}
+
 export async function pollForToken(deviceCode: string, interval: number): Promise<string> {
-  let wait = interval;
+  let wait = pollSeconds(interval);
   for (;;) {
     await sleep(wait * 1000);
     const res = await fetch(ACCESS_TOKEN_URL, {
@@ -62,7 +74,7 @@ export async function pollForToken(deviceCode: string, interval: number): Promis
     });
     const outcome = interpretPollResponse((await res.json()) as Record<string, unknown>);
     if ("done" in outcome) return outcome.done;
-    if ("slowDown" in outcome) wait = interval + 5;
+    if ("slowDown" in outcome) wait = pollSeconds(wait + 5);
     else if ("error" in outcome) throw new Error(`login failed: ${outcome.error}`);
   }
 }

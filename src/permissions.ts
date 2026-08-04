@@ -7,6 +7,7 @@
 //
 // Layers are consulted in order (agent config → project config → --auto → built-in defaults); the
 // first layer with a matching pattern decides. Unmatched everywhere → "ask".
+import { normalize } from "node:path";
 
 export type Decision = "allow" | "ask" | "deny";
 export type ToolRules = Record<string, Decision>; // pattern → decision
@@ -36,7 +37,11 @@ export function subject(tool: string, input: Record<string, unknown>): string {
     const args = Array.isArray(input.args) ? input.args.map(String) : [];
     return [String(input.command ?? ""), ...args].join(" ").trim();
   }
-  return typeof input.path === "string" ? input.path : "";
+  // Normalized, because the pattern is matched against raw model output and the *executed* path is
+  // resolved later by safePath. Unnormalized, `./secret.txt` slipped past a `secret*` deny and
+  // `src/../.amux/agents.yaml` satisfied an `src/**` allow — both writing the same file the rule
+  // was protecting.
+  return typeof input.path === "string" ? normalize(input.path) : "";
 }
 
 // Path subjects use real glob semantics (`src/*` ≠ `src/**`, as in approval.ts). Command lines are

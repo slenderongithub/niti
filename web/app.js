@@ -68,9 +68,23 @@ function pulse(from, to, kind) {
 // ---------- SSE ----------
 function connect() {
   const conn = $("conn");
-  const es = new EventSource(`/events?from=0&token=${encodeURIComponent(TOKEN)}`);
-  es.onopen = () => { conn.textContent = "live"; conn.className = "conn live"; };
-  es.onerror = () => { conn.textContent = "reconnecting…"; conn.className = "conn dead"; };
+  // No `from=0`: EventSource resends Last-Event-ID on reconnect and the server honours it, so a
+  // blip replays only what was missed instead of the whole 2000-event buffer.
+  const es = new EventSource(`/events?token=${encodeURIComponent(TOKEN)}`);
+  let everOpened = false;
+  es.onopen = () => { everOpened = true; conn.textContent = "live"; conn.className = "conn live"; };
+  es.onerror = () => {
+    // A bad/absent token and an unplugged network both land here, and "reconnecting…" forever is
+    // a miserable way to learn the URL was missing its ?token=. If we never once connected, the
+    // token is the overwhelmingly likely cause — say so instead of retrying silently.
+    if (!everOpened) {
+      conn.textContent = TOKEN ? "unauthorized — check the ?token= in this URL" : "no token in this URL";
+      conn.className = "conn dead";
+      return;
+    }
+    conn.textContent = "reconnecting…";
+    conn.className = "conn dead";
+  };
   es.onmessage = (ev) => {
     let e;
     try { e = JSON.parse(ev.data); } catch { return; }
@@ -139,7 +153,27 @@ function onOrch(ev) {
       break;
     }
     case "handoff": pulse(ev.from, ev.to?.[0] ?? "*", "handoff"); break;
-    case "complete": setProgress(100); for (const n of nodes.values()) if (n.status === "working") n.status = "idle"; break;
+    // Not unconditionally 100: a cancelled or partly-failed run leaves tasks unfinished, and
+    // claiming completion there is the UI lying about the work.
+    case "complete":
+      setProgress(ev.total > 0 ? Math.round((ev.completed / ev.total) * 100) : 100);
+      for (const n of nodes.values()) if (n.status === "working") n.status = "idle";
+      break;
+    // The core has always emitted these; the dashboard ignored them, so a silently-rejected review
+    // or a replan looked like a task that simply failed.
+    case "review": {
+      // ensureNode returns null for non-agent ids (orchestrator, system) — pushLog would throw on
+      // it and take the whole event handler down with it.
+      const rn = ensureNode(ev.reviewer);
+      if (rn) pushLog(rn, `[review] ${ev.phase} ${ev.taskId}`);
+      if (ev.phase === "changes_requested") setTaskStatus(ev.taskId, "in_progress");
+      break;
+    }
+    case "replan": {
+      const pn = ensureNode(ev.role);
+      if (pn) pushLog(pn, `[replan] ${ev.taskId}: ${ev.action}${ev.reason ? " — " + ev.reason : ""}`);
+      break;
+    }
   }
 }
 
@@ -182,11 +216,11 @@ function renderTasks() {
   if (!tasks.length) { el.innerHTML = '<div class="empty">No plan yet.</div>'; return; }
   el.innerHTML = tasks
     .map(
-      (t) => `<div class="task"><div class="row"><span class="id">${t.id}</span>
-        <span class="st ${t.status}">${t.status.replace("_", " ")}</span></div>
+      (t) => `<div class="task"><div class="row"><span class="id">${esc(t.id)}</span>
+        <span class="st ${esc(t.status)}">${esc(String(t.status ?? "").replace("_", " "))}</span></div>
         <div class="who">→ ${esc(t.role)}</div>
         <div class="desc">${esc(t.description)}</div>
-        ${t.dependsOn && t.dependsOn.length ? `<div class="deps">depends on ${t.dependsOn.join(", ")}</div>` : ""}</div>`,
+        ${t.dependsOn && t.dependsOn.length ? `<div class="deps">depends on ${esc(t.dependsOn.join(", "))}</div>` : ""}</div>`,
     )
     .join("");
 }
@@ -196,7 +230,7 @@ function renderMessages() {
   if (!messages.length) { el.innerHTML = '<div class="empty">No agent-to-agent messages yet.</div>'; return; }
   el.innerHTML = messages
     .map(
-      (m) => `<div class="msg kind-${m.kind}"><div class="h">${esc(m.from)} → ${esc(m.to)} · ${m.kind}</div>
+      (m) => `<div class="msg kind-${esc(m.kind)}"><div class="h">${esc(m.from)} → ${esc(m.to)} · ${esc(m.kind)}</div>
         <div class="sub">${esc(m.subject)}</div></div>`,
     )
     .join("");
@@ -212,7 +246,13 @@ function renderUsage() {
     `<div class="utotal urow"><span>total</span><span>${(totals.inputTokens + totals.outputTokens).toLocaleString()} tok · ${totals.calls} calls</span></div>`;
 }
 
-function esc(s) { return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+// Escapes quotes as well as angle brackets: several of the call sites below interpolate into an
+// attribute (class="…"), where &lt;/&gt; alone would not stop an injected value from closing the
+// attribute and adding its own. This page's URL carries the god-token, so an injected script here
+// reads it out of location.search.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
 
 const authedFetch = (path, body) =>
   fetch(`${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`, {
@@ -441,7 +481,7 @@ document.querySelectorAll(".tabs button").forEach((b) =>
 
 // legend
 $("legend").innerHTML = Object.entries(KIND_COLORS)
-  .map(([k, c]) => `<span class="k"><i style="background:${c}"></i>${k}</span>`)
+  .map(([k, c]) => `<span class="k"><i style="background:${esc(c)}"></i>${esc(k)}</span>`)
   .join("");
 
 // ---------- boot ----------

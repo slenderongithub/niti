@@ -16,7 +16,7 @@ export type OrchestrationEvent =
   | { type: "replan"; taskId: string; role: string; action: "retry" | "redirect" | "inject" | "accept"; reason?: string; time: number }
   | { type: "review"; taskId: string; reviewer: string; phase: "requested" | "approved" | "changes_requested"; time: number }
   | { type: "integrate"; summary: string; time: number }
-  | { type: "complete"; completed: number; total: number; time: number };
+  | { type: "complete"; completed: number; total: number; cancelled?: boolean; time: number };
 
 export interface SchedulerDeps {
   bus?: Bus;
@@ -28,6 +28,7 @@ export interface SchedulerDeps {
   priorTurns?: (taskId: string) => Turn[]; // resume: stored conversation to seed a task's first attempt with
 }
 
+const DEP_CONTEXT_MAX = 4000; // per-prerequisite ceiling on inherited output (see depContext)
 const MAX_ATTEMPTS = 3; // same-agent retries (with backoff) before a task is marked failed
 const MAX_REPLAN_ATTEMPTS = 1; // recovery attempts asking the lead to replan a task before giving up on it
 const MAX_REVIEW_ROUNDS = 2; // review→revise cycles before a persistently-rejected task is marked failed
@@ -118,6 +119,14 @@ async function attemptReplan(
       tasks.push(nt);
       byId.set(nt.id, nt);
     }
+    // Re-emit the plan so both clients redraw the DAG with the new nodes. The TUI's existing
+    // `case "plan"` handles it as-is; without this the board silently omitted the injected work.
+    deps.onOrchestration?.({
+      type: "plan",
+      goal,
+      tasks: tasks.map((t) => ({ id: t.id, description: t.description, role: t.role, dependsOn: t.dependsOn })),
+      time: Date.now(),
+    });
   }
   return false; // "inject" and "accept" both leave the original task failed
 }
@@ -136,23 +145,25 @@ async function runReviewGate(t: TaskNode, prompt: string, runner: Agent, agentsB
 
   for (let round = 1; round <= MAX_REVIEW_ROUNDS; round++) {
     emit?.({ type: "review", taskId: t.id, reviewer: reviewer.config.id, phase: "requested", time: Date.now() });
-    const outcome = await reviewer.run(
+    const review = await reviewer.runDetailed(
       `Review the work for task ${t.id}: ${t.description}${t.acceptance ? `\nAcceptance: ${t.acceptance}` : ""}\n\n` +
         `Reported output:\n${t.output}\n\nInspect the actual changes (shell "git diff", read_file, diagnostics tools) as needed. ` +
         `End with exactly one line: "VERDICT: approve" or "VERDICT: changes_requested" followed by why.`,
       { taskId: t.id },
     );
-    const feedback = reviewer.output;
-    const approved = outcome === "done" && !/VERDICT:\s*changes_requested/i.test(feedback);
+    const feedback = review.text; // this run's text, not whatever the reviewer's own task loop last wrote
+    // Fail CLOSED: only an explicit approval approves. The old test was "not literally
+    // changes_requested", so a garbled, empty, or clobbered verdict passed the gate.
+    const approved = review.outcome === "done" && /VERDICT:\s*approve/i.test(feedback);
     messageBus?.post({ from: reviewer.config.id, to: t.assignedTo!, kind: "review", subject: `review of ${t.id}`, body: feedback, refs: [t.id] });
     emit?.({ type: "review", taskId: t.id, reviewer: reviewer.config.id, phase: approved ? "approved" : "changes_requested", time: Date.now() });
     if (approved) return undefined;
     if (round === MAX_REVIEW_ROUNDS) return feedback || "changes requested (no reviewer feedback given)";
 
     bus?.publish({ agentId: t.assignedTo!, type: "thought", payload: `revising ${t.id} after review feedback`, time: Date.now() });
-    const revised = await runner.run(`${prompt}\n\nA reviewer requested changes:\n${feedback}\n\nAddress this feedback.`, { taskId: t.id });
-    t.output = runner.output;
-    if (revised !== "done") return runner.error || "revision attempt failed";
+    const revised = await runner.runDetailed(`${prompt}\n\nA reviewer requested changes:\n${feedback}\n\nAddress this feedback.`, { taskId: t.id });
+    t.output = revised.text;
+    if (revised.outcome !== "done") return revised.error || "revision attempt failed";
   }
   return undefined; // unreachable — every loop path above returns
 }
@@ -182,6 +193,10 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
   const depFailed = (t: TaskNode) => t.dependsOn.some((d) => byId.get(d)?.status === "failed");
 
   const runTask = async (t: TaskNode): Promise<void> => {
+    // Per-task, as MAX_PER_PAIR's own comment always claimed. It was reset once for the whole
+    // plan, so a 6-task run shared one 10-message budget across every ask_agent, handoff and
+    // review — and once spent, later handoffs were dropped.
+    messageBus?.resetCaps();
     let runner = agentsById.get(t.role);
     if (!runner) {
       t.status = "failed";
@@ -197,26 +212,41 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     const depContext = t.dependsOn
       .map((id) => byId.get(id))
       .filter((d): d is TaskNode => Boolean(d?.output))
-      .map((d) => `--- Output from ${d.assignedTo} ("${d.description}") ---\n${d.output}`)
+      // Bounded: this concatenates every prerequisite's full output, so a diamond dependency on
+      // three verbose tasks could overflow the window before the agent had said anything.
+      // ponytail: flat per-dependency cap, not a token budget — upgrade if real plans hit it.
+      .map((d) => `--- Output from ${d.assignedTo} ("${d.description}") ---\n${(d.output ?? "").slice(0, DEP_CONTEXT_MAX)}`)
       .join("\n\n");
     const accept = t.acceptance ? `\n\nAcceptance criterion: ${t.acceptance}` : "";
     const prompt = `${t.description}${accept}${depContext ? `\n\nContext from completed prerequisites:\n${depContext}` : ""}`;
 
     // Seeded once, for the first attempt only: a retry's own turns are already in the store, so
     // re-reading them would replay the attempt that just failed back into the context window.
-    let outcome = await runner.run(prompt, { taskId: t.id, priorTurns: deps.priorTurns?.(t.id) });
+    let result = await runner.runDetailed(prompt, { taskId: t.id, priorTurns: deps.priorTurns?.(t.id) });
     // A retry is NEW work (a fresh billed model call), not the original call finishing — so it
     // must honor cancellation too, or "stop launching new work" is broken for exhausted tasks.
-    while (outcome === "exhausted" && (t.attempts ?? 0) < MAX_ATTEMPTS && !(deps.shouldStop?.() ?? false)) {
+    while (result.outcome === "exhausted" && (t.attempts ?? 0) < MAX_ATTEMPTS && !(deps.shouldStop?.() ?? false)) {
       t.attempts = (t.attempts ?? 0) + 1;
-      bus?.publish({ agentId: t.role, type: "failover", payload: `${t.role} exhausted — retry ${t.attempts}/${MAX_ATTEMPTS} of ${t.id}`, time: Date.now() });
+      // Actually fail over. The whole point of a multi-provider team is that Anthropic's 429
+      // doesn't stall the run — but this loop re-ran the *same* exhausted agent three times while
+      // publishing "failover", so an idle Gemini agent was never tried and the UI said otherwise.
+      const alt = agents.find((a) => a.config.id !== runner!.config.id && !running.has(a.config.id) && !a.config.lead);
+      if (alt) {
+        runner = alt;
+        t.role = alt.config.id;
+        t.assignedTo = alt.config.id;
+        bus?.publish({ agentId: alt.config.id, type: "failover", payload: `${t.id} failed over to ${alt.config.id} (attempt ${t.attempts}/${MAX_ATTEMPTS})`, time: Date.now() });
+      } else {
+        // No idle teammate — a same-agent retry is a retry, not a failover. Say so.
+        bus?.publish({ agentId: t.role, type: "warning", payload: `${t.role} exhausted — retry ${t.attempts}/${MAX_ATTEMPTS} of ${t.id}`, time: Date.now() });
+      }
       await sleep(Math.min(t.attempts * 500, 3000));
-      outcome = await runner.run(prompt, { taskId: t.id });
+      result = await runner.runDetailed(prompt, { taskId: t.id });
     }
 
-    t.output = runner.output;
-    t.status = outcome === "done" ? "done" : "failed";
-    let failureReason = outcome === "done" ? "" : runner.error;
+    t.output = result.text;
+    t.status = result.outcome === "done" ? "done" : "failed";
+    let failureReason = result.outcome === "done" ? "" : result.error;
 
     if (t.status === "done") {
       const rejection = await runReviewGate(t, prompt, runner, agentsById, deps);
@@ -238,10 +268,16 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     }
 
     if (t.status === "done" && t.handoffTo?.length && messageBus) {
+      // The result was discarded, so a handoff refused by the rate cap vanished — while the
+      // `handoff` event fired anyway and the dashboard animated an edge for a message nobody got.
+      // The downstream agent then started without its prerequisite's artifact and no one was told.
+      const delivered: string[] = [];
       for (const to of t.handoffTo) {
-        messageBus.post({ from: t.assignedTo!, to, kind: "artifact", subject: `output of ${t.id}: ${t.description.slice(0, 60)}`, body: t.output ?? "", refs: [t.id] });
+        const r = messageBus.post({ from: t.assignedTo!, to, kind: "artifact", subject: `output of ${t.id}: ${t.description.slice(0, 60)}`, body: t.output ?? "", refs: [t.id] });
+        if (r.ok) delivered.push(to);
+        else bus?.publish({ agentId: t.assignedTo!, type: "warning", payload: `handoff to ${to} not delivered: ${r.reason}`, time: Date.now() });
       }
-      emit?.({ type: "handoff", taskId: t.id, from: t.assignedTo!, to: t.handoffTo, time: Date.now() });
+      if (delivered.length) emit?.({ type: "handoff", taskId: t.id, from: t.assignedTo!, to: delivered, time: Date.now() });
     }
   };
 
@@ -272,11 +308,14 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
       }
 
     if (running.size === 0) {
-      // Nothing running and nothing startable. If pending tasks remain they're unreachable — fail them.
-      const stuck = tasks.filter((t) => t.status === "pending");
-      for (const t of stuck) {
-        t.status = "failed";
-        emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total: tasks.length, time: Date.now() });
+      // Nothing running and nothing startable. If pending tasks remain they're unreachable — fail
+      // them. But NOT on cancel: the user stopping a run has not made those tasks fail, and marking
+      // them failed is what made a cancelled run report every remaining task as an error.
+      if (!(deps.shouldStop?.() ?? false)) {
+        for (const t of tasks.filter((t) => t.status === "pending")) {
+          t.status = "failed";
+          emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total: tasks.length, time: Date.now() });
+        }
       }
       break;
     }
@@ -303,5 +342,13 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     }
   }
 
-  emit?.({ type: "complete", completed: settled(), total: tasks.length, time: Date.now() });
+  // completed = tasks that actually finished, not "everything that stopped moving" — settled()
+  // counts failures too, so a cancelled or half-failed run used to report 100%.
+  emit?.({
+    type: "complete",
+    completed: tasks.filter((t) => t.status === "done").length,
+    total: tasks.length,
+    cancelled: deps.shouldStop?.() ?? false,
+    time: Date.now(),
+  });
 }

@@ -239,7 +239,11 @@ func Overlay(base, box string, w, h int) string {
 		}
 		baseLines[row] = left + "\x1b[0m" + bl + gap.Render(strings.Repeat(" ", max(w-side-bw, 0)))
 	}
-	return strings.Join(baseLines, "\n")
+	out := strings.Join(baseLines, "\n")
+	// View() clamps itself to the terminal, but the overlay is composited *after* that clamp — so a
+	// popup wider than the terminal (any of them, below ~40 columns) pushed the frame sideways and
+	// wrapped it into garbage. Clamp again here, where the final string is actually assembled.
+	return lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(out)
 }
 
 // Truncate cuts to n display cells, counting runes (the UI is full of multibyte glyphs) and

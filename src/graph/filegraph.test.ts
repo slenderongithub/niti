@@ -46,3 +46,21 @@ test("resolves Go package imports via go.mod to a file in that package dir", () 
   // stdlib "fmt" is not a local package → no edge for it.
   expect(g.edges.length).toBe(1);
 });
+
+test("a nested go.mod resolves Go imports instead of leaving every file an island", () => {
+  // The walk collected only source files, so tui/go.mod was never seen and findGoModule could not
+  // map an import path to a directory — the whole Go TUI rendered as disconnected nodes.
+  const root = mkdtempSync(join(tmpdir(), "amux-graph-go-"));
+  mkdirSync(join(root, "tui", "internal", "api"), { recursive: true });
+  mkdirSync(join(root, "tui", "cmd", "amux"), { recursive: true });
+  writeFileSync(join(root, "tui", "go.mod"), "module github.com/example/tui\n\ngo 1.22\n");
+  writeFileSync(join(root, "tui", "internal", "api", "client.go"), "package api\n");
+  writeFileSync(
+    join(root, "tui", "cmd", "amux", "main.go"),
+    'package main\n\nimport "github.com/example/tui/internal/api"\n',
+  );
+
+  const g = buildFileGraph(root);
+  expect(g.nodes.some((n) => n.id.endsWith("go.mod"))).toBe(false); // walked, but not a node
+  expect(g.edges).toContainEqual({ from: "tui/cmd/amux/main.go", to: "tui/internal/api/client.go" });
+});

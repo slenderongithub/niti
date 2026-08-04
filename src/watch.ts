@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from "node:fs";
-import { sep } from "node:path";
+import { normalize, sep } from "node:path";
 
 // Watch the project for edits made outside amux (a human in their editor, a git checkout, a
 // formatter). Emits paths only — nothing is stuffed into any agent's context automatically, which
@@ -42,7 +42,10 @@ export function watchProject(root: string, onChange: (relPath: string) => void):
   return {
     markSelfWrite(relPath: string) {
       const now = Date.now();
-      selfWrites.set(relPath, now);
+      // Normalized on the way in, because the caller passes the model's own spelling of the path
+      // ("./src/a.ts", "src/../src/a.ts") while fs.watch reports a clean relative one. Any mismatch
+      // meant the agent's own write was announced back to it as an external change.
+      selfWrites.set(normalize(relPath), now);
       for (const [path, at] of selfWrites) if (now - at > SELF_WRITE_TTL_MS) selfWrites.delete(path); // bounded without a timer
     },
     close() {

@@ -15,12 +15,18 @@ export class OpenAIProvider implements Provider {
   private client: OpenAI;
   private lastRateLimit?: RateLimit; // captured at the fetch layer → works for streaming too
 
+  // Whether to send OpenAI's `stream_options`. True for api.openai.com and for hosted
+  // OpenAI-compatible vendors, false for the local runtimes, which are the strict ones about
+  // unknown parameters and the ones a user cannot simply switch away from.
+  private readonly supportsUsageOption: boolean;
+
   constructor(
     private model: string,
     apiKey?: string,
     baseURL?: string, // set for OpenAI-compatible providers (DeepSeek, Groq, OpenRouter, Ollama, …)
     headers?: Record<string, string>, // extra default headers (e.g. Copilot's editor headers)
   ) {
+    this.supportsUsageOption = !/localhost|127\.0\.0\.1|\[::1\]/.test(baseURL ?? "");
     const trackedFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
       const res = await fetch(url, init);
       this.lastRateLimit = parseRateLimit(res.headers, "openai");
@@ -89,7 +95,10 @@ export class OpenAIProvider implements Provider {
     const stream = await this.client.chat.completions.create({
       ...params,
       stream: true,
-      stream_options: { include_usage: true },
+      // An OpenAI extension, not part of the wire format everyone else implements. Strict local
+      // runtimes (llama.cpp servers, some vLLM builds) 400 on an unknown parameter, which turned
+      // "no token accounting" into "streaming does not work at all" for offline users.
+      ...(this.supportsUsageOption ? { stream_options: { include_usage: true } } : {}),
     });
     let text = "";
     let usage: ReturnType<typeof mapUsage>;

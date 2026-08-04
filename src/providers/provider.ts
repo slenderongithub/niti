@@ -15,7 +15,26 @@ export function summarizeError(err: unknown): string {
   } catch {
     // not JSON — use the message as-is
   }
-  return e?.status ? `${e.status}: ${msg}` : msg;
+  return scrubSecrets(e?.status ? `${e.status}: ${msg}` : msg);
+}
+
+// Provider errors quote the offending request surprisingly often — an echoed Authorization header,
+// a key in a query string, a bare sk-… in a message. This text is published to the event bus,
+// persisted to SQLite and rendered by every client, so redact before any of that happens.
+const SECRET_PATTERNS: RegExp[] = [
+  /\b(sk|pk|rk)-[A-Za-z0-9_-]{16,}/g, // OpenAI/Anthropic-style keys
+  /\bgh[pousr]_[A-Za-z0-9]{16,}/g, // GitHub tokens
+  /\bAIza[0-9A-Za-z_-]{20,}/g, // Google API keys
+  /(Bearer\s+)[A-Za-z0-9._~+/-]{16,}=*/gi,
+  /((?:api[-_]?key|access[-_]?token|authorization)["'\s:=]+)[A-Za-z0-9._~+/-]{16,}=*/gi,
+];
+
+export function scrubSecrets(text: string): string {
+  let out = text;
+  for (const re of SECRET_PATTERNS) {
+    out = out.replace(re, (m, prefix) => (prefix ? `${prefix}[redacted]` : "[redacted]"));
+  }
+  return out;
 }
 
 export interface ToolSpec {
