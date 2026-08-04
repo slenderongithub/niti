@@ -4,8 +4,8 @@
   "description": "A terminal CLI that runs multiple AI coding agents from different LLM providers concurrently on one project.",
   "type": "module",
   "bin": {
-    "amux": "./bin/amux.js",
-    "amux-core": "./bin/amux-core.js"
+    "amux": "bin/amux.js",
+    "amux-core": "bin/amux-core.js"
   },
   "files": [
     "bin/",
