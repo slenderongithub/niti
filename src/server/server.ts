@@ -373,10 +373,12 @@ export function startServer(
   };
 }
 
-// Where the dashboard's static files are. Three shapes have to work: a repo checkout, a compiled
+// Where the dashboard's static files are. Four shapes have to work: a repo checkout, a compiled
 // binary (import.meta.url points inside /$bunfs/, which contains no web/ — the whole dashboard
-// 404'd), and an npm install where the assets sit beside the executable. fileURLToPath rather than
-// URL.pathname because the latter stays percent-encoded, so any path with a space in it 404s too.
+// 404'd), an npm install where the assets sit beside the executable one level up (<pkg>/bin/niti-core
+// → <pkg>/web), and a locally compiled dev binary sitting at the repo root next to ./web directly.
+// fileURLToPath rather than URL.pathname because the latter stays percent-encoded, so any path with
+// a space in it 404s too.
 export function resolveWebDir(): string {
   const candidates: string[] = [];
   if (process.env.NITI_WEB_DIR) candidates.push(process.env.NITI_WEB_DIR);
@@ -386,6 +388,7 @@ export function resolveWebDir(): string {
     /* not a file: URL (compiled) — the execPath candidate below is the one that matters there */
   }
   candidates.push(join(dirname(process.execPath), "..", "web")); // <pkg>/bin/niti-core → <pkg>/web
+  candidates.push(join(dirname(process.execPath), "web")); // repo-root dev build: ./niti-core sits next to ./web
   return candidates.find(existsSync) ?? candidates[candidates.length - 1]!;
 }
 
