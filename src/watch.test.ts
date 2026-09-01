@@ -25,7 +25,7 @@ test("a change inside the project is reported", async () => {
   writeFileSync(join(root, "note.txt"), "hello");
   expect(await until(() => seen.includes("note.txt"))).toBe(true);
   w.close();
-});
+}, 8_000);
 
 test("noise directories never fire", async () => {
   const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
@@ -39,9 +39,14 @@ test("noise directories never fire", async () => {
   expect(await until(() => seen.includes("real.txt"))).toBe(true);
   expect(seen.some((p) => p.includes("node_modules"))).toBe(false);
   w.close();
-});
+}, 8_000);
 
 test("an agent's own write is not reported back as an external change", async () => {
+  // Two sequential real fs.watch round trips, each with an `until()` budget matching
+  // SELF_WRITE_TTL_MS — worst case that's close to bun's 5s default per-test timeout with zero
+  // headroom, which is what actually sent this test red on CI (not the suppression logic itself:
+  // it passes locally every time). Recursive fs.watch is slower to set up and deliver on CI's
+  // Linux runners than on a local dev machine, so give the full test room for both round trips.
   const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
   const seen: string[] = [];
   const w = watchProject(root, (p) => seen.push(p));
@@ -62,7 +67,7 @@ test("an agent's own write is not reported back as an external change", async ()
   expect(await until(() => seen.includes("after.txt"))).toBe(true);
   expect(seen).not.toContain("mine.txt");
   w.close();
-});
+}, 15_000);
 
 test("isIgnored matches on any path segment", () => {
   expect(isIgnored(".git/HEAD")).toBe(true);
