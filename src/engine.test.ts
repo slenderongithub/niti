@@ -335,3 +335,22 @@ test("a conflicted merge restores the tree and the worktree can be discarded", a
   // ...and a fresh worktree run is possible again, which the old wedge made impossible.
   expect(execFileSync("git", ["branch", "--list"], { cwd: repo, encoding: "utf8" })).not.toContain("niti/");
 });
+
+test("a makeProvider failure (e.g. missing key) doesn't crash Engine's constructor", async () => {
+  const single: AgentConfig[] = [{ id: "a", provider: "google", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: [] }];
+  const engine = new Engine({
+    configs: single,
+    makeProvider: () => {
+      throw new Error("no API key for 'google'. Run: niti-core auth login google (or export GEMINI_API_KEY)");
+    },
+    interactive: false,
+  });
+  const errors: string[] = [];
+  engine.bus.subscribe((e) => {
+    if (e.type === "error") errors.push(e.payload);
+  });
+
+  // The broken agent is still there — just fails clearly, per-agent, the moment it's asked to act.
+  await engine.submit("do something");
+  expect(errors.some((e) => e.includes("no API key for 'google'"))).toBe(true);
+});

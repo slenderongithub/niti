@@ -118,7 +118,18 @@ export class Engine {
     for (const c of opts.configs) {
       this.declaredPrompts.set(c.id, c.systemPrompt);
       const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + TOOL_GUIDANCE };
-      const agent = new Agent(cfg, this.makeProvider(cfg), this.bus, {
+      // A missing key (revoked, keychain wiped, never set) must not take the whole server down —
+      // that would crash boot before the handshake line prints, leaving the TUI staring at an EOF
+      // with no way back in short of editing agents.yaml by hand. Defer the failure to first use,
+      // same as switchModel already does; it surfaces through the normal per-agent error path below.
+      let provider: Provider;
+      try {
+        provider = this.makeProvider(cfg);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        provider = { send: async () => { throw new Error(message); } };
+      }
+      const agent = new Agent(cfg, provider, this.bus, {
         root: this.root,
         // Headless has no TTY to prompt on, but `approve: undefined` skipped the guard entirely —
         // so a scripted run was *more* permissive than --auto, with no flag typed. Now it answers
