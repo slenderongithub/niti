@@ -275,7 +275,15 @@ func (m Model) settStatsOverview(w int) []string {
 		{kvc("Active days", fmt.Sprintf("%d/%d", active, span)), kvc("Longest streak", fmt.Sprintf("%d days", longest))},
 		{kvc("Most active", mostActiveDay(s.PerDay)), kvc("Current streak", fmt.Sprintf("%d days", current))},
 	}
-	half := max(w/2, 20)
+	// The right column starts right after the widest left cell (+ a small gutter), not at w/2 — tying
+	// it to half the *terminal* width put it dozens of columns past the label text on a wide terminal.
+	half := 0
+	for _, r := range rows {
+		if cw := lipgloss.Width(r[0]); cw > half {
+			half = cw
+		}
+	}
+	half += 2
 	for _, r := range rows {
 		lines = append(lines, truncate(padVis(r[0], half)+r[1], w))
 	}

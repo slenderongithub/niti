@@ -1,9 +1,11 @@
 package session
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/niti/tui/internal/api"
 )
 
@@ -83,6 +85,34 @@ func TestActiveSpanAndMostActive(t *testing.T) {
 	}
 	if d := mostActiveDay(days); d != "Jul 30" {
 		t.Errorf("most active day = %q, want \"Jul 30\"", d)
+	}
+}
+
+// The stats overview's right column used to start at w/2 — half the *terminal* width — so on a wide
+// terminal it sat dozens of columns past the left column's actual text. It should instead track the
+// left column's content width and stay put regardless of how wide the terminal is.
+func TestStatsOverviewColumnGapIndependentOfWidth(t *testing.T) {
+	m := Model{agents: map[string]*agentState{}, mode: "build", status: "connected", root: "/tmp/x"}
+	m.sett = settings{statsLoaded: true, stats: api.Stats{
+		PerDay:   []api.StatsDay{{Date: "2026-07-28", Tokens: 5000, Msgs: 10}},
+		PerModel: []api.StatsModel{{Name: "google/gemini-2.5-pro", InTokens: 8000, OutTokens: 3000, Msgs: 12, Usd: 0.3, Priced: true}},
+		Sessions: 4, InTokens: 8000, OutTokens: 3000, LongestSessionMs: 100_000_000,
+	}}
+
+	gapAt := func(w int) int {
+		for _, line := range m.settStatsOverview(w) {
+			plain := ansi.Strip(line)
+			if i := strings.Index(plain, "Total tokens"); i >= 0 {
+				return i
+			}
+		}
+		t.Fatalf("\"Total tokens\" row not found at width %d", w)
+		return -1
+	}
+
+	narrow, wide := gapAt(80), gapAt(240)
+	if narrow != wide {
+		t.Errorf("right column start moved with terminal width: %d cols at w=80, %d cols at w=240 — should be identical", narrow, wide)
 	}
 }
 
