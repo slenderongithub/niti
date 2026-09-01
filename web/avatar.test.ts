@@ -20,7 +20,9 @@ test("body grid is square (12x12) and every row is well-formed", () => {
 
 test("six colors, one distinct face per color, in the requested order", () => {
   const { AVATAR_COLORS, AVATAR_FACES } = load();
-  expect(AVATAR_COLORS).toEqual(["#3b82f6", "#facc15", "#ef4444", "#a78bfa", "#4ade80", "#ec4899"]);
+  // No real DOM here, so themeColors() falls back to THEME_DEFAULTS — the same fallback values
+  // style.css itself defaults to before theme.js applies a fetched palette.
+  expect(AVATAR_COLORS).toEqual(["#60a5fa", "#fbbf24", "#f87171", "#a78bfa", "#4ade80", "#f472b6"]);
   expect(AVATAR_FACES).toHaveLength(6);
   const sigs = AVATAR_FACES.map((f: number[][]) => JSON.stringify(f));
   expect(new Set(sigs).size).toBe(6); // no two personalities drew the same face

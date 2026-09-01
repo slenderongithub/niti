@@ -34,6 +34,10 @@
     root.setProperty("--pink", p.pink);
     const dot = $("theme-dot");
     if (dot) dot.style.background = p.accent;
+    // CSS custom properties re-theme the DOM automatically, but canvas drawing (graph.js's force
+    // graph, app.js's dashboard graph, avatar.js's mascots) is imperative — it can't "just inherit"
+    // a var() the way CSS rules do. This is their one hook to re-read the vars and repaint.
+    document.dispatchEvent(new CustomEvent("niti-theme"));
   }
 
   // Set once boot() has the catalog — the SSE handler below needs it to resolve a theme name
@@ -108,10 +112,27 @@
     }
     if (!Array.isArray(palettes) || !palettes.length) return;
 
+    // Paint instantly from whatever this browser last saw, so there's no flash of the wrong theme
+    // while the request below is in flight — then correct it from the server's actual active theme
+    // (agents.yaml's `theme:`, or whatever /theme last set), the real source of truth every surface
+    // (TUI, this tab, any other open tab) is supposed to converge on. Without this second step, a
+    // browser that has never opened this page before always fell back to palettes[0] and stayed
+    // there — the dashboard/graph looked stuck in a fixed theme no matter what the TUI was set to.
     const saved = localStorage.getItem(STORAGE_KEY);
-    const initial = palettes.find((p) => p.name === saved) || palettes[0];
-    applyPalette(initial);
-    renderMenu(initial.name);
+    const guess = palettes.find((p) => p.name === saved) || palettes[0];
+    applyPalette(guess);
+    renderMenu(guess.name);
+    try {
+      const s = await fetch(`/session?token=${encodeURIComponent(TOKEN)}`, { method: "POST" }).then((r) => r.json());
+      const active = palettes.find((p) => p.name === s.theme);
+      if (active && active.name !== guess.name) {
+        applyPalette(active);
+        localStorage.setItem(STORAGE_KEY, active.name);
+        renderMenu(active.name);
+      }
+    } catch {
+      /* offline/unreachable — the local guess above stands */
+    }
     watchLiveChanges();
 
     const btn = $("theme-btn");

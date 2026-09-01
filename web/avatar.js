@@ -8,7 +8,41 @@
 // AVATAR_COLORS and drawPixelAvatar are deliberately real globals, not IIFE-hidden, since both
 // app.js and graph.js call them directly.
 
-const AVATAR_COLORS = ["#3b82f6", "#facc15", "#ef4444", "#a78bfa", "#4ade80", "#ec4899"]; // blue, yellow, red, purple, green, pink
+// Reads the theme's CSS custom properties (set by theme.js, from tui/internal/theme/palettes.json —
+// the same file the Go TUI embeds) so canvas fills match whatever theme the TUI has active, instead
+// of a fixed palette baked in here. Lives in this file rather than theme.js because avatar.js is the
+// one both app.js and graph.js already load first and call into directly.
+const THEME_DEFAULTS = {
+  ink: "#e7e9f2", muted: "#8b90a6", violet: "#a78bfa", green: "#4ade80",
+  red: "#f87171", amber: "#fbbf24", blue: "#60a5fa", pink: "#f472b6",
+};
+function themeColors() {
+  // No real DOM (unit tests, or any other non-browser load) — fall back rather than throw.
+  if (typeof getComputedStyle !== "function") return THEME_DEFAULTS;
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name, fallback) => cs.getPropertyValue(name).trim() || fallback;
+  return {
+    ink: v("--ink", THEME_DEFAULTS.ink), muted: v("--muted", THEME_DEFAULTS.muted),
+    violet: v("--violet", THEME_DEFAULTS.violet), green: v("--green", THEME_DEFAULTS.green), red: v("--red", THEME_DEFAULTS.red),
+    amber: v("--amber", THEME_DEFAULTS.amber), blue: v("--blue", THEME_DEFAULTS.blue), pink: v("--pink", THEME_DEFAULTS.pink),
+  };
+}
+// For building rgba(r,g,b,alpha) strings from a theme hex color (canvas glow/highlight fills).
+function hexToRgbTriplet(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  return m ? [1, 2, 3].map((i) => parseInt(m[i], 16)).join(",") : "167,139,250";
+}
+
+let AVATAR_COLORS = ["#3b82f6", "#facc15", "#ef4444", "#a78bfa", "#4ade80", "#ec4899"]; // blue, yellow, red, purple, green, pink
+// Slot order matches AVATAR_FACES' comments (blue/yellow/red/purple/green/pink) so each face design
+// keeps reading against the theme color it was drawn for.
+function refreshAvatarColors() {
+  const t = themeColors();
+  AVATAR_COLORS = [t.blue, t.amber, t.red, t.violet, t.green, t.pink];
+}
+refreshAvatarColors();
+if (typeof document !== "undefined") document.addEventListener("niti-theme", refreshAvatarColors);
+
 const AVATAR_INK = "#0d0f16";
 const AVATAR_GRID = 12;
 

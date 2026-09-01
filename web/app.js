@@ -4,15 +4,15 @@
 
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get("token") || "";
-const KIND_COLORS = {
-  question: "#fbbf24",
-  answer: "#4ade80",
-  handoff: "#60a5fa",
-  artifact: "#60a5fa",
-  review: "#f472b6",
-  broadcast: "#a78bfa",
-};
-const STATUS_FILL = { idle: "#3a3f52", working: "#60a5fa", done: "#4ade80", failed: "#f87171" };
+// Theme-derived (avatar.js's themeColors(), loaded first) — see graph.js's identical setup for why.
+let KIND_COLORS, STATUS_FILL, INK, MUTED, ACCENT;
+function refreshAppTheme() {
+  const t = themeColors();
+  KIND_COLORS = { question: t.amber, answer: t.green, handoff: t.blue, artifact: t.blue, review: t.pink, broadcast: t.violet };
+  STATUS_FILL = { idle: t.muted, working: t.blue, done: t.green, failed: t.red };
+  INK = t.ink; MUTED = t.muted; ACCENT = t.violet;
+}
+refreshAppTheme();
 const PULSE_MS = 2200;
 const AVATAR_R = 20; // every agent's pixel avatar is this size, no exceptions — lead is a ring around it, not a bigger sprite
 
@@ -435,7 +435,7 @@ function draw() {
     const a = nodes.get(p.from), b = nodes.get(p.to);
     if (!a || !b) continue;
     const t = (now - p.born) / PULSE_MS;
-    const col = KIND_COLORS[p.kind] || "#a78bfa";
+    const col = KIND_COLORS[p.kind] || ACCENT;
     ctx.strokeStyle = col; ctx.globalAlpha = 0.5 * (1 - t); ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(px(a), py(a)); ctx.lineTo(px(b), py(b)); ctx.stroke();
     // moving dot
@@ -454,17 +454,17 @@ function draw() {
       ctx.beginPath(); ctx.arc(x, y, r + 4 + t * 8, 0, Math.PI * 2); ctx.globalAlpha = 1 - t; ctx.stroke(); ctx.globalAlpha = 1;
     }
     drawPixelAvatar(ctx, x, y, r * 2, n.colorIndex);
-    if (n.lead) { ctx.strokeStyle = "#a78bfa"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 5, 0, Math.PI * 2); ctx.stroke(); }
+    if (n.lead) { ctx.strokeStyle = ACCENT; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 5, 0, Math.PI * 2); ctx.stroke(); }
     // Status now lives outside the sprite (its fill/face are identity, not status) — a small dot
     // at the shoulder, same colors the legend already uses.
-    ctx.fillStyle = STATUS_FILL[n.status] || "#3a3f52";
+    ctx.fillStyle = STATUS_FILL[n.status] || STATUS_FILL.idle;
     ctx.beginPath(); ctx.arc(x + r * 0.72, y - r * 0.72, 5, 0, Math.PI * 2); ctx.fill();
     ctx.textAlign = "center"; ctx.textBaseline = "top";
-    ctx.fillStyle = "#e7e9f2"; ctx.font = "bold 10px ui-monospace, monospace";
+    ctx.fillStyle = INK; ctx.font = "bold 10px ui-monospace, monospace";
     ctx.fillText(n.id.slice(0, 3).toUpperCase(), x, y + r + 4);
-    ctx.fillStyle = "#e7e9f2"; ctx.font = "11px ui-monospace, monospace";
+    ctx.fillStyle = INK; ctx.font = "11px ui-monospace, monospace";
     ctx.fillText(n.role.slice(0, 18), x, y + r + 16);
-    if (n.tokens) { ctx.fillStyle = "#8b90a6"; ctx.fillText(n.tokens.toLocaleString() + " tok", x, y + r + 30); }
+    if (n.tokens) { ctx.fillStyle = MUTED; ctx.fillText(n.tokens.toLocaleString() + " tok", x, y + r + 30); }
   }
   requestAnimationFrame(draw);
 }
@@ -480,9 +480,21 @@ document.querySelectorAll(".tabs button").forEach((b) =>
 );
 
 // legend
-$("legend").innerHTML = Object.entries(KIND_COLORS)
-  .map(([k, c]) => `<span class="k"><i style="background:${esc(c)}"></i>${esc(k)}</span>`)
-  .join("");
+function renderLegend() {
+  $("legend").innerHTML = Object.entries(KIND_COLORS)
+    .map(([k, c]) => `<span class="k"><i style="background:${esc(c)}"></i>${esc(k)}</span>`)
+    .join("");
+}
+renderLegend();
+
+// A theme switch (dropdown, TUI ctrl+t, another tab) re-reads the CSS vars and repaints — draw()
+// already reads KIND_COLORS/STATUS_FILL fresh every frame, so refreshing them here is enough for the
+// live graph; the legend and avatar mascots need an explicit rebuild.
+document.addEventListener("niti-theme", () => {
+  refreshAppTheme();
+  refreshAvatarColors();
+  renderLegend();
+});
 
 // ---------- boot ----------
 async function boot() {

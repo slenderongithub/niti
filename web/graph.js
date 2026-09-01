@@ -7,9 +7,18 @@
 const TOKEN = new URLSearchParams(location.search).get("token") || "";
 const q = (id) => document.getElementById(id);
 
-const PALETTE = ["#a78bfa", "#60a5fa", "#4ade80", "#fbbf24", "#f472b6", "#22d3ee", "#fb923c", "#a3e635", "#e879f9", "#2dd4bf", "#f87171", "#818cf8"];
-const STATUS_FILL = { idle: "#5b6178", working: "#60a5fa", done: "#4ade80", failed: "#f87171" };
-const KIND_COLORS = { question: "#fbbf24", answer: "#4ade80", handoff: "#60a5fa", artifact: "#60a5fa", review: "#f472b6", broadcast: "#a78bfa" };
+// Theme-derived (avatar.js's themeColors()/hexToRgbTriplet(), loaded first) so this canvas matches
+// whatever theme the TUI/dashboard has active instead of a fixed palette. `let`, not `const` —
+// refreshGraphTheme() reassigns these on the "niti-theme" event (see boot, bottom of file).
+let PALETTE, STATUS_FILL, KIND_COLORS, ACCENT, ACCENT_RGB, INK, MUTED;
+function refreshGraphTheme() {
+  const t = themeColors();
+  PALETTE = [t.violet, t.blue, t.green, t.amber, t.pink, t.red];
+  STATUS_FILL = { idle: t.muted, working: t.blue, done: t.green, failed: t.red };
+  KIND_COLORS = { question: t.amber, answer: t.green, handoff: t.blue, artifact: t.blue, review: t.pink, broadcast: t.violet };
+  ACCENT = t.violet; ACCENT_RGB = hexToRgbTriplet(t.violet); INK = t.ink; MUTED = t.muted;
+}
+refreshGraphTheme();
 
 // ---------- model ----------
 let mode = "project"; // "project" | "models"
@@ -112,7 +121,7 @@ function onEvent(e) {
   if (e.kind === "agent_message" && e.message) {
     const m = e.message; ensureM(m.from); if (m.to !== "*") ensureM(m.to);
     const targets = m.to === "*" ? [...mnodes.keys()].filter((k) => k !== m.from) : [m.to];
-    for (const t of targets) { addEdge(m.from, t); pulses.push({ a: m.from, b: t, color: KIND_COLORS[m.kind] || "#a78bfa", born: performance.now() }); }
+    for (const t of targets) { addEdge(m.from, t); pulses.push({ a: m.from, b: t, color: KIND_COLORS[m.kind] || ACCENT, born: performance.now() }); }
     syncModels();
   } else if (e.kind === "orchestration") {
     const ev = e.event;
@@ -392,7 +401,7 @@ function render() {
   ctx.strokeStyle = "rgba(130,140,170,0.22)"; ctx.stroke(pn);
   ctx.lineWidth = (1 + 0.6 * dimAmt) / cam.k;
   ctx.strokeStyle = `rgba(${mix(130, 167)},${mix(140, 139)},${mix(170, 250)},${0.22 + 0.33 * dimAmt})`; ctx.stroke(pf);
-  ctx.fillStyle = "rgba(167,139,250,0.5)"; ctx.fill(pa);
+  ctx.fillStyle = `rgba(${ACCENT_RGB},0.5)`; ctx.fill(pa);
 
   // message pulses (models mode) — keyed by id, since indices shift on every live rebuild
   const now = performance.now();
@@ -416,18 +425,18 @@ function render() {
     ctx.globalAlpha = alpha;
     if (i === hover || i === selected || hits.has(i)) {
       ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 4 / cam.k, 0, 7);
-      ctx.fillStyle = "rgba(167,139,250,0.20)"; ctx.fill();
+      ctx.fillStyle = `rgba(${ACCENT_RGB},0.20)`; ctx.fill();
     }
     if (mode === "models") {
       // Agent identity is the pixel avatar's color/face now, not a plain fill — no border, per the
       // mascot reference art. Status moves to a small dot instead of the old fill color.
       drawPixelAvatar(ctx, n.x, n.y, n.r * 2, n.colorIndex);
-      if (n.lead) { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = "#a78bfa"; ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 5 / cam.k, 0, 7); ctx.stroke(); }
+      if (n.lead) { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = ACCENT; ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 5 / cam.k, 0, 7); ctx.stroke(); }
       ctx.fillStyle = STATUS_FILL[n.status] || STATUS_FILL.idle;
       ctx.beginPath(); ctx.arc(n.x + n.r * 0.7, n.y - n.r * 0.7, 4 / cam.k, 0, 7); ctx.fill();
     } else {
       ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7);
-      ctx.fillStyle = n.color || "#7c8299"; ctx.fill();
+      ctx.fillStyle = n.color || MUTED; ctx.fill();
       if (n.lead) { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = "#fff"; ctx.stroke(); }
       else if (n.pinned) { ctx.lineWidth = 1 / cam.k; ctx.strokeStyle = "rgba(231,233,242,0.45)"; ctx.stroke(); }
     }
@@ -460,7 +469,7 @@ function render() {
       boxes.push(b);
       ctx.globalAlpha = a;
       ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillText(n.label, n.x + 0.6 / cam.k, n.y + n.r + 2.6 / cam.k);
-      ctx.fillStyle = "#cfd3e6"; ctx.fillText(n.label, n.x, n.y + n.r + 2 / cam.k);
+      ctx.fillStyle = INK; ctx.fillText(n.label, n.x, n.y + n.r + 2 / cam.k);
     }
   }
   ctx.globalAlpha = 1;
@@ -493,11 +502,11 @@ const miniToWorld = (m, sx, sy) => ({ x: m.a + (sx - m.x - m.pad) / m.sc, y: m.b
 function drawMinimap() {
   const m = miniRect(); if (!m) return;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.fillStyle = "rgba(13,15,22,0.7)"; ctx.strokeStyle = overMini ? "rgba(167,139,250,0.55)" : "rgba(38,43,61,1)";
+  ctx.fillStyle = "rgba(13,15,22,0.7)"; ctx.strokeStyle = overMini ? `rgba(${ACCENT_RGB},0.55)` : "rgba(38,43,61,1)";
   roundRect(m.x, m.y, m.w, m.h, 8); ctx.fill(); ctx.stroke();
   ctx.globalAlpha = 0.5;
   for (const n of nodes) {
-    ctx.fillStyle = n.color || "#7c8299";
+    ctx.fillStyle = n.color || MUTED;
     ctx.fillRect(m.x + m.pad + (n.x - m.a) * m.sc - 0.7, m.y + m.pad + (n.y - m.b) * m.sc - 0.7, 1.6, 1.6);
   }
   ctx.globalAlpha = 1;
@@ -507,8 +516,8 @@ function drawMinimap() {
   const vx = m.x + m.pad + (tl.x - m.a) * m.sc, vy = m.y + m.pad + (tl.y - m.b) * m.sc;
   ctx.save();
   roundRect(m.x, m.y, m.w, m.h, 8); ctx.clip();
-  ctx.fillStyle = "rgba(167,139,250,0.10)"; ctx.fillRect(vx, vy, (br.x - tl.x) * m.sc, (br.y - tl.y) * m.sc);
-  ctx.strokeStyle = "rgba(167,139,250,0.8)"; ctx.lineWidth = 1; ctx.strokeRect(vx, vy, (br.x - tl.x) * m.sc, (br.y - tl.y) * m.sc);
+  ctx.fillStyle = `rgba(${ACCENT_RGB},0.10)`; ctx.fillRect(vx, vy, (br.x - tl.x) * m.sc, (br.y - tl.y) * m.sc);
+  ctx.strokeStyle = `rgba(${ACCENT_RGB},0.8)`; ctx.lineWidth = 1; ctx.strokeRect(vx, vy, (br.x - tl.x) * m.sc, (br.y - tl.y) * m.sc);
   ctx.restore();
 }
 function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
@@ -733,6 +742,24 @@ function setConn(text, cls) { const c = q("conn"); c.textContent = text; c.class
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
+
+// A theme switch (this page's own dropdown, the TUI's ctrl+t, or another open tab) re-reads the CSS
+// vars and re-derives every color, then repaints in place — group/status colors were assigned once
+// at load time onto each node, so they need reassigning, not just a redraw.
+function recolorTheme() {
+  refreshGraphTheme();
+  refreshAvatarColors();
+  if (mode === "project") {
+    const gi = new Map(); let gc = 0;
+    for (const n of nodes) { if (!gi.has(n.group)) gi.set(n.group, PALETTE[gc++ % PALETTE.length]); n.color = gi.get(n.group); }
+    buildLegend([...gi.entries()].map(([g, c]) => ({ label: g, color: c })), "directories");
+  } else {
+    syncModels();
+    buildLegend(Object.entries(STATUS_FILL).map(([k, c]) => ({ label: k, color: c })), "agent status");
+  }
+  render(); // still() can skip idle frames in project mode — repaint now, don't wait for motion
+}
+document.addEventListener("niti-theme", recolorTheme);
 
 // ---------- boot ----------
 resize();

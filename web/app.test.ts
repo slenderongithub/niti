@@ -35,10 +35,14 @@ function load() {
     EventSource: class { onopen: any; onerror: any; onmessage: any },
     document: doc, location: { search: "?token=t" }, performance,
   };
+  // app.js calls into avatar.js's globals (drawPixelAvatar, themeColors, refreshAvatarColors) the
+  // same way it does in the browser, where avatar.js loads first as its own <script> tag — so it has
+  // to be concatenated ahead of app.js here too, not just its own separate module.
+  const avatarSrc = readFileSync(new URL("./avatar.js", import.meta.url), "utf8");
   const src = readFileSync(new URL("./app.js", import.meta.url), "utf8");
   const exported = new Function(
     "window", "document", "location", "requestAnimationFrame", "fetch", "EventSource", "performance", "URLSearchParams",
-    `${src}\nreturn { handle, onAgentEvent, ensureNode, nodes, renderApproval, answerApproval, onOrch,
+    `${avatarSrc}\n${src}\nreturn { handle, onAgentEvent, ensureNode, nodes, renderApproval, answerApproval, onOrch,
        openAgentPanel, sendAgentMessage, esc,
        getPending: () => pendingApprovals, getRunning: () => running, setPromptEnabled };`,
   )(win, doc, win.location, win.requestAnimationFrame, win.fetch, win.EventSource, performance, URLSearchParams);

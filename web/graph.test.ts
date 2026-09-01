@@ -19,9 +19,13 @@ function load() {
     fetch: () => Promise.reject(new Error("offline")), EventSource: class {},
     document: doc, location: { search: "" }, performance,
   };
+  // graph.js calls into avatar.js's globals (drawPixelAvatar, themeColors, refreshAvatarColors) the
+  // same way it does in the browser, where avatar.js loads first as its own <script> tag — so it has
+  // to be concatenated ahead of graph.js here too, not just its own separate module.
+  const avatarSrc = readFileSync(new URL("./avatar.js", import.meta.url), "utf8");
   const src = readFileSync(new URL("./graph.js", import.meta.url), "utf8");
   return new Function("window", "document", "location", "requestAnimationFrame", "fetch", "EventSource", "performance", "URLSearchParams",
-    `${src}\nreturn { tick, fit, setGraph, sim, cam, free: () => free, nodes: () => nodes,
+    `${avatarSrc}\n${src}\nreturn { tick, fit, setGraph, sim, cam, free: () => free, nodes: () => nodes,
        glideStep, miniRect, inMini, miniToWorld, centreOn, setGlide: (g) => { glide = g; }, getGlide: () => glide,
        setMode: (m) => { mode = m; }, realSetMode: setMode, onEvent, ensureM, mnodes };`,
   )(win, doc, win.location, win.requestAnimationFrame, win.fetch, win.EventSource, performance, URLSearchParams);

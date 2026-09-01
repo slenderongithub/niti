@@ -7,7 +7,7 @@ const PALETTES = [
 ];
 
 // theme.js is a plain browser script — same stub-DOM technique as app.test.ts/graph.test.ts.
-function load(opts: { fetchOk?: boolean; savedName?: string } = {}) {
+function load(opts: { fetchOk?: boolean; savedName?: string; serverTheme?: string } = {}) {
   const elements = new Map<string, any>();
   const el = (id: string) => {
     if (!elements.has(id)) {
@@ -42,6 +42,7 @@ function load(opts: { fetchOk?: boolean; savedName?: string } = {}) {
     getElementById: el,
     documentElement,
     addEventListener: (type: string, fn: (e: any) => void) => (docListeners[type] ??= []).push(fn),
+    dispatchEvent: (e: any) => (docListeners[e.type] || []).forEach((fn) => fn(e)),
     dispatchDocClick: (target: any) => (docListeners["click"] || []).forEach((fn) => fn({ target })),
   };
   const storage = new Map<string, string>();
@@ -60,7 +61,11 @@ function load(opts: { fetchOk?: boolean; savedName?: string } = {}) {
     static instances: StubEventSource[] = [];
   }
   const win = {
-    fetch: () => (opts.fetchOk === false ? Promise.reject(new Error("offline")) : Promise.resolve({ json: async () => PALETTES })),
+    fetch: (path: string) => {
+      if (opts.fetchOk === false) return Promise.reject(new Error("offline"));
+      if (path.startsWith("/session")) return Promise.resolve({ json: async () => ({ theme: opts.serverTheme }) });
+      return Promise.resolve({ json: async () => PALETTES });
+    },
     document: doc, location: { search: "?token=t" }, localStorage,
     EventSource: StubEventSource,
   };
@@ -86,6 +91,18 @@ test("a saved choice in localStorage wins over the default", async () => {
   const g = load({ savedName: "hazard tape" });
   await settled();
   expect(g.rootStyle["--bg"]).toBe("#0d0d0d");
+  expect(g.elFor("theme-menu").innerHTML).toContain("hazard tape ✓");
+});
+
+// Regression: a browser that has never opened this page before (no localStorage entry) used to
+// always land on palettes[0] and stay there, no matter what theme the TUI/server actually had
+// active — the dashboard/graph looked "stuck" in a fixed theme. boot() must correct itself from the
+// server's real current theme once that request resolves.
+test("boot reconciles to the server's active theme when there's no local preference", async () => {
+  const g = load({ serverTheme: "hazard tape" });
+  await settled();
+  expect(g.rootStyle["--bg"]).toBe("#0d0d0d");
+  expect(g.storage.get("niti-theme")).toBe("hazard tape");
   expect(g.elFor("theme-menu").innerHTML).toContain("hazard tape ✓");
 });
 
