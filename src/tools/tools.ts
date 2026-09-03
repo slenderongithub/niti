@@ -1,5 +1,5 @@
-import { resolve, sep } from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve, sep } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import type { ToolSpec, ToolCall as ProviderCall } from "../providers/provider.ts";
 
@@ -118,9 +118,16 @@ export async function runTool(
   switch (call.tool) {
     case "read_file":
       return await readCapped(safePath(root, call.path), call.path);
-    case "write_file":
-      await writeFile(safePath(root, call.path), call.content);
+    case "write_file": {
+      const abs = safePath(root, call.path);
+      // Create the parent directories. Without this every `write_file src/api/routes.ts` into a
+      // directory that doesn't exist yet failed with a bare ENOENT — which is most of what an
+      // agent building something new does. The path is already jailed by safePath, so the
+      // directories created are inside the project root by construction.
+      await mkdir(dirname(abs), { recursive: true });
+      await writeFile(abs, call.content);
       return `wrote ${call.path}`;
+    }
     case "edit": {
       const abs = safePath(root, call.path);
       const before = await readFile(abs, "utf8");
@@ -217,9 +224,12 @@ const SPECS: Record<string, ToolSpec> = {
 export const TOOL_GUIDANCE = `
 
 Working habits:
+- The project you are in is the whole job. Every tool call should move your assigned task forward, not survey what is around it — and never look outside the project (no '..', no absolute paths elsewhere on the machine).
+- Skip 'ls'/'pwd'/'cat package.json'-style exploration unless you actually need what it would tell you. A task that is just creating new files needs none of it; go write the files.
 - Read before you write, and prefer 'edit' (exact snippet replacement) over 'write_file' for changes to an existing file — a blind overwrite loses work you didn't know was there.
-- Use 'shell' for git: 'git status', 'git diff', 'git log --oneline -20' tell you what has changed and what state the tree is in. Do that before large edits.
+- 'git status'/'git diff'/'git log' are worth running when there is real history to check before you touch it. They are not a ritual for every task — skip them when you are only adding new files.
 - If 'diagnostics' is available, run it on files you edited before declaring the work done.
+- Your tool calls are capped. Spend them on reads and writes that move the task, not on open-ended exploration — running out mid-task means the work is left unfinished.
 - Use 'spawn_fork' for a self-contained sub-goal whose details don't belong in this conversation.`;
 
 export function toolSpecs(allowed: string[]): ToolSpec[] {

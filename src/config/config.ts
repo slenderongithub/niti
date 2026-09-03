@@ -173,6 +173,16 @@ export function setTheme(theme: string, path = ".niti/agents.yaml"): void {
   writeFileSync(path, doc.toString());
 }
 
+// Persist the approval mode back to .niti/agents.yaml (written by the team picker's setup question
+// and by /auto | /manual) so the choice survives a restart. Same read-merge-write shape as
+// setTheme — only the `auto` key is touched, every comment and hand-written block around it stays.
+export function setAuto(on: boolean, path = ".niti/agents.yaml"): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const doc = existsSync(path) ? parseDocument(readFileSync(path, "utf8")) : parseDocument("{}");
+  doc.set("auto", on);
+  writeFileSync(path, doc.toString());
+}
+
 function validate(a: unknown, i: number, path: string): AgentConfig {
   const rec = (a ?? {}) as Record<string, unknown>;
   const str = (k: string): string => {

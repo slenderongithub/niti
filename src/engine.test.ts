@@ -354,3 +354,45 @@ test("a makeProvider failure (e.g. missing key) doesn't crash Engine's construct
   await engine.submit("do something");
   expect(errors.some((e) => e.includes("no API key for 'google'"))).toBe(true);
 });
+
+test("/auto and /manual flip approval mode live, without restarting the team", async () => {
+  const asked: string[] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(): Promise<ProviderReply> {
+      n++;
+      // Two mutating shell calls: one under manual, one after switching to auto.
+      if (n === 1 || n === 3) return { text: "", toolCalls: [{ id: `${n}`, name: "shell", input: { command: "npm", args: ["install"] } }] };
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  const configs: AgentConfig[] = [
+    { id: "a", provider: "anthropic", model: "m", role: "R", systemPrompt: "s", lead: true, allowedTools: ["shell"] },
+  ];
+  const engine = new Engine({
+    configs,
+    makeProvider: () => stub,
+    interactive: true,
+    root: mkdtempSync(join(tmpdir(), "niti-auto-")),
+  });
+  // The queue is answered automatically; we only care how often it was consulted.
+  engine.approvals.onChange(() => {
+    const req = engine.approvals.current();
+    if (req) {
+      asked.push(req.tool);
+      engine.approvals.answer(true);
+    }
+  });
+
+  expect(engine.auto).toBe(false); // manual is the default
+  await engine.agents[0]!.run("install things");
+  expect(asked).toHaveLength(1); // manual: the write-ish shell call asked
+
+  engine.setAuto(true);
+  expect(engine.auto).toBe(true);
+  await engine.agents[0]!.run("install things again");
+  expect(asked).toHaveLength(1); // auto: same call, no new prompt
+
+  engine.setAuto(false);
+  expect(engine.auto).toBe(false); // and back, still live
+});

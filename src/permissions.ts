@@ -29,6 +29,38 @@ export const DEFAULT_RULES: PermissionRules = {
 // project `deny` still wins, and dangerous shell commands still force a prompt (see agent.ts).
 export const AUTO_RULES: PermissionRules = { "*": { "*": "allow" } };
 
+// Read-only shell commands common enough, and harmless enough, that prompting for every one of them
+// is friction rather than protection. Without this the very first thing a fresh team does — `ls`,
+// `git status`, `cat package.json` — costs a dialog each, which is what made the tool feel broken
+// before anything had even been written.
+//
+// Consulted BELOW everything the user configured (see agent.ts), so an explicit `permissions:` block
+// — allow, ask, or deny — always wins; this only fills the silence when nobody said anything. It is
+// also not trusted for a command that reaches outside the project: `leavesProjectRoot` in agent.ts
+// force-asks those, because `shell` pins cwd to the root but does not jail arguments, and "let ls
+// stop nagging" must not quietly become "let cat read your home directory".
+export const SAFE_SHELL_RULES: PermissionRules = {
+  shell: {
+    "git status*": "allow",
+    "git diff*": "allow",
+    "git log*": "allow",
+    "git branch*": "allow",
+    "git show*": "allow",
+    "ls*": "allow",
+    "pwd*": "allow",
+    "cat *": "allow",
+    "head *": "allow",
+    "tail *": "allow",
+    "wc *": "allow",
+    "echo *": "allow",
+    "grep *": "allow",
+    "rg *": "allow",
+    // `find` earns its place (agents reach for it constantly) but `find -delete`/`-exec` is caught
+    // by isDangerousShellCall, which force-asks regardless of anything decided here.
+    "find *": "allow",
+  },
+};
+
 const STRICTNESS: Record<Decision, number> = { allow: 0, ask: 1, deny: 2 };
 
 // What a pattern is matched against: the whole command line for shell, the file path otherwise.

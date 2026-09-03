@@ -24,6 +24,10 @@ const TARGETS = [
 const WEB_FILES = ["index.html", "graph.html", "app.js", "graph.js", "style.css", "theme.js", "avatar.js"];
 
 const pkg = await Bun.file("package.json").json();
+// Deliberately not pkg.name: pkg.name is the scoped root wrapper (`@slenderbuilds/niti`), but the
+// platform packages are unscoped (`niti-darwin-arm64`, …), published before the scope existed —
+// see bin/resolve.js's PLATFORM_BASE for the matching constant on the consuming side.
+const PLATFORM_BASE = "niti";
 const only = process.argv.slice(2);
 const targets = only.length ? TARGETS.filter((t) => only.includes(t.platform)) : TARGETS;
 if (!targets.length) {
@@ -58,9 +62,9 @@ for (const t of targets) {
     join(out, "package.json"),
     JSON.stringify(
       {
-        name: `${pkg.name}-${t.platform}`,
+        name: `${PLATFORM_BASE}-${t.platform}`,
         version: pkg.version,
-        description: `${pkg.name} binaries for ${t.platform}`,
+        description: `${PLATFORM_BASE} binaries for ${t.platform}`,
         license: pkg.license,
         repository: pkg.repository,
         // npm skips a package whose os/cpu don't match, which is what makes five

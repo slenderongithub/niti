@@ -10,12 +10,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/niti/tui/internal/api"
-	"github.com/niti/tui/internal/theme"
-	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 )
 
 const MaxAgents = 6 // matches web/avatar.js's 6 pixel-avatar colors (blue/yellow/red/purple/green/pink) — a 7th teammate would just wrap and reuse blue
@@ -46,9 +46,13 @@ type Picker struct {
 	pendModel string
 	pendRole  string
 	roles     []api.AgentConfig
-	usedIDs   map[string]bool
-	existing  []api.AgentConfig // the roster already in agents.yaml, offered as "keep this"
-	Completed bool
+	// Approval mode chosen on the final setup question. Zero value = manual, so a setup that is
+	// escaped out of, or any older code path that never reaches the question, keeps today's
+	// ask-before-everything behaviour.
+	autoApprove bool
+	usedIDs     map[string]bool
+	existing    []api.AgentConfig // the roster already in agents.yaml, offered as "keep this"
+	Completed   bool
 	// Kept means the user chose the existing roster: agents.yaml was not rewritten, so the caller
 	// can skip restarting the core to reload a file that didn't change.
 	Kept     bool
@@ -152,7 +156,7 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Picker) listStage() bool {
 	switch m.stage {
-	case "team", "size", "provider", "model", "orchestrator":
+	case "team", "size", "provider", "model", "orchestrator", "mode":
 		return true
 	}
 	return false
@@ -271,6 +275,11 @@ func (m Picker) advance(val string) (tea.Model, tea.Cmd) {
 		for i := range m.roles {
 			m.roles[i].Lead = i == idx-1
 		}
+		m.toMode()
+		return m, nil
+
+	case "mode":
+		m.autoApprove = pick == "auto"
 		return m.finish()
 	}
 	return m, nil
@@ -306,6 +315,10 @@ func (m Picker) back() (tea.Model, tea.Cmd) {
 	case "desc":
 		m.stage = "role"
 		m.input.Placeholder = "designation (e.g. Frontend Designer)"
+	case "mode":
+		// Back into the orchestrator question for a team, or the last teammate's description for a
+		// solo one — toOrchestratorOrFinish knows which, and re-asking it is harmless.
+		return m.toOrchestratorOrFinish()
 	case "orchestrator":
 		if len(m.roles) > 0 {
 			last := m.roles[len(m.roles)-1]
@@ -407,7 +420,8 @@ func (m Picker) toOrchestratorOrFinish() (tea.Model, tea.Cmd) {
 	}
 	if len(m.roles) == 1 {
 		m.roles[0].Lead = true
-		return m.finish()
+		m.toMode()
+		return m, nil
 	}
 	m.stage = "orchestrator"
 	items := make([]ui.Item, 0, len(m.roles))
@@ -429,10 +443,30 @@ func (m Picker) keepExisting() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
+// The last question of setup, asked once per team rather than per teammate. Without it a fresh team
+// landed on ask-before-everything with nothing in the UI hinting the alternative existed — which is
+// how the first thing a new user saw was a permission prompt for `ls`.
+func (m *Picker) toMode() {
+	m.maskInput(false)
+	m.stage = "mode"
+	m.list.Set([]ui.Item{
+		{Label: "Manual — ask before each write and shell command", Value: "manual",
+			Desc: "quieter than it sounds: ls, git status, cat and friends never ask"},
+		{Label: "Auto-approve — don't ask before writes or shell", Value: "auto",
+			Desc: "risky commands (rm -rf, force-push) and anything outside the project still confirm"},
+	})
+	m.input.Placeholder = "how much should this team ask before acting?"
+}
+
 func (m Picker) finish() (tea.Model, tea.Cmd) {
 	if err := m.client.SaveAgents(m.roles); err != nil {
 		m.status = "save error: " + err.Error()
 		return m, nil
+	}
+	// Best-effort and deliberately non-fatal: the roster is already saved, and failing the whole
+	// setup over the approval-mode write would be a worse outcome than starting in manual.
+	if err := m.client.SetAuto(m.autoApprove); err != nil {
+		m.status = "saved the team, but could not set approval mode: " + err.Error()
 	}
 	m.Completed = true
 	m.quitting = true
@@ -459,7 +493,7 @@ func systemPrompt(role, desc string) string {
 	if desc = strings.TrimSpace(desc); desc != "" {
 		p += " " + desc
 	}
-	return p + " Implement your assigned tasks directly and keep responses concise."
+	return p + " Implement your assigned tasks directly and efficiently — you have a limited number of tool calls, so spend them on the task rather than exploring around it. Stay inside the project."
 }
 
 // Credentialed providers first (they're one keystroke from usable), then the rest of the catalog in

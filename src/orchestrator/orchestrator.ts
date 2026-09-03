@@ -1,10 +1,15 @@
-import type { Task } from "./task.ts";
+import type { Task, TaskNode } from "./task.ts";
 
 // Shared task queue. claimTask is synchronous → atomic under Node's single-threaded event loop.
 // ponytail: no mutex needed — a synchronous find-then-mark can't be interleaved by another agent.
 export class Orchestrator {
   private tasks: Task[] = [];
   private nextId = 1;
+  // The goal whose plan is sitting on the board unexecuted, set by a PLAN-mode run. runProject
+  // reads it so that switching to BUILD and sending the same goal runs *this* DAG instead of
+  // paying for a second planning call that may well come back with a different one. Cleared by
+  // load()/clear() and consumed on use — it describes this exact board, nothing else.
+  plannedGoal?: string;
 
   addTask(description: string): Task {
     const t: Task = { id: `t${this.nextId++}`, description, status: "pending" };
@@ -19,12 +24,21 @@ export class Orchestrator {
     // never reached orch.all — meaning they were never persisted to session.json, never resumable,
     // and never drawn on the board while the user watched an agent work on them.
     this.tasks = tasks;
+    this.plannedGoal = undefined; // a board replaced wholesale is no longer the plan someone approved
     this.nextId = Math.max(0, ...tasks.map((t) => Number(t.id.replace(/\D/g, "")) || 0)) + 1;
+  }
+
+  // The live board as DAG nodes — the same array, never a copy, so replan-injected tasks the
+  // scheduler appends land on the board the UI and session.json read (see load()). Only call this
+  // for a board that is genuinely made of planner output; takeApprovedPlan checks that first.
+  nodes(): TaskNode[] {
+    return this.tasks as TaskNode[];
   }
 
   // /clear — drop all tasks so the next submission starts a fresh board. IDs keep counting up.
   clear(): void {
     this.tasks = [];
+    this.plannedGoal = undefined;
   }
 
   // Returns the next pending task this agent may claim, marked in_progress, or undefined.

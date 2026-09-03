@@ -1,7 +1,7 @@
 import { relative } from "node:path";
 import { Agent, type AgentConfig } from "./agent/agent.ts";
 import { Bus } from "./events/bus.ts";
-import { MessageBus, type Messenger } from "./messaging/message-bus.ts";
+import { MessageBus, USER, type Messenger } from "./messaging/message-bus.ts";
 import { Orchestrator } from "./orchestrator/orchestrator.ts";
 import { LockRegistry } from "./orchestrator/locks.ts";
 import { ApprovalQueue } from "./approval.ts";
@@ -64,6 +64,7 @@ export class Engine {
   private byId = new Map<string, Agent>();
   // agent id → the systemPrompt as written in agents.yaml, before any suffix was appended.
   private declaredPrompts = new Map<string, string>();
+  private readonly permissionLayers: PermissionRules[];
   private busy = false;
   private cancelled = false;
   private watcher?: ProjectWatcher;
@@ -109,11 +110,16 @@ export class Engine {
         return answer;
       },
       inbox: (id) => this.messageBus.drain(id),
+      pending: (id) => this.messageBus.pending(id),
     };
 
     // Ordered least-specific-last: an agent's own block wins, then the project's, then --auto's
-    // blanket allow — so an explicit project `deny` is never undone by --auto.
+    // blanket allow — so an explicit project `deny` is never undone by --auto. Held as a field, and
+    // mutated IN PLACE by setAuto(): every Agent is handed this same array object and re-spreads it
+    // on each permission check, so splicing AUTO_RULES in or out flips the whole team live, with no
+    // restart and no per-agent replumbing.
     const permissionLayers = [...(opts.permissions ? [opts.permissions] : []), ...(opts.auto ? [AUTO_RULES] : [])];
+    this.permissionLayers = permissionLayers;
 
     for (const c of opts.configs) {
       this.declaredPrompts.set(c.id, c.systemPrompt);
@@ -298,6 +304,19 @@ export class Engine {
     };
   }
 
+  // /auto and /manual, and the team picker's setup question. Toggling approval mode for a live
+  // session is just adding or removing the blanket-allow layer — an explicit project `deny` still
+  // wins either way, and dangerous or project-escaping commands still force a prompt (see agent.ts).
+  setAuto(on: boolean): void {
+    const at = this.permissionLayers.indexOf(AUTO_RULES);
+    if (on && at === -1) this.permissionLayers.push(AUTO_RULES);
+    if (!on && at !== -1) this.permissionLayers.splice(at, 1);
+  }
+
+  get auto(): boolean {
+    return this.permissionLayers.includes(AUTO_RULES);
+  }
+
   cancel(): void {
     this.cancelled = true;
     // An agent parked on an approval is not "in flight" in any useful sense — it is waiting on a
@@ -377,11 +396,15 @@ export class Engine {
   // valid while the agent is actually running: posting to an idle one would just sit in its inbox
   // until its next unrelated run, which isn't what "mid-task" means. Returns an error string, or
   // undefined on success.
+  //
+  // "Delivered" is a real promise, not a hopeful one: an agent whose current turn would otherwise
+  // have ended the run keeps looping while its inbox is non-empty (see Agent.run), so a nudge
+  // that lands on the last turn is still read rather than stranded until the next run.
   messageAgent(agentId: string, text: string): string | undefined {
     const agent = this.byId.get(agentId);
     if (!agent) return `no such agent: ${agentId}`;
     if (!agent.busy) return `${agentId} isn't running — nothing to interrupt`;
-    const result = this.messageBus.post({ from: "user", to: agentId, kind: "handoff", subject: text.slice(0, 70), body: text });
+    const result = this.messageBus.post({ from: USER, to: agentId, kind: "handoff", subject: text.slice(0, 70), body: text });
     if (!result.ok) return result.reason;
     // messageBus.post already fans out an `agent_message` SSE event (so it shows in the Messages
     // tab / feed); this additionally puts it in the agent's own transcript, matching how the

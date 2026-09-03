@@ -17,20 +17,41 @@ async function until(pred: () => boolean, ms = 5000): Promise<boolean> {
   return pred();
 }
 
+// A recursive watch ARMS asynchronously: fs.watch() returns before macOS has registered the
+// FSEvents stream (and before Linux has finished walking the tree adding inotify marks). A write
+// in that window produces no event at all — not a late one — so no amount of polling rescues it,
+// which is exactly how "noise directories never fire" went red under full-suite parallelism while
+// passing every time on its own. Touch a throwaway probe until one comes back, and only then let
+// the test write the file it is actually asserting on.
+async function armed(root: string, seen: string[]): Promise<void> {
+  const probe = "watcher-probe.tmp";
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    writeFileSync(join(root, probe), String(Date.now()));
+    if (await until(() => seen.includes(probe), 200)) {
+      seen.length = 0; // drop the probe's own events; assertions below look for specific names
+      return;
+    }
+  }
+  throw new Error("fs.watch never delivered an event — no recursive watch on this platform?");
+}
+
 test("a change inside the project is reported", async () => {
   const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
   const seen: string[] = [];
   const w = watchProject(root, (p) => seen.push(p));
+  await armed(root, seen);
 
   writeFileSync(join(root, "note.txt"), "hello");
   expect(await until(() => seen.includes("note.txt"))).toBe(true);
   w.close();
-}, 8_000);
+}, 20_000);
 
 test("noise directories never fire", async () => {
   const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
   const seen: string[] = [];
   const w = watchProject(root, (p) => seen.push(p));
+  await armed(root, seen);
 
   mkdirSync(join(root, "node_modules"), { recursive: true });
   writeFileSync(join(root, "node_modules", "junk.js"), "x");
@@ -39,7 +60,7 @@ test("noise directories never fire", async () => {
   expect(await until(() => seen.includes("real.txt"))).toBe(true);
   expect(seen.some((p) => p.includes("node_modules"))).toBe(false);
   w.close();
-}, 8_000);
+}, 20_000);
 
 test("an agent's own write is not reported back as an external change", async () => {
   // Two sequential real fs.watch round trips, each with an `until()` budget matching
@@ -50,6 +71,7 @@ test("an agent's own write is not reported back as an external change", async ()
   const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
   const seen: string[] = [];
   const w = watchProject(root, (p) => seen.push(p));
+  await armed(root, seen);
 
   // Establish that the watcher is live and delivering *before* testing suppression. Writing both
   // files back to back instead made this depend on two rapid writes producing two distinct fs
@@ -67,7 +89,7 @@ test("an agent's own write is not reported back as an external change", async ()
   expect(await until(() => seen.includes("after.txt"))).toBe(true);
   expect(seen).not.toContain("mine.txt");
   w.close();
-}, 15_000);
+}, 20_000);
 
 test("isIgnored matches on any path segment", () => {
   expect(isIgnored(".git/HEAD")).toBe(true);

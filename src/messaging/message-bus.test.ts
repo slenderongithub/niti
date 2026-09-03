@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { MessageBus, ORCHESTRATOR } from "./message-bus.ts";
+import { MessageBus, ORCHESTRATOR, USER } from "./message-bus.ts";
 
 function bus() {
   const b = new MessageBus();
@@ -58,6 +58,14 @@ test("rate cap stops a runaway ping-pong between two agents", () => {
   expect(ok).toBe(10); // MAX_PER_PAIR
   b.resetCaps();
   expect(b.post({ from: "frontend", to: "backend", kind: "question", subject: "again", body: "" }).ok).toBe(true);
+});
+
+test("a user nudge is never rate-capped — a human interrupting is not a loop", () => {
+  const b = bus();
+  for (let i = 0; i < 25; i++) {
+    expect(b.post({ from: USER, to: "backend", kind: "handoff", subject: `nudge ${i}`, body: "x" }).ok).toBe(true);
+  }
+  expect(b.drain("backend").length).toBe(25);
 });
 
 test("authorize enforces the rate cap and reports why a blocked edge failed", () => {

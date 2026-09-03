@@ -9,7 +9,7 @@ import type { Messenger, MessageKind } from "../messaging/message-bus.ts";
 import { MAX_ASK_DEPTH } from "../messaging/message-bus.ts";
 import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
-import { resolve as resolvePermission, DEFAULT_RULES, type PermissionRules } from "../permissions.ts";
+import { resolve as resolvePermission, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
 import { runTool, toolSpecs, toSandboxCall, safePath, editDiff, writeFileDiff, WRITE_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
@@ -74,6 +74,19 @@ export function isDangerousShellCall(name: string, input: Record<string, unknown
   if (base === "truncate" && argv.some((a) => /^-s\s*0$/.test(a))) return true;
   if (INTERPRETERS.has(base) && has(argv, "-c", "-e")) return true;
   return false;
+}
+
+// `shell` pins cwd to the project root but does NOT jail its arguments (see tools.ts's own
+// "SCOPE OF THE JAIL" comment) — `ls ..` happily lists the parent, `cat ../../.ssh/id_rsa` needs no
+// shell at all. Two things follow from that, and this one check covers both: the built-in
+// safe-command allowlist must never be the reason such a call runs unprompted, and an agent
+// wandering out of the project (which is what fills a turn budget with `ls ..` of unrelated sibling
+// repos) should have to ask first. Force-asks like a dangerous command does — a standing grant
+// can't wave it through either.
+export function leavesProjectRoot(name: string, input: Record<string, unknown>): boolean {
+  if (name !== "shell") return false;
+  const parts = [String(input.command ?? ""), ...(Array.isArray(input.args) ? input.args.map(String) : [])];
+  return parts.some((p) => p === ".." || p.startsWith("../") || p.startsWith("/") || p.includes("/../"));
 }
 
 export function overContextThreshold(inputTokens: number, context: number, ratio = WARN_RATIO): boolean {
@@ -316,6 +329,13 @@ export class Agent {
             return { outcome: "failed", text: finalText, error: this.lastError };
           }
           this.push(turns, { role: "assistant", text: reply.text, toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
+          // A message that arrived during this turn — a teammate's hand-off, or the user's nudge
+          // from the dashboard — would otherwise sit in the inbox until some later, unrelated run,
+          // while POST /agents/:id/message had already reported it delivered. Keep looping: the
+          // next iteration's injectInbox feeds it in as a user turn. Guarded on a turn being left,
+          // so a nudge landing on the final allowed turn can't downgrade a finished task to
+          // "exhausted" — there, the run ends and the message waits, as it did before.
+          if (i < this.maxTurns - 1 && this.pendingInbox() > 0) continue;
           if (sessionId) this.store?.setStatus(sessionId, "done");
           this.bus.publish({ agentId: id, type: "done", payload: "", time: Date.now() });
           return { outcome: "done", text: finalText, error: "" };
@@ -422,6 +442,9 @@ export class Agent {
         }
         if (reply.toolCalls.length === 0) {
           if (reply.text) this.push(turns, { role: "assistant", text: reply.text, toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
+          // Same rule as run(): an agent can be "running" purely because it is answering a peer,
+          // and a nudge delivered to it then must be read in this loop rather than stranded.
+          if (i < o.maxTurns - 1 && this.pendingInbox() > 0) continue;
           break;
         }
         const results: ToolResult[] = [];
@@ -443,6 +466,12 @@ export class Agent {
   // Raw single call, no tools/events — used by the orchestrator to plan and to integrate.
   async ask(prompt: string): Promise<string> {
     const reply = await this.provider.send(this.config.systemPrompt, [{ role: "user", text: prompt }], []);
+    // Every other model call in this file records its usage; this one did not, so the lead's
+    // planning, replanning, integrate and /debate turns were spent off the books — /usage, /cost,
+    // the TUI sidebar and the dashboard all under-reported the run by the orchestrator's whole
+    // share, which on a mixed team is usually the most expensive model on it.
+    if (reply.usage) this.usageTracker?.record(this.config.id, reply.usage.inputTokens, reply.usage.outputTokens);
+    if (reply.rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, reply.rateLimit);
     return reply.text;
   }
 
@@ -465,6 +494,12 @@ export class Agent {
   private push(turns: Turn[], turn: Turn, sessionId?: string, usage?: Usage): void {
     turns.push(turn);
     if (sessionId) this.store?.appendMessage(sessionId, turn.role, toParts(turn), usage);
+  }
+
+  // Non-destructive: how many messages are waiting. Read by both loops before they end, so a
+  // message delivered mid-turn is answered by the run it was aimed at.
+  private pendingInbox(): number {
+    return this.messenger?.pending(this.config.id) ?? 0;
   }
 
   // Drain the inbox and inject any teammate messages as a user turn so the model reads and can reply.
@@ -549,7 +584,7 @@ export class Agent {
     // return above the permission resolution, so `permissions: { spawn_fork: { "*": deny } }` was
     // silently inert and an agent with `allowedTools: []` still got the tool.
     if (call.name === "spawn_fork") {
-      const forkDecision = resolvePermission([this.config.permissions, ...this.permissionLayers, DEFAULT_RULES], call.name, call.input);
+      const forkDecision = resolvePermission([this.config.permissions, ...this.permissionLayers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input);
       if (forkDecision === "deny") {
         this.bus.publish({ agentId: id, type: "error", payload: "spawn_fork: denied by permission policy", time: Date.now() });
         return "denied by permission policy";
@@ -582,15 +617,16 @@ export class Agent {
     if (call.name === "write_file") {
       diff = writeFileDiff(before ?? null, String(call.input.content ?? ""));
     }
-    // agent config → project config (+ --auto) → built-in defaults → "ask".
-    const decision = resolvePermission([this.config.permissions, ...this.permissionLayers, DEFAULT_RULES], call.name, call.input);
+    // agent config → project config (+ --auto) → built-in safe-shell allowlist → built-in defaults → "ask".
+    const decision = resolvePermission([this.config.permissions, ...this.permissionLayers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input);
     // A deny is policy, not a question: it short-circuits without queuing an approval, and it holds
     // in headless mode too (where there is no approver and everything else would just run).
     if (decision === "deny") {
       this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: denied by permission policy`, time: Date.now() });
       return "denied by permission policy";
     }
-    const mustAsk = dangerous || decision !== "allow"; // a config `allow` can never downgrade a dangerous command
+    // A config `allow` can never downgrade a dangerous command, nor one reaching outside the project.
+    const mustAsk = dangerous || leavesProjectRoot(call.name, call.input) || decision !== "allow";
     if (this.approve && mustAsk) {
       // The approver sees the diff; the model never does. `edited` is merged back into this copy
       // (ApprovalQueue.answer writes into the object it was given), so an in-place edit from the
@@ -627,13 +663,15 @@ export class Agent {
         try {
           // Checkpoint under the lock and after approval: the write is next, so nothing can slip
           // in between the snapshot and the change it's meant to undo.
-          if (lockPath && lockPath !== SHELL_LOCK) {
+          const checkpointing = lockPath !== undefined && lockPath !== SHELL_LOCK;
+          let atWrite: string | undefined;
+          if (checkpointing) {
             // Re-read under the lock. `before` was captured *before* the approval prompt, and the
             // user may well have edited the file while deciding — the write itself re-reads, so it
             // applies correctly, but checkpointing the stale copy meant a later /undo silently
             // reverted their edit too and reported success. The lock is held here, so nothing can
             // slip in between this snapshot and the write it protects.
-            const atWrite = await this.readForCheckpoint(writeRel!);
+            atWrite = await this.readForCheckpoint(writeRel!);
             if (before !== undefined && atWrite !== undefined && atWrite !== before) {
               this.bus.publish({
                 agentId: id,
@@ -642,10 +680,15 @@ export class Agent {
                 time: Date.now(),
               });
             }
-            if (sessionId) this.store?.checkpoint(sessionId, lockPath, atWrite ?? null); // already absolute
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
           output = await runTool(sandboxCall, allowed, this.root);
+          // Only once the write actually landed. runTool throws on a failed write (a missing
+          // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
+          // every failed attempt pushed an undo entry for a change that never happened — /undo
+          // then reported "deleted <path>" for a file it had not touched, and a real undo had to
+          // be typed past the phantoms.
+          if (checkpointing && sessionId) this.store?.checkpoint(sessionId, lockPath!, atWrite ?? null); // already absolute
         } finally {
           if (lockPath && this.locks) this.locks.release(lockPath, id);
         }

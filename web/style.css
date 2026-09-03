@@ -109,6 +109,12 @@ main { flex: 1; display: flex; min-height: 0; }
 .promptbar input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); padding: 6px 10px; font: inherit; }
 .promptbar button, .ap-row button { background: var(--violet); border: none; border-radius: 6px; color: var(--bg); padding: 6px 12px; font: inherit; font-weight: 700; cursor: pointer; }
 .promptbar button:disabled, .ap-row button:disabled { opacity: 0.4; cursor: default; }
+/* BUILD/PLAN, the dashboard's copy of the TUI's shift+tab. PLAN stops after the orchestrator has
+   built the task DAG; sending the same goal again in BUILD runs that exact plan. */
+.promptbar .mode { display: flex; gap: 2px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 2px; }
+.promptbar .mode button { background: transparent; color: var(--muted); font-weight: 600; padding: 4px 10px; border-radius: 4px; }
+.promptbar .mode button.active { background: var(--violet); color: var(--bg); }
+.promptbar .mode button:disabled { opacity: 0.4; cursor: default; }
 .status { color: var(--muted); font-size: 12px; min-height: 1em; }
 
 /* per-agent detail panel: opens on a graph-node click */

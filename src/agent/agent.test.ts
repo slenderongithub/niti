@@ -2,14 +2,16 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Agent, overContextThreshold, isDangerousShellCall, SHELL_LOCK, MAX_FORK_DEPTH, type AgentConfig } from "./agent.ts";
+import { Agent, overContextThreshold, isDangerousShellCall, leavesProjectRoot, SHELL_LOCK, MAX_FORK_DEPTH, type AgentConfig } from "./agent.ts";
 import { Bus } from "../events/bus.ts";
 import { ApprovalQueue } from "../approval.ts";
 import { LockRegistry } from "../orchestrator/locks.ts";
 import { openDb } from "../store/db.ts";
 import { SessionStore } from "../store/session-store.ts";
+import { UsageTracker } from "../usage.ts";
 import { resumeConversation } from "../session.ts";
 import type { Provider, Turn } from "../providers/provider.ts";
+import type { AgentMessage, Messenger } from "../messaging/message-bus.ts";
 
 const cfg: AgentConfig = {
   id: "a",
@@ -517,6 +519,87 @@ test("a denied write is never checkpointed — undo has nothing to revert", asyn
   expect(store.undoLast()).toBeUndefined();
 });
 
+test("a write that fails is never checkpointed — undo has nothing to revert", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const store = new SessionStore(openDb(":memory:"));
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      n++;
+      // `edit` on a file that doesn't exist: runTool throws, so the write never lands.
+      if (n === 1) return { text: "", toolCalls: [{ id: "1", name: "edit", input: { path: "missing.ts", oldString: "a", newString: "b" } }] };
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["edit"] }, stub, new Bus(), { root, store, approve: async () => true }).run("edit", { taskId: "t1" });
+  expect(store.undoLast()).toBeUndefined();
+});
+
+test("a message that lands on the finishing turn is read by that run, not stranded", async () => {
+  // The nudge case: POST /agents/:id/message reports "delivered" while the agent is mid-run, but
+  // the turn in flight was about to end the loop. The run has to keep going and read it.
+  const bus = new Bus();
+  const inbox: AgentMessage[] = [];
+  const messenger: Messenger = {
+    peers: () => [{ id: "b", role: "other" }],
+    send: () => "ok",
+    ask: async () => "ok",
+    inbox: () => inbox.splice(0, inbox.length),
+    pending: () => inbox.length,
+  };
+  const seen: string[] = [];
+  const stub: Provider = {
+    async send(_sys, turns) {
+      seen.push(turns.map((t) => (t.role === "user" ? t.text : "")).join("|"));
+      // The nudge lands *while this call is in flight* — after injectInbox already ran for this
+      // turn, which is precisely the window POST /agents/:id/message reported "delivered" in.
+      if (seen.length === 1) {
+        inbox.push({ id: "m1", from: "user", to: "a", kind: "handoff", subject: "change of plan", body: "also add PURPLE", time: Date.now() });
+      }
+      return { text: "finished", toolCalls: [] }; // every turn would end the loop
+    },
+  };
+  const out = await new Agent(cfg, stub, bus, { messenger }).runDetailed("do the thing");
+
+  expect(out.outcome).toBe("done");
+  expect(seen).toHaveLength(2); // looped again instead of returning on the first turn
+  expect(seen[1]).toContain("also add PURPLE"); // and the nudge was actually in that turn's context
+});
+
+test("a message arriving on the last allowed turn does not downgrade a finished run", async () => {
+  // The inbox never empties here, so without the turns-left guard the loop would run to the cap
+  // and report "exhausted" for work the model had already finished.
+  const messenger: Messenger = {
+    peers: () => [{ id: "b", role: "other" }],
+    send: () => "ok",
+    ask: async () => "ok",
+    inbox: () => [],
+    pending: () => 1,
+  };
+  let calls = 0;
+  const stub: Provider = {
+    async send() {
+      calls++;
+      return { text: "finished", toolCalls: [] };
+    },
+  };
+  const out = await new Agent(cfg, stub, new Bus(), { messenger, maxTurns: 3 }).runDetailed("do the thing");
+
+  expect(out.outcome).toBe("done");
+  expect(calls).toBe(3); // kept looping while the inbox was full, then finished on the last turn
+});
+
+test("ask() records its tokens — the orchestrator's plan/integrate turns are not off the books", async () => {
+  const usage = new UsageTracker();
+  const stub: Provider = {
+    async send() {
+      return { text: "a plan", toolCalls: [], usage: { inputTokens: 100, outputTokens: 20 } };
+    },
+  };
+  await new Agent(cfg, stub, new Bus(), { usageTracker: usage }).ask("plan this");
+  expect(usage.snapshot()).toEqual([{ agentId: "a", usage: { inputTokens: 100, outputTokens: 20, calls: 1, lastInput: 100 } }]);
+});
+
 test("spawn_fork runs a child loop, links its session to the parent, and returns its findings", async () => {
   const store = new SessionStore(openDb(":memory:"));
   let call = 0;
@@ -648,4 +731,41 @@ test("cancel stops an in-flight agent between turns instead of paying for the re
 
   expect(result).toBe("failed");
   expect(calls).toBe(3); // the turn after the cancel never made a model call (cap is 12)
+});
+
+test("leavesProjectRoot spots a shell call reaching outside the project", () => {
+  expect(leavesProjectRoot("shell", { command: "ls", args: [".."] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "cat", args: ["../../.ssh/id_rsa"] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "ls", args: ["/etc"] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "cat", args: ["src/../../x"] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "../evil.sh", args: [] })).toBe(true);
+  // In-project work is untouched — this must not become another source of prompts.
+  expect(leavesProjectRoot("shell", { command: "ls", args: ["-la"] })).toBe(false);
+  expect(leavesProjectRoot("shell", { command: "cat", args: ["package.json"] })).toBe(false);
+  expect(leavesProjectRoot("shell", { command: "git", args: ["status"] })).toBe(false);
+  expect(leavesProjectRoot("read_file", { path: "../x" })).toBe(false); // safePath already jails these
+});
+
+test("a safe read-only shell command runs without asking, but not one reaching outside the root", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const asked: string[] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      n++;
+      if (n === 1) return { text: "", toolCalls: [{ id: "1", name: "shell", input: { command: "ls", args: ["-la"] } }] };
+      if (n === 2) return { text: "", toolCalls: [{ id: "2", name: "shell", input: { command: "ls", args: [".."] } }] };
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["shell"] }, stub, new Bus(), {
+    root,
+    approve: async (tool, input) => {
+      asked.push(String((input as { args?: string[] }).args?.join(" ")));
+      return true;
+    },
+  }).run("look around");
+
+  // `ls -la` is on the built-in allowlist; `ls ..` leaves the project and still has to ask.
+  expect(asked).toEqual([".."]);
 });

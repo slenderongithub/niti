@@ -11,7 +11,7 @@ import { CATALOG, contextWindow, providersByCategory, splitModelId, type Categor
 import { costOf } from "../providers/pricing.ts";
 import { buildFileGraph } from "../graph/filegraph.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
-import { saveAgents, setTheme } from "../config/config.ts";
+import { saveAgents, setTheme, setAuto } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
 import type { AgentConfig } from "../agent/agent.ts";
 
@@ -285,6 +285,16 @@ export function startServer(
         setTheme(theme);
         engine.hub.publish({ kind: "theme", theme });
         return json({ ok: true });
+      }
+
+      // Approval mode, same shape as POST /theme: flip it on the live engine and persist it, so a
+      // choice made in the picker or by /auto survives a restart.
+      if (p === "/auto" && method === "POST") {
+        const { auto } = (await req.json().catch(() => ({}))) as { auto?: boolean };
+        if (typeof auto !== "boolean") return json({ error: "expected { auto: boolean }" }, 400);
+        engine.setAuto(auto);
+        setAuto(auto);
+        return json({ ok: true, auto });
       }
 
       if (p === "/providers" && method === "GET") {

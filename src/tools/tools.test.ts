@@ -14,6 +14,18 @@ test("write then read within the project root", async () => {
   expect(out).toBe("hi");
 });
 
+test("write_file creates missing parent directories", async () => {
+  await runTool({ tool: "write_file", path: "a/b/c/deep.txt", content: "nested" }, ALL, root);
+  expect(await readFile(join(root, "a/b/c/deep.txt"), "utf8")).toBe("nested");
+});
+
+test("write_file's mkdir never escapes the project root", async () => {
+  await expect(
+    runTool({ tool: "write_file", path: "../outside/x.txt", content: "x" }, ALL, root),
+  ).rejects.toThrow(/escapes project root/);
+  expect(existsSync(join(root, "..", "outside"))).toBe(false);
+});
+
 test("path traversal is rejected", () => {
   expect(() => safePath(root, "../../etc/passwd")).toThrow(/escapes project root/);
   expect(() => safePath(root, "/etc/passwd")).toThrow(/escapes project root/);

@@ -5,6 +5,7 @@ import type { Engine } from "../engine.ts";
 import { splitModelId } from "../providers/catalog.ts";
 import { costOf } from "../providers/pricing.ts";
 import { saveTasks } from "../session.ts";
+import { setAuto } from "../config/config.ts";
 import { loadSkills } from "../skills/skills.ts";
 import { isGitRepo, snapshotBranch } from "../orchestrator/worktree.ts";
 import { buildExportReport } from "./export.ts";
@@ -35,6 +36,24 @@ const view = (name: string): Command => ({
 
 export const BUILTIN_COMMANDS: Command[] = [
   view("usage"),
+  {
+    name: "auto",
+    description: "Stop asking before writes and shell commands (risky ones still confirm)",
+    async run(engine) {
+      engine.setAuto(true);
+      setAuto(true); // persisted, so the choice survives a restart
+      return { ok: true, message: "auto-approve on — dangerous commands and anything outside the project still ask" };
+    },
+  },
+  {
+    name: "manual",
+    description: "Ask before every write and shell command",
+    async run(engine) {
+      engine.setAuto(false);
+      setAuto(false);
+      return { ok: true, message: "manual mode — common read-only commands (ls, git status, cat…) still run without asking" };
+    },
+  },
   {
     name: "cancel",
     description: "Stop launching new work; in-flight tasks finish",
@@ -207,6 +226,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         message: [
           `project   ${engine.root}`,
           `team      ${engine.configs.length} agents${engine.running ? " — running" : ""}`,
+          `approvals ${engine.auto ? "auto — writes and shell run without asking" : "manual — writes and shell ask first"}`,
           `tasks     ${done}/${tasks.length} done`,
           `tokens    ${totals.inputTokens}in ${totals.outputTokens}out over ${totals.calls} calls`,
           `wired to  ${engine.lsp?.list().length ?? 0} LSP · ${engine.mcp?.servers?.().length ?? 0} MCP · history ${engine.store ? "on" : "off"}`,
@@ -236,7 +256,7 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: "resume",
-    description: "Pick the previous session's unfinished tasks back up",
+    description: "Run the unfinished tasks on the board — a PLAN-mode plan, or the last session's leftovers",
     async run(engine) {
       if (engine.running) return { ok: false, message: "a task is already running" };
       if (!engine.orch.all.some((t) => t.status !== "done")) return { ok: false, message: "nothing left to resume" };

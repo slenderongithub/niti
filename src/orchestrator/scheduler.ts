@@ -29,7 +29,15 @@ export interface SchedulerDeps {
 }
 
 const DEP_CONTEXT_MAX = 4000; // per-prerequisite ceiling on inherited output (see depContext)
-const MAX_ATTEMPTS = 3; // same-agent retries (with backoff) before a task is marked failed
+// Retries have to outlast a real rate-limit window, not just a blip. The old 3 attempts at
+// 500ms/1s/1.5s spent under 5 seconds before giving up — against a provider quota that resets over
+// a minute (a free-tier key shared by two agents, say) that never had a chance, so the task failed,
+// its dependents were skipped as prerequisite-failed, and the run collapsed within seconds of the
+// first 429. 5 attempts on an exponential curve spends ~60s instead. Safe to wait that long because
+// the scheduler runs tasks concurrently (one per idle agent): a stalled lane doesn't block the rest.
+const MAX_ATTEMPTS = 5; // same-agent retries (with backoff) before a task is marked failed
+const BACKOFF_BASE_MS = 2_000;
+const BACKOFF_CAP_MS = 30_000;
 const MAX_REPLAN_ATTEMPTS = 1; // recovery attempts asking the lead to replan a task before giving up on it
 const MAX_REVIEW_ROUNDS = 2; // review→revise cycles before a persistently-rejected task is marked failed
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -240,7 +248,10 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
         // No idle teammate — a same-agent retry is a retry, not a failover. Say so.
         bus?.publish({ agentId: t.role, type: "warning", payload: `${t.role} exhausted — retry ${t.attempts}/${MAX_ATTEMPTS} of ${t.id}`, time: Date.now() });
       }
-      await sleep(Math.min(t.attempts * 500, 3000));
+      // 2s, 4s, 8s, 16s, 30s. ponytail: one flat curve for every provider, not a Retry-After read —
+      // anthropic/openai surface a reset time on `rateLimit`, Gemini's SDK surfaces nothing, and the
+      // 429s that motivated this were Gemini's. Wire result.rateLimit.resetAt in here if that changes.
+      await sleep(Math.min(BACKOFF_BASE_MS * 2 ** (t.attempts - 1), BACKOFF_CAP_MS));
       result = await runner.runDetailed(prompt, { taskId: t.id });
     }
 

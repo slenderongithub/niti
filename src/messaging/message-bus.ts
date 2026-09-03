@@ -26,6 +26,10 @@ export interface PostResult {
 // as a recipient, so status/handoffs always flow back up.
 export const ORCHESTRATOR = "orchestrator";
 
+// The human, mid-run (Engine.messageAgent, behind POST /agents/:id/message — the dashboard's
+// nudge box). Not an agent: it has no inbox and never receives, it only interrupts.
+export const USER = "user";
+
 const MAX_PER_PAIR = 10; // messages one agent may send another within a single task/plan (loop guard)
 
 export class MessageBus {
@@ -73,6 +77,10 @@ export class MessageBus {
   private reserve(from: string, to: string): { ok: boolean; reason?: string } {
     if (!this.roster.has(to)) return { ok: false, reason: `unknown recipient '${to}'` };
     if (!this.isAllowed(from, to)) return { ok: false, reason: `edge ${from}->${to} not authorized` };
+    // MAX_PER_PAIR is a loop guard for agents talking to each other. A human interrupting their
+    // own run is not a loop — capping it meant the 11th nudge in a task was refused with
+    // "message rate cap reached", which reads as a bug to the person typing it.
+    if (from === USER) return { ok: true };
     const pair = `${from}->${to}`;
     const n = this.counts.get(pair) ?? 0;
     if (n >= MAX_PER_PAIR) return { ok: false, reason: `message rate cap reached (${from}->${to})` };
@@ -144,6 +152,10 @@ export interface Messenger {
   // be rendered as a thread rather than two unrelated sessions.
   ask(from: string, to: string, question: string, depth: number, fromSessionId?: string): Promise<string>;
   inbox(agentId: string): AgentMessage[];
+  // Non-destructive peek. The agent loop uses it to decide whether it may finish: a message that
+  // landed during the turn it is about to end on has to be answered in *this* run, not left in
+  // the inbox for some later, unrelated one.
+  pending(agentId: string): number;
 }
 
 export const MAX_ASK_DEPTH = 3; // A asks B asks A … — cap the synchronous question chain

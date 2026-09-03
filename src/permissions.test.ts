@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { resolve, parsePermissions, subject, DEFAULT_RULES, AUTO_RULES, type PermissionRules } from "./permissions.ts";
+import { resolve, parsePermissions, subject, DEFAULT_RULES, AUTO_RULES, SAFE_SHELL_RULES, type PermissionRules } from "./permissions.ts";
 
 const project: PermissionRules = {
   shell: { "git *": "allow", "git commit *": "ask", "git push --force*": "deny" },
@@ -74,4 +74,22 @@ test("path subjects are normalized, so ./x and a/../x cannot dodge a rule", () =
   expect(resolve([allow], "write_file", { path: "src/../.niti/agents.yaml" })).not.toBe("allow");
 
   expect(subject("write_file", { path: "./a/../b.txt" })).toBe("b.txt");
+});
+
+test("the built-in safe-shell allowlist frees common read-only commands", () => {
+  const layers = [undefined, SAFE_SHELL_RULES, DEFAULT_RULES];
+  for (const [command, ...args] of [["ls", "-la"], ["git", "status"], ["pwd"], ["cat", "package.json"], ["grep", "-r", "x", "."]]) {
+    expect(resolve(layers, "shell", { command, args })).toBe("allow");
+  }
+  // Anything that mutates is still not on the list.
+  expect(resolve(layers, "shell", { command: "npm", args: ["install"] })).toBe("ask");
+  expect(resolve(layers, "shell", { command: "git", args: ["commit", "-m", "x"] })).toBe("ask");
+  expect(resolve(layers, "shell", { command: "rm", args: ["x"] })).toBe("ask");
+});
+
+test("a project's own shell rule still beats the built-in allowlist", () => {
+  const stricter = { shell: { "ls*": "deny" as const } };
+  // The allowlist only fills the silence — it never overrides something the user wrote themselves.
+  expect(resolve([stricter, SAFE_SHELL_RULES, DEFAULT_RULES], "shell", { command: "ls", args: ["-la"] })).toBe("deny");
+  expect(resolve([stricter, SAFE_SHELL_RULES, DEFAULT_RULES], "shell", { command: "pwd", args: [] })).toBe("allow");
 });

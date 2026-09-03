@@ -307,6 +307,14 @@ func (c *Client) SetTheme(name string) error {
 	return c.do("POST", "/theme", map[string]string{"theme": name}, nil)
 }
 
+// SetAuto persists the approval mode to .niti/agents.yaml and flips it on the live engine — the
+// team picker's setup question, and the same route /auto and /manual use. Auto means writes and
+// shell stop asking; genuinely dangerous commands, and anything reaching outside the project,
+// still prompt either way (see src/agent/agent.ts).
+func (c *Client) SetAuto(on bool) error {
+	return c.do("POST", "/auto", map[string]bool{"auto": on}, nil)
+}
+
 // edited overrides fields of the approved call's input (e.g. a diff-view in-place edit) — nil for
 // a plain approve/deny, unchanged from before this parameter existed.
 func (c *Client) Approve(ok bool, scope string, edited map[string]any) error {

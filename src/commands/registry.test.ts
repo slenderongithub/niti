@@ -141,7 +141,7 @@ test("list() is what a client renders for autocomplete", () => {
   const names = new CommandRegistry(BUILTIN_COMMANDS).list().map((c) => c.name);
   // Order matters: it's the order the TUI's "/" menu offers them in, and /help is appended last.
   expect(names).toEqual([
-    "usage", "cancel", "undo", "rewind", "branch", "model", "sessions",
+    "usage", "auto", "manual", "cancel", "undo", "rewind", "branch", "model", "sessions",
     "agents", "tasks", "skills", "mcp", "lsp", "permissions", "cost", "status", "debate", "export", "resume", "clear", "init",
     "help",
   ]);

@@ -9,11 +9,40 @@ import { readFileSync } from "node:fs";
 function load() {
   const noop: any = new Proxy(() => noop, { get: () => noop });
   const elements = new Map<string, any>();
+  // The BUILD/PLAN segmented control is the one place app.js reaches for child elements, so the
+  // stub has to hand back real ones: two buttons carrying dataset.mode and their own classList.
+  // `closest` returns the button itself, which is what the delegated click handler asks for.
+  const modeButton = (mode: string) => {
+    const classes = new Set<string>(mode === "build" ? ["active"] : []);
+    const b: any = {
+      dataset: { mode },
+      disabled: false,
+      classList: {
+        add: (c: string) => classes.add(c),
+        remove: (c: string) => classes.delete(c),
+        contains: (c: string) => classes.has(c),
+        toggle: (c: string, on: boolean) => (on ? classes.add(c) : classes.delete(c)),
+      },
+    };
+    b.closest = () => b;
+    return b;
+  };
   const el = (id: string) => {
     if (!elements.has(id)) {
       const classes = new Set<string>();
+      const kids = id === "prompt-mode" ? [modeButton("build"), modeButton("plan")] : [];
+      // Listeners are recorded rather than dropped, so a test can drive a click the way a browser
+      // would instead of app.js having to export every handler for testability.
+      const listeners = new Map<string, Function[]>();
       elements.set(id, {
-        addEventListener() {},
+        addEventListener(type: string, fn: Function) {
+          if (!listeners.has(type)) listeners.set(type, []);
+          listeners.get(type)!.push(fn);
+        },
+        fire(type: string, ev: any) {
+          for (const fn of listeners.get(type) ?? []) fn(ev);
+        },
+        querySelectorAll: () => kids,
         getContext: () => noop,
         classList: { add: (c: string) => classes.add(c), remove: (c: string) => classes.delete(c), contains: (c: string) => classes.has(c), toggle() {} },
         style: {}, value: "", textContent: "", innerHTML: "", checked: true, disabled: false,
@@ -43,7 +72,7 @@ function load() {
   const exported = new Function(
     "window", "document", "location", "requestAnimationFrame", "fetch", "EventSource", "performance", "URLSearchParams",
     `${avatarSrc}\n${src}\nreturn { handle, onAgentEvent, ensureNode, nodes, renderApproval, answerApproval, onOrch,
-       openAgentPanel, sendAgentMessage, esc,
+       openAgentPanel, sendAgentMessage, esc, submitPrompt,
        getPending: () => pendingApprovals, getRunning: () => running, setPromptEnabled };`,
   )(win, doc, win.location, win.requestAnimationFrame, win.fetch, win.EventSource, performance, URLSearchParams);
   return { ...exported, elFor: el, calls };
@@ -201,4 +230,38 @@ test("a cancelled run reports real progress, and review/replan events are surfac
   // "orchestrator" is a NON_AGENT_ID, so ensureNode returns null for it — this must not throw.
   g.onOrch({ type: "replan", role: "orchestrator", taskId: "t1", action: "retry", reason: "too vague" });
   g.onOrch({ type: "review", reviewer: "orchestrator", taskId: "t1", phase: "approved" });
+});
+
+test("the Build/Plan control drives POST /prompt's mode, and Plan keeps the goal in the box", async () => {
+  const g = load();
+  await settled();
+  const [build, plan] = g.elFor("prompt-mode").querySelectorAll("button");
+
+  // Default is Build: the goal runs, and the box is cleared.
+  g.elFor("prompt-input").value = "ship the thing";
+  await g.submitPrompt();
+  let call = g.calls.filter((c: any) => c.path.startsWith("/prompt")).at(-1);
+  expect(call.body.mode).toBe("build");
+  expect(g.elFor("prompt-input").value).toBe("");
+
+  // Switching to Plan stops after the DAG — and leaves the goal typed, because sending it again
+  // in Build is what runs the plan you just read (no second planning call, see runProject).
+  g.elFor("prompt-mode").fire("click", { target: plan });
+  expect(plan.classList.contains("active")).toBe(true);
+  expect(build.classList.contains("active")).toBe(false);
+  g.elFor("prompt-input").value = "ship the thing";
+  await g.submitPrompt();
+  call = g.calls.filter((c: any) => c.path.startsWith("/prompt")).at(-1);
+  expect(call.body.mode).toBe("plan");
+  expect(g.elFor("prompt-input").value).toBe("ship the thing");
+  expect(g.elFor("prompt-status").textContent).toContain("switch to Build");
+});
+
+test("a running session disables the mode buttons too, not just Send", async () => {
+  const g = load();
+  await settled();
+  g.handle({ kind: "session", state: "started", goal: "x" });
+  expect(g.elFor("prompt-mode").querySelectorAll("button").every((b: any) => b.disabled)).toBe(true);
+  g.handle({ kind: "session", state: "ended" });
+  expect(g.elFor("prompt-mode").querySelectorAll("button").some((b: any) => b.disabled)).toBe(false);
 });

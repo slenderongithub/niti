@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/niti/tui/internal/api"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/api"
 )
 
 // MaxAgents must match the web dashboard's pixel-avatar palette (web/avatar.js's AVATAR_COLORS) —
@@ -102,9 +102,16 @@ func TestPickerBuildsASoloTeammateWithADescription(t *testing.T) {
 		t.Fatalf("expected the description prompt after naming a role, got %s", m.stage)
 	}
 	m = step(t, m, "Owns the API surface.")
+	if m.stage != "mode" {
+		t.Fatalf("expected the approval-mode question after the last description, got %s", m.stage)
+	}
+	m = step(t, m, "") // "Manual" is the highlighted first row
 
 	if !m.Completed {
-		t.Fatalf("a team of one should finish after its description, stage=%s", m.stage)
+		t.Fatalf("a team of one should finish after picking an approval mode, stage=%s", m.stage)
+	}
+	if m.autoApprove {
+		t.Error("the first row is Manual — picking it must not turn auto-approve on")
 	}
 	got := saved()
 	if len(got) != 1 || !got[0].Lead {
@@ -162,6 +169,14 @@ func TestPickerLoopsOncePerTeammateThenPicksAnOrchestrator(t *testing.T) {
 
 	m.list.Move(1) // hand the lead to the second teammate
 	m = step(t, m, "")
+	if m.stage != "mode" {
+		t.Fatalf("expected the approval-mode question after the orchestrator is chosen, got %s", m.stage)
+	}
+	m.list.Move(1)     // second row: Auto-approve
+	m = step(t, m, "") //
+	if !m.autoApprove {
+		t.Error("picking the Auto-approve row should set auto mode")
+	}
 	got := saved()
 	if len(got) != 2 {
 		t.Fatalf("expected 2 agents saved, got %d", len(got))

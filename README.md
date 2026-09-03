@@ -13,12 +13,14 @@ Assign models to custom roles (Gemini = Frontend, Claude = Backend, GPT = Review
 ## Quickstart
 
 ```sh
-npm install -g niti      # prebuilt binaries — no Bun, no Go, no build step
-niti                     # pick your team, then start building
+npm install -g @slenderbuilds/niti   # prebuilt binaries — no Bun, no Go, no build step
+niti                                 # pick your team, then start building
 ```
 
-> Published as **`niti`** — `niti` was already taken. The commands are still `niti` (TUI) and
-> `niti-core` (headless engine); project state still lives in `.niti/`.
+> Published as **`@slenderbuilds/niti`** — the unscoped `niti` was rejected by npm's own
+> anti-squatting check (too similar to `jiti`/`vite`/others), and it suggested this scope. The
+> commands are still `niti` (TUI) and `niti-core` (headless engine); project state still lives
+> in `.niti/` — only the install name changed.
 
 On first launch, `niti` opens a picker: how many teammates (1–6), then per teammate — provider,
 model, name, and a one-line job description. **29 providers / 152 models** from the

@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/niti/tui/internal/api"
-	"github.com/niti/tui/internal/theme"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
 )
 
 func TestTruncate(t *testing.T) {
@@ -389,5 +389,73 @@ func TestTranscriptCommandOpensTheFullLogInThePager(t *testing.T) {
 	m.submit("/transcript nope")
 	if !strings.Contains(m.status, "unknown agent") {
 		t.Fatalf("an unknown agent should say so, got %q", m.status)
+	}
+}
+
+// A stray follow-up typed while a half-finished plan is still on the board used to silently
+// replace it: the core plans every plain message from scratch, so the original detailed goal was
+// gone and a terse sentence became the whole spec. The first enter now explains and holds.
+func TestNewGoalIsHeldWhileTheBoardHasUnfinishedWork(t *testing.T) {
+	var submitted int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		submitted++
+		w.Write([]byte(`{"accepted":true}`))
+	}))
+	defer srv.Close()
+
+	m := model(1)
+	m.client = api.New(srv.URL, "tok")
+	m.tasks = []api.Task{{ID: "t1", Status: "failed"}, {ID: "t2", Status: "done"}}
+	m.input.SetValue("alright skip the first prompt")
+
+	held, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = held.(Model)
+	if cmd != nil {
+		t.Fatal("the first enter must not submit while unfinished tasks are on the board")
+	}
+	if !strings.Contains(m.status, "unfinished") || !strings.Contains(m.status, "/resume") {
+		t.Errorf("the warning should name the unfinished work and point at /resume, got %q", m.status)
+	}
+	if m.input.Value() == "" {
+		t.Error("the typed goal must survive the warning — retyping it is the whole thing we're avoiding")
+	}
+
+	// Second press inside the window commits, exactly like the ctrl+c quit confirmation.
+	confirmed, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = confirmed.(Model)
+	if cmd == nil {
+		t.Fatal("a second enter should start the new goal")
+	}
+	cmd()
+	if submitted != 1 {
+		t.Errorf("expected exactly one submit after confirming, got %d", submitted)
+	}
+}
+
+// The guard is about *new goals*. A finished board, a running session, and slash commands all
+// have to stay on the fast path — /resume above all, since that's what the warning recommends.
+func TestUnfinishedGuardLeavesCommandsAndCleanBoardsAlone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ok":true,"message":"resuming"}`))
+	}))
+	defer srv.Close()
+
+	m := model(1)
+	m.client = api.New(srv.URL, "tok")
+	m.tasks = []api.Task{{ID: "t1", Status: "failed"}}
+
+	// /resume is a command: never held, even with a failed board.
+	m.input.SetValue("/resume")
+	if _, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Error("/resume must not be blocked by the unfinished-board guard")
+	}
+
+	// An all-done board is finished work — a fresh goal on top of it is exactly what was meant.
+	done := model(1)
+	done.client = api.New(srv.URL, "tok")
+	done.tasks = []api.Task{{ID: "t1", Status: "done"}}
+	done.input.SetValue("now add tests")
+	if _, cmd := done.onKey(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Error("a completed board should submit a new goal straight away")
 	}
 }

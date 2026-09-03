@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/niti/tui/internal/api"
-	"github.com/niti/tui/internal/theme"
-	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 )
 
 type eventMsg api.Event
@@ -112,7 +112,7 @@ type Model struct {
 	out       output      // the pager a multi-line command result opens, when open
 	diffv     diffview    // full-screen state for the diff-viewing approval (edit/write_file only)
 	tp        themePicker // the ctrl+t theme swatch picker, when open
-	view      string   // "panes" | "usage"
+	view      string      // "panes" | "usage"
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
 	root string
@@ -129,7 +129,10 @@ type Model struct {
 	// because a frozen-but-normal-looking frame is the worst way to learn the core is gone.
 	disconnected bool
 	quitArm      time.Time // when ctrl+c was last pressed — a second press inside quitGrace leaves
-	quitting     bool
+	// When a plain-text goal was last held back because the board still has unfinished work. Same
+	// two-press shape as quitArm: the first enter explains, a second inside the window commits.
+	resubmitArm time.Time
+	quitting    bool
 }
 
 // Long enough that pasting a file or a stack trace is not silently clipped; still bounded, since
@@ -139,6 +142,10 @@ const promptCharLimit = 100_000
 // Quitting takes two keystrokes (or /quit) on purpose: this window holds a live session, and a
 // stray ctrl+c aimed at cancelling a runaway agent used to take the whole thing down with it.
 const quitGrace = 3 * time.Second
+
+// Longer than quitGrace on purpose: this warning is a sentence about losing a plan, not four words,
+// and it has to be readable before the second press commits.
+const resubmitGrace = 6 * time.Second
 
 // New builds the model. `events` is the already-open SSE channel; `cancel` tears down the stream.
 func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, cancel context.CancelFunc) Model {
@@ -316,6 +323,11 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.quitArm = time.Time{} // any other key disarms: the two presses have to be consecutive
+	// Same rule, minus enter itself — enter is handled below and is the key that CONFIRMS the new
+	// goal, so disarming on it here would cancel the confirmation before it could ever be given.
+	if k.String() != "enter" {
+		m.resubmitArm = time.Time{}
+	}
 	if m.out.open {
 		return m, m.outputKey(k)
 	}
@@ -395,13 +407,36 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		m.mode = map[string]string{"build": "plan", "plan": "build"}[m.mode]
 		m.status = m.mode + " mode"
+		// Coming back to BUILD with the planned goal still in the prompt: say what enter does now,
+		// since the whole point of keeping the text there is that it runs the plan as reviewed.
+		if m.mode == "build" && strings.TrimSpace(m.input.Value()) != "" && len(m.tasks) > 0 {
+			m.status = "build mode — enter runs the plan on the board"
+		}
 		return m, nil
 	case "ctrl+t":
 		m.openThemePicker()
 		return m, nil
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
-		m.input.SetValue("")
+		// Every plain message is a BRAND NEW goal to the core: the planner only ever sees the text
+		// just typed, never the previous run's. So a follow-up sent while a half-finished plan is
+		// still on the board silently throws that plan away and re-plans from a sentence that was
+		// never meant to stand on its own — which is exactly how a detailed spec turned into two
+		// generic tasks. Hold the first press and say so; /resume continues the real plan instead.
+		if text != "" && !strings.HasPrefix(text, "/") && m.status != "running" && m.unfinishedTasks() > 0 {
+			if m.resubmitArm.IsZero() || time.Since(m.resubmitArm) > resubmitGrace {
+				m.resubmitArm = time.Now()
+				m.status = fmt.Sprintf("%d unfinished task(s) on the board — /resume continues them; press enter again to start a new goal instead (abandons the plan)", m.unfinishedTasks())
+				return m, nil // input deliberately left intact, nothing submitted
+			}
+		}
+		m.resubmitArm = time.Time{}
+		// A goal sent in PLAN mode stays in the prompt: shift+tab then enter is how you run the
+		// plan you just read, and the core matches the goal by text to skip a second planning
+		// call (see runProject's takeApprovedPlan). Commands and BUILD goals clear as before.
+		if !(m.mode == "plan" && text != "" && !strings.HasPrefix(text, "/")) {
+			m.input.SetValue("")
+		}
 		m.refreshMenu()
 		return m, m.submit(text)
 	}
@@ -414,6 +449,18 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.refreshMenu()
 	return m, cmd
+}
+
+// How many tasks on the board haven't finished. Drives the new-goal guard above: a board that is
+// entirely done is finished work, and a fresh goal on top of it is exactly what the user means.
+func (m Model) unfinishedTasks() int {
+	n := 0
+	for _, t := range m.tasks {
+		if t.Status != "done" {
+			n++
+		}
+	}
+	return n
 }
 
 // scroll moves whichever list has the screen by one row. Nothing open means nothing to scroll —

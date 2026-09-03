@@ -348,16 +348,35 @@ $("approval-always").addEventListener("click", () => answerApproval(true, "agent
 $("approval-no").addEventListener("click", () => answerApproval(false));
 
 // ---------- prompt bar: submit a whole-team goal (POST /prompt) ----------
+// BUILD runs the goal; PLAN stops once the orchestrator has built the task DAG, so you can read it
+// (and edit the team) before any agent writes a file — the dashboard's copy of the TUI's shift+tab.
+let promptMode = "build";
 function setPromptEnabled() {
   $("prompt-send").disabled = running;
   $("prompt-input").disabled = running;
+  for (const b of $("prompt-mode").querySelectorAll("button")) b.disabled = running;
 }
+$("prompt-mode").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b || running) return;
+  promptMode = b.dataset.mode;
+  for (const x of $("prompt-mode").querySelectorAll("button")) x.classList.toggle("active", x === b);
+  $("prompt-status").textContent = "";
+});
 async function submitPrompt() {
   const text = $("prompt-input").value.trim();
   if (!text || running) return;
-  const res = await authedFetch("/prompt", { text, mode: "build" });
-  if (res.ok) { $("prompt-input").value = ""; $("prompt-status").textContent = ""; }
-  else { const e = await res.json().catch(() => ({})); $("prompt-status").textContent = e.error || "failed"; }
+  const mode = promptMode;
+  const res = await authedFetch("/prompt", { text, mode });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    $("prompt-status").textContent = e.error || "failed";
+    return;
+  }
+  // The goal stays in the box after a plan: switching to Build and sending it again is how you run
+  // the plan you just read, and the core matches it by text to skip a second planning call.
+  if (mode === "plan") $("prompt-status").textContent = "planning — switch to Build and send again to run it";
+  else { $("prompt-input").value = ""; $("prompt-status").textContent = ""; }
 }
 $("prompt-send").addEventListener("click", submitPrompt);
 $("prompt-input").addEventListener("keydown", (e) => { if (e.key === "Enter") submitPrompt(); });

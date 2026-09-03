@@ -383,7 +383,7 @@ async function runInit(): Promise<void> {
     usedIds.add(id);
     const toolsRaw = prompt("  Allowed tools [read_file,write_file,edit,shell]:")?.trim();
     const allowedTools = (toolsRaw || "read_file,write_file,edit,shell").split(",").map((s) => s.trim()).filter(Boolean);
-    roles.push({ id, provider, model, role, systemPrompt: `You are the ${role}. Implement your assigned tasks directly and keep responses concise.`, allowedTools });
+    roles.push({ id, provider, model, role, systemPrompt: `You are the ${role}. Implement your assigned tasks directly and efficiently — you have a limited number of tool calls, so spend them on the task rather than exploring around it. Stay inside the project.`, allowedTools });
     console.log(`  ✓ ${role} → ${provider}/${model}`);
     if ((prompt("Assign another model to a role? (y = another / Enter = start):")?.trim().toLowerCase() ?? "") !== "y") break;
   }
