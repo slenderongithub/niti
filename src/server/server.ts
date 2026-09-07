@@ -75,8 +75,6 @@ export function startServer(
   // buildFileGraph walks the project and reads every source file to extract imports — synchronously,
   // on the event loop. The graph page polls this, so a large repo stalled every other route
   // (including the SSE stream) for the duration, repeatedly, for a tree that changes rarely.
-  // ponytail: flat TTL, not invalidation off the file watcher — a few seconds of staleness in a
-  // visualisation is invisible, and wiring it to the watcher is a lot of machinery for that.
   let graphCache: { at: number; root: string; value: ReturnType<typeof buildFileGraph> } | undefined;
   const GRAPH_TTL_MS = 10_000;
   const fileGraph = (root: string) => {
@@ -86,6 +84,12 @@ export function startServer(
     graphCache = { at: now, root, value };
     return value;
   };
+  // The watcher already tells every SSE client a file changed outside niti (kind: "agent_event",
+  // type: "external_change") for the graph page to react to live — drop the cache on the same
+  // signal so the refetch it triggers isn't served stale for up to GRAPH_TTL_MS.
+  engine.hub.subscribe((e) => {
+    if (e.kind === "agent_event" && e.event.type === "external_change") graphCache = undefined;
+  });
 
   const sse = (fromSeq: number): Response => {
     const enc = new TextEncoder();

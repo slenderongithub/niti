@@ -61,6 +61,13 @@ const toScreen = (wx, wy) => ({ x: (wx - cam.cx) * cam.k + W / 2, y: (wy - cam.c
 const toWorld = (sx, sy) => ({ x: cam.cx + (sx - W / 2) / cam.k, y: cam.cy + (sy - H / 2) / cam.k });
 
 // ---------- data loading ----------
+// A file changed on disk (engine.ts's watcher, via SSE) refetches the project graph — debounced so a
+// git checkout or formatter touching many files at once triggers one refetch, not one per file.
+let liveRefreshTimer = null;
+function scheduleLiveRefresh() {
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = setTimeout(() => { if (mode === "project") loadProject(); }, 400);
+}
 async function loadProject() {
   setConn("loading…", "");
   try {
@@ -81,8 +88,10 @@ async function loadProject() {
   }
 }
 
-// Models mode: seed from /session, then live-update over SSE (mirrors web/app.js).
+// Models mode: seed from /session, then live-update over SSE (mirrors web/app.js). The same SSE
+// connection also carries file-change events used to live-refresh project mode (see connectEvents).
 let es = null;
+let sseOpen = false;
 const mnodes = new Map(); // id -> node record (persists across toggles within models mode)
 const medges = new Map(); // "a\0b" -> {from,to}
 // Pseudo-senders, not teammates: "system" announces file edits made outside niti (engine.ts's
@@ -110,14 +119,24 @@ async function loadModels() {
   } catch {}
   syncModels();
   buildLegend(Object.entries(STATUS_FILL).map(([k, c]) => ({ label: k, color: c })), "agent status");
-  if (es) es.close();
+  setConn(sseOpen ? "live" : "connecting…", sseOpen ? "live" : "");
+}
+// One SSE connection for the life of the page, independent of mode — project mode needs it for
+// live file-change refreshes just as much as models mode needs it for agent status.
+function connectEvents() {
   es = new EventSource(`/events?from=0&token=${encodeURIComponent(TOKEN)}`);
-  let everOpened = false;
-  es.onopen = () => { everOpened = true; setConn("live", "live"); };
-  es.onerror = () => setConn(everOpened ? "reconnecting…" : TOKEN ? "unauthorized — check the ?token=" : "no token in this URL", "dead");
+  es.onopen = () => { sseOpen = true; if (mode === "models") setConn("live", "live"); };
+  es.onerror = () => {
+    if (mode === "models") setConn(sseOpen ? "reconnecting…" : TOKEN ? "unauthorized — check the ?token=" : "no token in this URL", "dead");
+    sseOpen = false;
+  };
   es.onmessage = (ev) => { let e; try { e = JSON.parse(ev.data); } catch { return; } onEvent(e); };
 }
 function onEvent(e) {
+  if (e.kind === "agent_event" && e.event?.type === "external_change") {
+    if (mode === "project") scheduleLiveRefresh();
+    return; // the watcher's "system" pseudo-sender isn't an agent — nothing for models mode to do here
+  }
   if (e.kind === "agent_message" && e.message) {
     const m = e.message; ensureM(m.from); if (m.to !== "*") ensureM(m.to);
     const targets = m.to === "*" ? [...mnodes.keys()].filter((k) => k !== m.from) : [m.to];
@@ -708,7 +727,7 @@ function setMode(m) {
   // with no colorIndex, drawn through the pixel-avatar path) — a real race that only shows up when
   // the switch is fast, which crashed the render loop and froze the canvas on a stale frame.
   setGraph([], []);
-  if (m === "project") { if (es) { es.close(); es = null; } loadProject().then(() => fit(false)); }
+  if (m === "project") { loadProject().then(() => fit(false)); }
   else { loadModels(); setTimeout(() => fit(false), 60); }
 }
 document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
@@ -763,5 +782,6 @@ document.addEventListener("niti-theme", recolorTheme);
 
 // ---------- boot ----------
 resize();
+connectEvents();
 loadProject().then(() => fit(false));
 requestAnimationFrame(draw);
