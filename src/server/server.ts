@@ -96,11 +96,12 @@ export function startServer(
     graphCache = { at: now, root, value };
     return value;
   };
-  // The watcher already tells every SSE client a file changed outside niti (kind: "agent_event",
-  // type: "external_change") for the graph page to react to live — drop the cache on the same
-  // signal so the refetch it triggers isn't served stale for up to GRAPH_TTL_MS.
+  // The watcher tells every SSE client a file changed outside niti (kind: "agent_event", type:
+  // "external_change"), and an agent's own write_file/edit publishes "file_edit" — the graph page
+  // reacts live to both, so the cache has to drop on both, or its refetch could still be served up
+  // to GRAPH_TTL_MS of stale data.
   engine.hub.subscribe((e) => {
-    if (e.kind === "agent_event" && e.event.type === "external_change") graphCache = undefined;
+    if (e.kind === "agent_event" && (e.event.type === "external_change" || e.event.type === "file_edit")) graphCache = undefined;
   });
 
   const sse = (fromSeq: number): Response => {

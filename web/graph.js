@@ -133,7 +133,11 @@ function connectEvents() {
   es.onmessage = (ev) => { let e; try { e = JSON.parse(ev.data); } catch { return; } onEvent(e); };
 }
 function onEvent(e) {
-  if (e.kind === "agent_event" && e.event?.type === "external_change") {
+  // external_change: the watcher noticed an edit made outside niti. file_edit: an agent's own
+  // write_file/edit *inside* this session — self-write suppression on the watcher means that one
+  // never fires external_change, so without this the graph never refreshed for the case people
+  // actually watch it for: agents creating/editing files live.
+  if (e.kind === "agent_event" && (e.event?.type === "external_change" || e.event?.type === "file_edit")) {
     if (mode === "project") scheduleLiveRefresh();
     return; // the watcher's "system" pseudo-sender isn't an agent — nothing for models mode to do here
   }

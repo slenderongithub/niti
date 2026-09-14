@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Engine } from "../engine.ts";
@@ -216,4 +216,23 @@ test("a submitted goal streams orchestration + agent-message events over SSE", a
   expect(buf).toContain('"type":"complete"');
   // the DAG really ran and both tasks finished
   expect(engine.orch.all.every((t) => t.status === "done")).toBe(true);
+});
+
+test("/graph's cache drops on a file_edit event, not just external_change — an agent's own write is not served stale", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-graph-cache-"));
+  writeFileSync(join(root, "a.ts"), "export const a = 1;\n");
+  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false, root });
+  const h = startServer(engine);
+  track(h);
+
+  const before = await (await fetch(`${h.url}/graph?token=${h.token}`)).json();
+  expect(before.nodes).toHaveLength(1); // just a.ts
+
+  // A new file lands on disk (as an agent's write_file would produce) — GRAPH_TTL_MS is 10s, so
+  // without dropping the cache on file_edit, the next fetch would still return the stale 1-node graph.
+  writeFileSync(join(root, "b.ts"), "export const b = 2;\n");
+  engine.bus.publish({ agentId: "frontend", type: "file_edit", payload: "wrote b.ts", time: Date.now() });
+
+  const after = await (await fetch(`${h.url}/graph?token=${h.token}`)).json();
+  expect(after.nodes).toHaveLength(2); // a.ts and b.ts — cache was invalidated, not served stale
 });
