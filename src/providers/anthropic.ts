@@ -2,6 +2,26 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, RateLimit } from "./provider.ts";
 import { parseRateLimit } from "./provider.ts";
 
+const EPHEMERAL: Anthropic.CacheControlEphemeral = { type: "ephemeral" };
+
+// Marks the LAST content block of a message as a cache breakpoint. Anthropic caches everything up
+// to and including a marked block, so marking the second-to-newest message caches the whole
+// growing conversation prefix — the newest one or two turns are the only "fresh" tokens each call.
+// Thinking/redacted-thinking blocks can't carry cache_control at all — when a replayed assistant
+// turn (Turn.raw) ends in one, this just skips marking that particular message; the next call
+// still gets a fresh chance once a cacheable block is at the end.
+function withCacheControl(m: Anthropic.MessageParam): Anthropic.MessageParam {
+  if (typeof m.content === "string") {
+    return { ...m, content: [{ type: "text", text: m.content, cache_control: EPHEMERAL }] };
+  }
+  if (!m.content.length) return m;
+  const last = m.content[m.content.length - 1]!;
+  if (last.type === "thinking" || last.type === "redacted_thinking") return m;
+  const content = [...m.content];
+  content[content.length - 1] = { ...last, cache_control: EPHEMERAL };
+  return { ...m, content };
+}
+
 function blocksToReply(content: Anthropic.ContentBlock[]): ProviderReply {
   let text = "";
   const toolCalls: ToolCall[] = [];
@@ -67,12 +87,23 @@ export class AnthropicProvider implements Provider {
       };
     });
 
+    // Prompt caching: same caution as `thinking` above — cache_control is part of the wire format,
+    // not guaranteed to be understood by every Anthropic-*format* third party, so it's scoped to
+    // native Anthropic. Two breakpoints: the system+tools block (below), and the second-to-newest
+    // message here, which caches the whole growing conversation prefix behind it.
+    if (this.native && messages.length >= 2) {
+      messages[messages.length - 2] = withCacheControl(messages[messages.length - 2]!);
+    }
+
     const params: Anthropic.MessageCreateParamsNonStreaming = {
       model: this.model,
       max_tokens: this.maxOutput,
       // safe now: assistant turns replay native blocks (Turn.raw) — but only Anthropic defines it
       ...(this.native ? { thinking: { type: "adaptive" as const } } : {}),
-      system: sysPrompt,
+      // Rendered before `messages` in Anthropic's cache lookup order (tools → system → messages),
+      // so this one breakpoint also covers the tools block below it, as long as `tools` is
+      // byte-identical call to call — see agent.ts's buildTools() memoization.
+      system: this.native ? [{ type: "text", text: sysPrompt, cache_control: EPHEMERAL }] : sysPrompt,
       messages,
       ...(tools.length
         ? {
@@ -98,7 +129,14 @@ export class AnthropicProvider implements Provider {
       // Optional. Anthropic itself always sends usage, but the Anthropic-*format* third parties
       // this class also serves are under no obligation to, and an unguarded read threw a
       // TypeError from inside the provider — surfacing as a failed task, not a missing metric.
-      usage: msg.usage ? { inputTokens: msg.usage.input_tokens ?? 0, outputTokens: msg.usage.output_tokens ?? 0 } : undefined,
+      usage: msg.usage
+        ? {
+            inputTokens: msg.usage.input_tokens ?? 0,
+            outputTokens: msg.usage.output_tokens ?? 0,
+            cacheReadTokens: msg.usage.cache_read_input_tokens ?? undefined,
+            cacheWriteTokens: msg.usage.cache_creation_input_tokens ?? undefined,
+          }
+        : undefined,
       rateLimit: this.lastRateLimit,
     };
   }

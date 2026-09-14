@@ -173,6 +173,25 @@ test("the read-only commands report the engine's actual state", async () => {
   expect((await r.run(e, "status")).message).toContain("team      1 agents");
 });
 
+test("/cost shows a cache line when a provider actually reported cache activity, and omits it otherwise", async () => {
+  const r = new CommandRegistry(BUILTIN_COMMANDS);
+  const e = new Engine({
+    configs: [{ id: "a", provider: "anthropic", model: "claude-sonnet-5", role: "r", systemPrompt: "s" }],
+    makeProvider: () => stub,
+  });
+  e.usage.record("a", 1000, 200, 900, 50);
+  const withCache = (await r.run(e, "cost")).message;
+  expect(withCache).toContain("cache 900in 50wr");
+
+  const e2 = new Engine({
+    configs: [{ id: "a", provider: "anthropic", model: "claude-sonnet-5", role: "r", systemPrompt: "s" }],
+    makeProvider: () => stub,
+  });
+  e2.usage.record("a", 1000, 200); // no cache activity at all
+  const withoutCache = (await r.run(e2, "cost")).message;
+  expect(withoutCache).not.toContain("cache");
+});
+
 test("/clear empties the board, and refuses while work is running", async () => {
   const r = new CommandRegistry(BUILTIN_COMMANDS);
   const e = engine();

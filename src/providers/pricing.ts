@@ -74,10 +74,31 @@ export function priceFor(provider: string, model: string): Price | undefined {
   return best;
 }
 
+// Anthropic's standard ephemeral cache multipliers, applied against the model's own input price: a
+// cache write costs slightly more than a fresh input token (writing the cache costs something),
+// a cache read costs a small fraction of one. OpenAI's own auto-caching only ever reports reads
+// (no write-side token count exists to bill), so cacheWriteTokens is simply 0 there — same formula
+// still applies correctly.
+const CACHE_WRITE_MULTIPLIER = 1.25;
+const CACHE_READ_MULTIPLIER = 0.1;
+
 // USD for one agent's cumulative usage. 0 for an unpriced model, so a mixed team still reports the
 // cost of the models it does know — `priced` tells the caller whether the total is complete.
-export function costOf(provider: string, model: string, inputTokens: number, outputTokens: number): { usd: number; priced: boolean } {
+export function costOf(
+  provider: string,
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens = 0,
+  cacheWriteTokens = 0,
+): { usd: number; priced: boolean } {
   const p = priceFor(provider, model);
   if (!p) return { usd: 0, priced: false };
-  return { usd: (inputTokens * p.input + outputTokens * p.output) / 1_000_000, priced: true };
+  const usd =
+    (inputTokens * p.input +
+      outputTokens * p.output +
+      cacheReadTokens * p.input * CACHE_READ_MULTIPLIER +
+      cacheWriteTokens * p.input * CACHE_WRITE_MULTIPLIER) /
+    1_000_000;
+  return { usd, priced: true };
 }

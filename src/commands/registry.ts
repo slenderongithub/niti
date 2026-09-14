@@ -205,10 +205,13 @@ export const BUILTIN_COMMANDS: Command[] = [
           lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  (no longer on the team — unpriced)`);
           continue;
         }
-        const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens);
+        const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens);
         total += usd;
         if (!priced) complete = false;
-        lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}`);
+        // A savings mechanism nobody can see delivers no visible value — show it whenever a
+        // provider has actually reported any cache activity for this agent.
+        const cache = usage.cacheReadTokens || usage.cacheWriteTokens ? ` (cache ${usage.cacheReadTokens}in ${usage.cacheWriteTokens}wr)` : "";
+        lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}${cache}`);
       }
       if (!lines.length) return { ok: true, message: "nothing spent yet" };
       return { ok: true, message: [...lines, `TOTAL $${total.toFixed(4)}${complete ? "" : "+"}`].join("\n") };

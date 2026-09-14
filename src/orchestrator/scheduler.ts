@@ -153,9 +153,12 @@ async function runReviewGate(t: TaskNode, prompt: string, runner: Agent, agentsB
 
   for (let round = 1; round <= MAX_REVIEW_ROUNDS; round++) {
     emit?.({ type: "review", taskId: t.id, reviewer: reviewer.config.id, phase: "requested", time: Date.now() });
+    // Capped the same as dependency context, for consistency — the reviewer's own prompt already
+    // directs it to verify independently (git diff/read_file/diagnostics) rather than trust this
+    // self-reported summary as ground truth, so truncating it loses narrative, not correctness.
     const review = await reviewer.runDetailed(
       `Review the work for task ${t.id}: ${t.description}${t.acceptance ? `\nAcceptance: ${t.acceptance}` : ""}\n\n` +
-        `Reported output:\n${t.output}\n\nInspect the actual changes (shell "git diff", read_file, diagnostics tools) as needed. ` +
+        `Reported output:\n${(t.output ?? "").slice(0, DEP_CONTEXT_MAX)}\n\nInspect the actual changes (shell "git diff", read_file, diagnostics tools) as needed. ` +
         `End with exactly one line: "VERDICT: approve" or "VERDICT: changes_requested" followed by why.`,
       { taskId: t.id },
     );
@@ -217,13 +220,16 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     emit?.({ type: "task_started", taskId: t.id, role: t.role, time: Date.now() });
     bus?.publish({ agentId: t.role, type: "thought", payload: `starting ${t.id}: ${t.description}`, time: Date.now() });
 
-    const depContext = t.dependsOn
-      .map((id) => byId.get(id))
-      .filter((d): d is TaskNode => Boolean(d?.output))
-      // Bounded: this concatenates every prerequisite's full output, so a diamond dependency on
-      // three verbose tasks could overflow the window before the agent had said anything.
-      // ponytail: flat per-dependency cap, not a token budget — upgrade if real plans hit it.
-      .map((d) => `--- Output from ${d.assignedTo} ("${d.description}") ---\n${(d.output ?? "").slice(0, DEP_CONTEXT_MAX)}`)
+    const depsWithOutput = t.dependsOn.map((id) => byId.get(id)).filter((d): d is TaskNode => Boolean(d?.output));
+    // A shared pool across ALL dependencies, not a flat cap per dependency — a diamond task with 3
+    // verbose prerequisites used to send up to 3x DEP_CONTEXT_MAX total, unbounded by dependency
+    // COUNT even though each one was individually capped. A single-dependency task is unaffected
+    // (DEP_CONTEXT_MAX / 1 = DEP_CONTEXT_MAX, identical to before this change).
+    // ponytail: a flat char pool, not a token budget; the 300-char floor guards a pathological
+    // high-fan-in task from getting near-zero context per dependency, not a real budget guarantee.
+    const perDepCap = depsWithOutput.length ? Math.max(300, Math.floor(DEP_CONTEXT_MAX / depsWithOutput.length)) : DEP_CONTEXT_MAX;
+    const depContext = depsWithOutput
+      .map((d) => `--- Output from ${d.assignedTo} ("${d.description}") ---\n${(d.output ?? "").slice(0, perDepCap)}`)
       .join("\n\n");
     const accept = t.acceptance ? `\n\nAcceptance criterion: ${t.acceptance}` : "";
     const prompt = `${t.description}${accept}${depContext ? `\n\nContext from completed prerequisites:\n${depContext}` : ""}`;
@@ -238,7 +244,9 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
       // Actually fail over. The whole point of a multi-provider team is that Anthropic's 429
       // doesn't stall the run — but this loop re-ran the *same* exhausted agent three times while
       // publishing "failover", so an idle Gemini agent was never tried and the UI said otherwise.
-      const alt = agents.find((a) => a.config.id !== runner!.config.id && !running.has(a.config.id) && !a.config.lead);
+      const alt = agents.find(
+        (a) => a.config.id !== runner!.config.id && !running.has(a.config.id) && !a.config.lead && !a.nearLimit?.(),
+      );
       if (alt) {
         runner = alt;
         t.role = alt.config.id;

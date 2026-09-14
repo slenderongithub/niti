@@ -29,6 +29,20 @@ test("cost is per million tokens, input and output billed separately", () => {
   expect(usd).toBeCloseTo(3 + 0.2 * 15, 6); // $3 in + $3 out
 });
 
+test("cache read/write tokens are priced off the model's own input rate, not billed as full-price input", () => {
+  const base = costOf("anthropic", "claude-sonnet-5", 1_000_000, 0);
+  const withCache = costOf("anthropic", "claude-sonnet-5", 1_000_000, 0, 1_000_000, 1_000_000);
+  // input=$3, +cache-read (0.1x input)=$0.30, +cache-write (1.25x input)=$3.75
+  expect(withCache.usd).toBeCloseTo(base.usd + 0.3 + 3.75, 6);
+  expect(withCache.priced).toBe(true);
+});
+
+test("costOf defaults cache tokens to 0 — omitting them changes nothing", () => {
+  const withDefaults = costOf("anthropic", "claude-sonnet-5", 500_000, 100_000);
+  const explicitZero = costOf("anthropic", "claude-sonnet-5", 500_000, 100_000, 0, 0);
+  expect(withDefaults).toEqual(explicitZero);
+});
+
 test("the shipped default models are priced, not silently $0.00", () => {
   // Google is hand-maintained in catalog.ts, so GENERATED_PRICES never covers it — and the
   // `-latest` aliases match no version-prefixed entry. The default team read "$0.00+" out of the box.

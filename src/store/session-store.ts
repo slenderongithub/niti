@@ -126,9 +126,21 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO messages (id, session_id, role, seq, input_tokens, output_tokens, reasoning_tokens, cache_tokens, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
         )
-        .run(id, sessionId, role, next.n, usage?.inputTokens ?? 0, usage?.outputTokens ?? 0, now);
+        .run(
+          id,
+          sessionId,
+          role,
+          next.n,
+          usage?.inputTokens ?? 0,
+          usage?.outputTokens ?? 0,
+          // Combined read+write — the schema's cache_tokens column is singular, not split. The
+          // live UsageTracker keeps the read/write split in memory for /cost; this column is for
+          // the persisted per-message record, not a second source of truth for the split.
+          (usage?.cacheReadTokens ?? 0) + (usage?.cacheWriteTokens ?? 0),
+          now,
+        );
       const ins = this.db.query("INSERT INTO parts (message_id, seq, type, content, created_at) VALUES (?, ?, ?, ?, ?)");
       parts.forEach((p, i) => ins.run(id, i, p.type, JSON.stringify(p.content ?? null), now));
       this.db.query("UPDATE sessions SET updated_at = ? WHERE id = ?").run(now, sessionId);

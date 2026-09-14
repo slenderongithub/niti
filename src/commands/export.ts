@@ -62,7 +62,7 @@ export async function buildExportReport(engine: Engine): Promise<{ path: string;
   for (const { agentId, usage } of engine.usage.snapshot()) {
     const cfg = engine.configs.find((c) => c.id === agentId);
     if (!cfg) continue;
-    const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens);
+    const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens);
     total += usd;
     if (!priced) complete = false;
     lines.push(`- ${agentId}: ${usage.inputTokens}in ${usage.outputTokens}out — $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}`);

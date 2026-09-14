@@ -124,6 +124,16 @@ export class OpenAIProvider implements Provider {
   }
 }
 
-function mapUsage(u: { prompt_tokens?: number; completion_tokens?: number } | undefined) {
-  return u ? { inputTokens: u.prompt_tokens ?? 0, outputTokens: u.completion_tokens ?? 0 } : undefined;
+function mapUsage(
+  u: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } | undefined,
+) {
+  if (!u) return undefined;
+  return {
+    inputTokens: u.prompt_tokens ?? 0,
+    outputTokens: u.completion_tokens ?? 0,
+    // OpenAI auto-caches identical prompt prefixes with zero code required on our side — this only
+    // surfaces the savings that already exist, it doesn't create them. No write-side count exists
+    // to report (there's no separate "cache write" action, unlike Anthropic's explicit markers).
+    cacheReadTokens: u.prompt_tokens_details?.cached_tokens ?? undefined,
+  };
 }

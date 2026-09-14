@@ -1,4 +1,4 @@
-import type { Provider, Turn } from "../providers/provider.ts";
+import type { Provider, Turn, Usage } from "../providers/provider.ts";
 
 // A task's turn array grows with every tool round-trip; past a point the model starts ignoring
 // earlier instructions. compactTurns replaces everything but the most recent turns with one
@@ -16,7 +16,7 @@ export async function compactTurns(
   turns: Turn[],
   provider: Provider,
   keepRecent = KEEP_RECENT,
-  onUsage?: (u: { inputTokens: number; outputTokens: number }) => void,
+  onUsage?: (u: Usage) => void,
 ): Promise<Turn[]> {
   if (turns.length <= keepRecent) return turns;
   let cut = turns.length - keepRecent;

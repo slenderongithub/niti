@@ -65,6 +65,11 @@ export type Turn =
 export interface Usage {
   inputTokens: number;
   outputTokens: number;
+  // Anthropic (and, per its own auto-caching, OpenAI) reports how much of inputTokens was served
+  // from cache vs. freshly written to it. Undefined, not 0, when a provider doesn't report it at
+  // all — 0 would claim "cache was checked and missed," which isn't true for Gemini today.
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 // Account-level quota left, read from response rate-limit headers.

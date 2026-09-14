@@ -72,6 +72,20 @@ test("usage is normalised, and a reply with no choices is empty rather than a cr
   expect(await q.send("s", [{ role: "user", text: "x" }], [])).toMatchObject({ text: "", toolCalls: [] });
 });
 
+test("cached_tokens surfaces as cacheReadTokens — OpenAI's auto-caching needs no request-side change to report", async () => {
+  const p = new OpenAIProvider("gpt-4o", "k");
+  withStub(p, reply({ content: "hi" }, { prompt_tokens: 1200, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 1024 } }));
+  const out = await p.send("s", [{ role: "user", text: "x" }], []);
+  expect(out.usage).toMatchObject({ inputTokens: 1200, outputTokens: 3, cacheReadTokens: 1024 });
+});
+
+test("cacheReadTokens is undefined, not 0, when OpenAI doesn't report prompt_tokens_details", async () => {
+  const p = new OpenAIProvider("gpt-4o", "k");
+  withStub(p, reply({ content: "hi" }, { prompt_tokens: 10, completion_tokens: 3 }));
+  const out = await p.send("s", [{ role: "user", text: "x" }], []);
+  expect(out.usage?.cacheReadTokens).toBeUndefined();
+});
+
 test("no tools means no `tools` key at all — some endpoints reject an empty array", async () => {
   const p = new OpenAIProvider("gpt-4o", "k");
   const seen = withStub(p, reply({ content: "ok" }));

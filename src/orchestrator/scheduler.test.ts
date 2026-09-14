@@ -413,3 +413,108 @@ test("an exhausted task fails over to a different agent, not the same one again"
   expect(tasks[0]!.status).toBe("done");
   expect(tasks[0]!.assignedTo).toBe("b");
 });
+
+test("failover skips an idle teammate that is itself near its rate limit", async () => {
+  const tried: string[] = [];
+  const a: any = { config: { id: "a", role: "A" }, output: "", async run() { tried.push("a"); return "exhausted"; } };
+  const b: any = { config: { id: "b", role: "B" }, nearLimit: () => true, output: "", async run() { tried.push("b"); return "done"; } };
+  const c: any = { config: { id: "c", role: "C" }, output: "c did it", async run() { tried.push("c"); return "done"; } };
+  const tasks = [node({ id: "t1", role: "a", description: "x" })];
+  await schedule(tasks, [a, b, c]);
+  expect(tried).toEqual(["a", "c"]); // b was skipped for being near its own limit
+  expect(tasks[0]!.status).toBe("done");
+  expect(tasks[0]!.assignedTo).toBe("c");
+});
+
+test("failover falls back to a same-agent retry when every idle teammate is near its limit", async () => {
+  const tried: string[] = [];
+  let calls = 0;
+  const a: any = {
+    config: { id: "a", role: "A" },
+    output: "",
+    async run() {
+      tried.push("a");
+      calls++;
+      return calls < 2 ? "exhausted" : "done";
+    },
+  };
+  const b: any = { config: { id: "b", role: "B" }, nearLimit: () => true, output: "", async run() { tried.push("b"); return "done"; } };
+  const tasks = [node({ id: "t1", role: "a", description: "x" })];
+  await schedule(tasks, [a, b]);
+  expect(tried).toEqual(["a", "a"]); // no failover — b was near its limit, so a retried itself
+  expect(tasks[0]!.status).toBe("done");
+  expect(tasks[0]!.assignedTo).toBe("a");
+});
+
+test("dependency context is a shared pool across all dependencies, not a flat cap per dependency", async () => {
+  const longOutput = "x".repeat(4000); // exactly DEP_CONTEXT_MAX on its own
+  const makeDep = (id: string): any => ({ config: { id, role: id }, output: longOutput, async run() { return "done"; } });
+  let capturedPrompt = "";
+  const dependent: any = {
+    config: { id: "d", role: "d" },
+    output: "",
+    async run(prompt: string) {
+      capturedPrompt = prompt;
+      return "done";
+    },
+  };
+  const tasks = [
+    node({ id: "t1", role: "a", description: "build a" }),
+    node({ id: "t2", role: "b", description: "build b" }),
+    node({ id: "t3", role: "c", description: "build c" }),
+    node({ id: "t4", role: "d", description: "integrate", dependsOn: ["t1", "t2", "t3"] }),
+  ];
+  await schedule(tasks, [makeDep("a"), makeDep("b"), makeDep("c"), dependent]);
+
+  const contextSection = capturedPrompt.split("Context from completed prerequisites:")[1] ?? "";
+  // Flat per-dependency caps would have put ~12000 chars of 'x' here (3 x 4000). The shared pool
+  // keeps the total near one DEP_CONTEXT_MAX (4000) regardless of how many dependencies contributed.
+  const totalXChars = (contextSection.match(/x/g) ?? []).length;
+  expect(totalXChars).toBeLessThan(4100);
+  expect(totalXChars).toBeGreaterThan(0); // and it's not truncated to nothing either
+});
+
+test("dependency context truncation doesn't touch a single-dependency task's existing budget", async () => {
+  const longOutput = "y".repeat(5000);
+  const dep: any = { config: { id: "a", role: "a" }, output: longOutput, async run() { return "done"; } };
+  let capturedPrompt = "";
+  const dependent: any = {
+    config: { id: "b", role: "b" },
+    output: "",
+    async run(prompt: string) {
+      capturedPrompt = prompt;
+      return "done";
+    },
+  };
+  const tasks = [node({ id: "t1", role: "a", description: "build" }), node({ id: "t2", role: "b", description: "use it", dependsOn: ["t1"] })];
+  await schedule(tasks, [dep, dependent]);
+
+  const contextSection = capturedPrompt.split("Context from completed prerequisites:")[1] ?? "";
+  const totalYChars = (contextSection.match(/y/g) ?? []).length;
+  expect(totalYChars).toBe(4000); // unchanged from the flat DEP_CONTEXT_MAX cap — one dependency, full budget
+});
+
+test("the review gate truncates a very long reported output instead of sending it in full", async () => {
+  const fe: any = {
+    config: { id: "fe", role: "FE", reviewer: "qa" },
+    output: "z".repeat(10_000),
+    async run() {
+      return "done";
+    },
+  };
+  let capturedReviewPrompt = "";
+  const qa: any = {
+    config: { id: "qa", role: "QA" },
+    output: "VERDICT: approve",
+    async run(prompt: string) {
+      capturedReviewPrompt = prompt;
+      return "done";
+    },
+  };
+  const tasks = [node({ id: "t1", role: "fe", description: "build" })];
+  await schedule(tasks, [fe, qa]);
+
+  const reportedSection = capturedReviewPrompt.split("Reported output:\n")[1]?.split("\n\nInspect")[0] ?? "";
+  expect(reportedSection.length).toBe(4000); // capped at DEP_CONTEXT_MAX, not the full 10,000 chars
+  expect(tasks[0]!.status).toBe("done"); // the (truncated) review still runs the gate correctly
+});

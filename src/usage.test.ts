@@ -9,9 +9,19 @@ test("UsageTracker accumulates per-agent and totals", () => {
   u.record("b", 200, 40);
 
   const snap = Object.fromEntries(u.snapshot().map((s) => [s.agentId, s.usage]));
-  expect(snap.a).toEqual({ inputTokens: 150, outputTokens: 30, calls: 2, lastInput: 50 });
-  expect(snap.b).toEqual({ inputTokens: 200, outputTokens: 40, calls: 1, lastInput: 200 });
-  expect(u.totals()).toEqual({ inputTokens: 350, outputTokens: 70, calls: 3 });
+  expect(snap.a).toEqual({ inputTokens: 150, outputTokens: 30, calls: 2, lastInput: 50, cacheReadTokens: 0, cacheWriteTokens: 0 });
+  expect(snap.b).toEqual({ inputTokens: 200, outputTokens: 40, calls: 1, lastInput: 200, cacheReadTokens: 0, cacheWriteTokens: 0 });
+  expect(u.totals()).toEqual({ inputTokens: 350, outputTokens: 70, calls: 3, cacheReadTokens: 0, cacheWriteTokens: 0 });
+});
+
+test("UsageTracker accumulates cache read/write tokens alongside input/output", () => {
+  const u = new UsageTracker();
+  u.record("a", 100, 20, 900, 50);
+  u.record("a", 50, 10, 400, 0);
+
+  const snap = Object.fromEntries(u.snapshot().map((s) => [s.agentId, s.usage]));
+  expect(snap.a).toMatchObject({ cacheReadTokens: 1300, cacheWriteTokens: 50 });
+  expect(u.totals()).toMatchObject({ cacheReadTokens: 1300, cacheWriteTokens: 50 });
 });
 
 test("UsageTracker keeps the latest rate limit per provider", () => {
