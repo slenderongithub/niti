@@ -99,3 +99,55 @@ test("subscribers see every posted message once", () => {
   b.post({ from: "backend", to: "frontend", kind: "answer", subject: "two", body: "" });
   expect(seen).toEqual(["one", "two"]);
 });
+
+test("remember/recall: a note is visible to every agent, not just the writer, and is never drained", () => {
+  const b = bus();
+  b.remember("frontend", "api-base-url", "https://api.internal");
+  expect(b.recall("api-base-url").map((n) => n.body)).toEqual(["https://api.internal"]);
+  // Read again — unlike drain(), recall() doesn't consume it.
+  expect(b.recall("api-base-url").map((n) => n.body)).toEqual(["https://api.internal"]);
+  expect(b.recall("no-such-key")).toEqual([]);
+});
+
+test("remember on an existing key overwrites it — latest write wins", () => {
+  const b = bus();
+  b.remember("frontend", "theme", "dark");
+  b.remember("backend", "theme", "light");
+  const notes = b.recall("theme");
+  expect(notes).toHaveLength(1);
+  expect(notes[0]!.body).toBe("light");
+  expect(notes[0]!.from).toBe("backend");
+});
+
+test("recall with no key returns the whole board", () => {
+  const b = bus();
+  b.remember("frontend", "a", "1");
+  b.remember("frontend", "b", "2");
+  expect(b.recall().map((n) => n.subject).sort()).toEqual(["a", "b"]);
+});
+
+test("notesVersion bumps on every remember, so a reader can detect change without diffing", () => {
+  const b = bus();
+  const v0 = b.getNotesVersion();
+  b.remember("frontend", "a", "1");
+  const v1 = b.getNotesVersion();
+  expect(v1).toBeGreaterThan(v0);
+  b.remember("frontend", "a", "2"); // same key, still a write
+  expect(b.getNotesVersion()).toBeGreaterThan(v1);
+});
+
+test("hydrateNotes reseeds the board from persisted rows without notifying subscribers", () => {
+  const b = bus();
+  const seen: string[] = [];
+  b.subscribe((m) => seen.push(m.subject));
+  b.hydrateNotes([{ key: "budget-cap", value: "$50", from: "architect", time: 1000 }]);
+  expect(b.recall("budget-cap").map((n) => n.body)).toEqual(["$50"]);
+  expect(seen).toEqual([]); // replay, not a live write — no UI event
+});
+
+test("remember bypasses the per-pair rate cap and edge restrictions (it's not a pairwise exchange)", () => {
+  const b = bus();
+  b.restrict([]); // no agent-to-agent edges allowed at all
+  for (let i = 0; i < 15; i++) b.remember("frontend", `k${i}`, "v");
+  expect(b.recall().length).toBe(15);
+});

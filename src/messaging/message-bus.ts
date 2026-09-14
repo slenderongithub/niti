@@ -2,7 +2,7 @@
 // Agents hand off work, ask each other questions, and share artifacts over this bus; every
 // message is also broadcast to subscribers so the TUI and web dashboard can animate the edge.
 
-export type MessageKind = "handoff" | "question" | "answer" | "artifact" | "review" | "broadcast";
+export type MessageKind = "handoff" | "question" | "answer" | "artifact" | "review" | "broadcast" | "note";
 
 export interface AgentMessage {
   id: string;
@@ -39,6 +39,11 @@ export class MessageBus {
   private edges?: Set<string>; // directed "from->to"; undefined = allow all pairs
   private counts = new Map<string, number>(); // "from->to" → count this task (rate cap)
   private nextId = 1;
+
+  // The "team notes" board: current state (latest write wins per key), not a queue like inboxes —
+  // every agent can read the whole board at any time instead of consuming it once via drain().
+  private notes = new Map<string, AgentMessage>();
+  private notesVersion = 0;
 
   // Track who exists so broadcasts know their recipients and unknown targets are rejected.
   register(agentId: string): void {
@@ -141,6 +146,36 @@ export class MessageBus {
     this.subs.add(fn);
     return () => this.subs.delete(fn);
   }
+
+  // --- shared team notes ---------------------------------------------------
+  // Write a note visible to the whole team. Unlike post(), this bypasses reserve() entirely —
+  // it's not a pairwise exchange, so the per-pair rate cap doesn't apply, and it's never
+  // unauthorized/unknown-recipient (there's no recipient to authorize).
+  remember(from: string, key: string, value: string): AgentMessage {
+    const msg: AgentMessage = { id: `n${this.nextId++}`, from, to: "*", kind: "note", subject: key, body: value, time: Date.now() };
+    this.notes.set(key, msg);
+    this.notesVersion++;
+    for (const fn of this.subs) fn(msg);
+    return msg;
+  }
+
+  recall(key?: string): AgentMessage[] {
+    if (key === undefined) return [...this.notes.values()];
+    const m = this.notes.get(key);
+    return m ? [m] : [];
+  }
+
+  getNotesVersion(): number {
+    return this.notesVersion;
+  }
+
+  // Bulk-load persisted notes at boot (resume). Replay, not a live write — doesn't notify subs.
+  hydrateNotes(rows: { key: string; value: string; from: string; time: number }[]): void {
+    for (const r of rows) {
+      this.notes.set(r.key, { id: `n0`, from: r.from, to: "*", kind: "note", subject: r.key, body: r.value, time: r.time });
+    }
+    if (rows.length) this.notesVersion++;
+  }
 }
 
 // What the agent loop needs to talk to peers. The Engine implements this over MessageBus + the
@@ -156,6 +191,11 @@ export interface Messenger {
   // landed during the turn it is about to end on has to be answered in *this* run, not left in
   // the inbox for some later, unrelated one.
   pending(agentId: string): number;
+  // Shared team notes: unlike inbox()/pending(), never drained — every agent can read the whole
+  // board at any time.
+  remember(from: string, key: string, value: string): AgentMessage;
+  recall(key?: string): AgentMessage[];
+  notesVersion(): number;
 }
 
 export const MAX_ASK_DEPTH = 3; // A asks B asks A … — cap the synchronous question chain

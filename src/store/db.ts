@@ -81,6 +81,16 @@ CREATE TABLE IF NOT EXISTS bus_messages (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bus_messages_session ON bus_messages(session_id);
+
+-- The shared "team notes" board (message-bus.ts's remember/recall): unlike bus_messages (a log of
+-- every message ever sent), this is current state — one row per key, latest write wins.
+CREATE TABLE IF NOT EXISTS notes (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  from_agent TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 `;
 
 // Bump when a statement is added to migrate(). A fresh database is stamped with the current value.

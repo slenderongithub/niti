@@ -215,3 +215,17 @@ test("a full persistence round-trip: turn in, turn out, checkpoint, undo", () =>
   expect(existsSync(fresh)).toBe(false);
   expect(s.undoLast(id)).toBeUndefined(); // nothing left to undo
 });
+
+test("notes: upsertNote persists current state (latest write wins), survives a fresh SessionStore over the same db", () => {
+  const db = openDb(":memory:");
+  const s = new SessionStore(db);
+  s.upsertNote({ key: "api-base-url", value: "https://api.internal", from: "architect", time: 1000 });
+  s.upsertNote({ key: "theme", value: "dark", from: "frontend", time: 1001 });
+  s.upsertNote({ key: "api-base-url", value: "https://api.internal/v2", from: "backend", time: 1002 }); // overwrite
+
+  const reopened = new SessionStore(db); // same underlying db, fresh instance — simulates a resume
+  const notes = reopened.listNotes();
+  expect(notes).toHaveLength(2); // still one row per key, not a log
+  const url = notes.find((n) => n.key === "api-base-url");
+  expect(url).toEqual({ key: "api-base-url", value: "https://api.internal/v2", from: "backend", time: 1002 });
+});

@@ -111,6 +111,9 @@ export class Engine {
       },
       inbox: (id) => this.messageBus.drain(id),
       pending: (id) => this.messageBus.pending(id),
+      remember: (from, key, value) => this.messageBus.remember(from, key, value),
+      recall: (key) => this.messageBus.recall(key),
+      notesVersion: () => this.messageBus.getNotesVersion(),
     };
 
     // Ordered least-specific-last: an agent's own block wins, then the project's, then --auto's
@@ -172,10 +175,15 @@ export class Engine {
     // Fan every source into the one hub the TUI/dashboard consume.
     this.bus.subscribe((e) => this.hub.publish({ kind: "agent_event", event: e, time: e.time }));
     this.messageBus.subscribe((m) => {
-      this.store?.recordMessage(m); // one place: both post() (queued) and announce() (synchronous ask) pass through here
+      // Notes get their own table (current state, latest write wins) — bus_messages stays a pure
+      // log of every message ever sent, and a note isn't one of those.
+      if (m.kind === "note") this.store?.upsertNote({ key: m.subject, value: m.body, from: m.from, time: m.time });
+      else this.store?.recordMessage(m); // one place: both post() (queued) and announce() (synchronous ask) pass through here
       this.hub.publish({ kind: "agent_message", message: m, time: m.time });
     });
     this.approvals.onChange(() => this.hub.publish({ kind: "approval_request", requests: this.pendingApprovals() }));
+    // Resume: reseed the notes board from disk so a note written before a restart is still visible.
+    if (this.store) this.messageBus.hydrateNotes(this.store.listNotes());
   }
 
   // The *declared* prompt, not the augmented one. Agents run with systemPrompt + skills text +

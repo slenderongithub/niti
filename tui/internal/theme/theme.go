@@ -164,6 +164,8 @@ func MessageColor(kind string) lipgloss.Color {
 		return Blue
 	case "review":
 		return Pink
+	case "note":
+		return Alt
 	default:
 		return Accent
 	}

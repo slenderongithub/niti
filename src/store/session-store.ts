@@ -244,6 +244,27 @@ export class SessionStore {
     }));
   }
 
+  // --- shared team notes ---------------------------------------------------
+  // Current state, not a log — one row per key, latest write wins (unlike bus_messages above).
+  upsertNote(n: { key: string; value: string; from: string; time: number }): void {
+    this.db
+      .query(
+        "INSERT INTO notes (key, value, from_agent, updated_at) VALUES (?, ?, ?, ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value, from_agent = excluded.from_agent, updated_at = excluded.updated_at",
+      )
+      .run(n.key, n.value, n.from, n.time);
+  }
+
+  listNotes(): { key: string; value: string; from: string; time: number }[] {
+    const rows = this.db.query("SELECT * FROM notes ORDER BY updated_at").all() as {
+      key: string;
+      value: string;
+      from_agent: string;
+      updated_at: number;
+    }[];
+    return rows.map((r) => ({ key: r.key, value: r.value, from: r.from_agent, time: r.updated_at }));
+  }
+
   // --- checkpoints / undo -------------------------------------------------
   // Record what a file looked like before an agent wrote to it. `content` is null when the file
   // didn't exist yet, which is what tells undo to delete rather than restore. Paths are absolute
