@@ -1,6 +1,6 @@
 {
   "name": "@slenderbuilds/niti",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A terminal CLI that runs multiple AI coding agents from different LLM providers concurrently on one project.",
   "type": "module",
   "bin": {
@@ -52,11 +52,11 @@
     "access": "public"
   },
   "optionalDependencies": {
-    "niti-darwin-arm64": "0.2.0",
-    "niti-darwin-x64": "0.2.0",
-    "niti-linux-arm64": "0.2.0",
-    "niti-linux-x64": "0.2.0",
-    "niti-win32-x64": "0.2.0"
+    "niti-darwin-arm64": "0.3.0",
+    "niti-darwin-x64": "0.3.0",
+    "niti-linux-arm64": "0.3.0",
+    "niti-linux-x64": "0.3.0",
+    "niti-win32-x64": "0.3.0"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.115.0",

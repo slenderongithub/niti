@@ -16,11 +16,11 @@
         "zod": "^4.4.3",
       },
       "optionalDependencies": {
-        "niti-darwin-arm64": "0.2.0",
-        "niti-darwin-x64": "0.2.0",
-        "niti-linux-arm64": "0.2.0",
-        "niti-linux-x64": "0.2.0",
-        "niti-win32-x64": "0.2.0",
+        "niti-darwin-arm64": "0.3.0",
+        "niti-darwin-x64": "0.3.0",
+        "niti-linux-arm64": "0.3.0",
+        "niti-linux-x64": "0.3.0",
+        "niti-win32-x64": "0.3.0",
       },
     },
   },
@@ -280,16 +280,6 @@
     "ms": ["ms@2.1.3", "", {}, "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="],
 
     "negotiator": ["negotiator@1.0.0", "", {}, "sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg=="],
-
-    "niti-darwin-arm64": ["niti-darwin-arm64@0.2.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-97DQ4g893YcbKkr4W4FxMAR32Xs3UKYbwmf2ZvJHl4Po2QZF/Whd5tsJyusz1bV0+p6Jx15uk8AAwRKE1ojehA=="],
-
-    "niti-darwin-x64": ["niti-darwin-x64@0.2.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-pyRySJJdWnFzLVZUGemO39o3uSvCAF4Ze/zy0nRCwfrJ7nzykCHNoYsuuFmvwkLyDXzjwFpMvFqH61UYCUZ4Ww=="],
-
-    "niti-linux-arm64": ["niti-linux-arm64@0.2.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-FUhCFqPIXKhgIhd8ck3E96khZpa30WzVc/BaWobD0/IDhUnUIZ35B3ZHNWGT4RwaDx5Uzc6GTInnB44Y/g2POw=="],
-
-    "niti-linux-x64": ["niti-linux-x64@0.2.0", "", { "os": "linux", "cpu": "x64" }, "sha512-o3oivwPhD4Nqy3u/EmxbueKnsmrf3mwKkdgxrfdiVz5TMY7TRynrmKBi9gcWTjPUlOpHhZFJjuD8oM3s94Aj2Q=="],
-
-    "niti-win32-x64": ["niti-win32-x64@0.2.0", "", { "os": "win32", "cpu": "x64" }, "sha512-2SXnO6xnQq5GqteMXgjyU2/W/LoWG+r70dQXaOER1y7ENPSPQjHSB4wRDv2renc6XzzOtnTCXKgd3zDSmG3X3w=="],
 
     "node-domexception": ["node-domexception@1.0.0", "", {}, "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ=="],
 
