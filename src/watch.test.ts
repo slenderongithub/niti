@@ -57,7 +57,9 @@ test("noise directories never fire", async () => {
   writeFileSync(join(root, "node_modules", "junk.js"), "x");
   writeFileSync(join(root, "real.txt"), "x"); // fires, so we know the watcher was live
 
-  expect(await until(() => seen.includes("real.txt"))).toBe(true);
+  // Same CI-Linux-is-slower-to-deliver-fs.watch-events headroom as the other tests in this file —
+  // the default until() timeout (5000ms) sits right at bun's old per-test default with no margin.
+  expect(await until(() => seen.includes("real.txt"), 10_000)).toBe(true);
   expect(seen.some((p) => p.includes("node_modules"))).toBe(false);
   w.close();
 }, 20_000);
