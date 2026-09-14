@@ -12,6 +12,7 @@ import type { Provider } from "./providers/provider.ts";
 import type { McpTools } from "./mcp/mcp.ts";
 import type { LspRegistry } from "./lsp/registry.ts";
 import type { SessionStore } from "./store/session-store.ts";
+import type { AuditLog } from "./store/audit-log.ts";
 import { AUTO_RULES, type PermissionRules } from "./permissions.ts";
 import { costOf } from "./providers/pricing.ts";
 import { watchProject, type ProjectWatcher } from "./watch.ts";
@@ -27,6 +28,7 @@ export interface EngineOptions {
   interactive?: boolean; // gate write_file/shell behind approvals (off for one-shot/scripting)
   systemSuffix?: string; // e.g. skills text appended to every system prompt
   store?: SessionStore; // present → conversations persist (resume, undo, session history)
+  audit?: AuditLog; // present → tool calls + approval decisions append to a tamper-evident log
   permissions?: PermissionRules; // project-level tool policy from agents.yaml
   auto?: boolean; // --auto: approve anything not explicitly denied (dangerous commands still prompt)
   lsp?: LspRegistry; // present → diagnostics/hover available to every agent, alongside MCP
@@ -42,12 +44,13 @@ export class Engine {
   readonly bus = new Bus();
   readonly messageBus = new MessageBus();
   readonly orch = new Orchestrator();
-  readonly approvals = new ApprovalQueue();
+  readonly approvals: ApprovalQueue;
   readonly usage = new UsageTracker();
   readonly locks: LockRegistry;
   readonly hub = new EventHub();
   readonly agents: Agent[] = [];
   readonly store?: SessionStore;
+  readonly audit?: AuditLog;
   readonly root: string;
   // Public so the server can report what the project is wired to (the TUI sidebar lists both).
   readonly lsp?: LspRegistry;
@@ -73,6 +76,8 @@ export class Engine {
   constructor(opts: EngineOptions) {
     this.makeProvider = opts.makeProvider;
     this.store = opts.store;
+    this.audit = opts.audit;
+    this.approvals = new ApprovalQueue(opts.audit);
     this.root = opts.root ?? process.cwd();
     this.lsp = opts.lsp;
     this.mcp = opts.mcp;
@@ -160,6 +165,7 @@ export class Engine {
         locks: this.locks,
         messenger,
         store: this.store,
+        audit: this.audit,
         permissionLayers,
         lsp: opts.lsp,
         onWrite: (path) => this.watcher?.markSelfWrite(path),
