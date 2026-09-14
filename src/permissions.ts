@@ -105,9 +105,74 @@ function matchLayer(rules: PermissionRules | undefined, tool: string, subj: stri
   return matchRules(rules[tool], subj, kind) ?? matchRules(rules["*"], subj, kind);
 }
 
+// A quote-aware split on `;`, `&&`, `||`, and bare `|` — explicitly not a full POSIX shell parser.
+// This is a policy-DECISION heuristic, not the execution path: shell() always runs a literal argv,
+// never a real shell, so these characters are inert at the OS level unless the model separately
+// invokes an interpreter — which isDangerousShellCall's INTERPRETERS check force-asks regardless of
+// anything decided here. What this fixes: an `allow` rule like "git *" was matched against the
+// *whole line* as one regex, so "git status; rm -rf /" satisfied it as a policy decision purely
+// because the text started with "git ". Splitting means each command is judged on its own.
+export function splitSegments(cmdline: string): string[] {
+  const segments: string[] = [];
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < cmdline.length; i++) {
+    const c = cmdline[i]!;
+    if (quote) {
+      cur += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      cur += c;
+      continue;
+    }
+    if (c === ";") {
+      segments.push(cur);
+      cur = "";
+      continue;
+    }
+    if (c === "|" && cmdline[i + 1] === "|") {
+      segments.push(cur);
+      cur = "";
+      i++;
+      continue;
+    }
+    if (c === "&" && cmdline[i + 1] === "&") {
+      segments.push(cur);
+      cur = "";
+      i++;
+      continue;
+    }
+    if (c === "|") {
+      segments.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  segments.push(cur);
+  return segments.map((s) => s.trim()).filter(Boolean);
+}
+
 export function resolve(layers: (PermissionRules | undefined)[], tool: string, input: Record<string, unknown>): Decision {
   const kind = tool === "shell" ? "text" : "path";
   const subj = subject(tool, input);
+  if (tool === "shell") {
+    const segments = splitSegments(subj);
+    // Only re-dispatch per-segment for an actual multi-command line — a single command must resolve
+    // exactly as it always has, byte for byte, so no existing single-command behavior shifts.
+    if (segments.length > 1) {
+      let strictest: Decision = "allow";
+      for (const seg of segments) {
+        const [command, ...args] = seg.split(/\s+/).filter(Boolean);
+        const decision = resolve(layers, tool, { command: command ?? "", args });
+        if (STRICTNESS[decision] > STRICTNESS[strictest]) strictest = decision;
+      }
+      return strictest;
+    }
+  }
   for (const layer of layers) {
     const decision = matchLayer(layer, tool, subj, kind);
     if (decision) return decision;

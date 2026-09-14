@@ -21,6 +21,7 @@ import (
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/session"
 	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/trust"
 	"github.com/niti/tui/internal/wizard"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -63,21 +64,17 @@ func (c *core) stop() {
 }
 
 const devEntry = "src/server/main.ts"
+const cliEntry = "src/cli.ts"
 
-// coreCmd resolves the core the way an installed copy has to find it: an explicit override first,
-// then the compiled `niti-core` shipped beside this binary, then one on $PATH, and only then the
-// repo-relative dev entry — which exists solely for `cd niti && go run ./cmd/niti`. It used to be
-// the *only* candidate, which made a globally installed niti work in exactly one directory on
-// earth. On failure it returns every path it looked at, so the error can say where to put one.
-func coreCmd() (*exec.Cmd, []string) {
-	if entry := os.Getenv("NITI_CORE_ENTRY"); entry != "" {
-		return exec.Command(envOr("NITI_BUN", "bun"), "run", entry), nil
-	}
+// findCoreBinary looks for the compiled niti-core the way an installed copy has to: shipped
+// alongside this binary, then on $PATH. Shared by coreCmd (the long-running server) and
+// coreCLIFor (short synchronous CLI calls like trust check/grant) — both need the same answer to
+// "where is niti-core", they just invoke it differently once found.
+func findCoreBinary() (path string, tried []string) {
 	bin := "niti-core"
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	var tried []string
 	if exe, err := os.Executable(); err == nil {
 		// npm links bin/ entries as symlinks; the sibling core lives next to the real file.
 		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
@@ -85,18 +82,48 @@ func coreCmd() (*exec.Cmd, []string) {
 		}
 		sibling := filepath.Join(filepath.Dir(exe), bin)
 		if st, err := os.Stat(sibling); err == nil && !st.IsDir() {
-			return exec.Command(sibling, "serve"), nil
+			return sibling, nil
 		}
 		tried = append(tried, sibling)
 	}
-	if path, err := exec.LookPath(bin); err == nil {
+	if p, err := exec.LookPath(bin); err == nil {
+		return p, nil
+	}
+	return "", append(tried, bin+" on $PATH")
+}
+
+// coreCmd resolves the long-running core the way an installed copy has to find it: an explicit
+// override first, then the compiled niti-core, then the repo-relative dev entry — which exists
+// solely for `cd niti && go run ./cmd/niti`. It used to be the *only* candidate, which made a
+// globally installed niti work in exactly one directory on earth. On failure it returns every path
+// it looked at, so the error can say where to put one.
+func coreCmd() (*exec.Cmd, []string) {
+	if entry := os.Getenv("NITI_CORE_ENTRY"); entry != "" {
+		return exec.Command(envOr("NITI_BUN", "bun"), "run", entry), nil
+	}
+	if path, tried := findCoreBinary(); path != "" {
 		return exec.Command(path, "serve"), nil
-	}
-	tried = append(tried, bin+" on $PATH")
-	if _, err := os.Stat(devEntry); err == nil {
+	} else if _, err := os.Stat(devEntry); err == nil {
 		return exec.Command(envOr("NITI_BUN", "bun"), "run", devEntry), nil
+	} else {
+		return nil, append(tried, devEntry+" (dev checkout)")
 	}
-	return nil, append(tried, devEntry+" (dev checkout)")
+}
+
+// coreCLIFor resolves a short, synchronous niti-core CLI call (trust check/grant) — same
+// installed-binary search as coreCmd, but the dev-checkout fallback always targets cli.ts rather
+// than devEntry: server/main.ts has no subcommand dispatch of its own (only `serve` does), while
+// trust/audit/etc. are cli.ts's. NITI_CORE_ENTRY is deliberately not honoured here — that override
+// exists to point the long-running server at a specific entry, not to redirect one-shot CLI calls,
+// and any checkout that could set it also has src/cli.ts sitting right there.
+func coreCLIFor(args ...string) (*exec.Cmd, []string) {
+	if path, tried := findCoreBinary(); path != "" {
+		return exec.Command(path, args...), nil
+	} else if _, err := os.Stat(cliEntry); err == nil {
+		return exec.Command(envOr("NITI_BUN", "bun"), append([]string{"run", cliEntry}, args...)...), nil
+	} else {
+		return nil, append(tried, cliEntry+" (dev checkout)")
+	}
 }
 
 // startCore attaches to a running server (NITI_SERVER_URL/TOKEN) or spawns the core (see coreCmd)
@@ -312,7 +339,51 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
+// ensureTrustedTUI runs before startCore() spawns anything: if this project directory isn't
+// trusted yet (or its mcpServers: config changed since it last was), it shows the trust prompt
+// before any MCP/LSP server or agents.yaml content from this directory is ever touched. Returns
+// false if the human declined — main() must return without calling startCore() at all in that
+// case, so nothing in the directory gets read or executed.
+func ensureTrustedTUI() bool {
+	checkCmd, _ := coreCLIFor("trust", "check")
+	if checkCmd == nil {
+		return true // can't resolve niti-core at all — let startCore() surface that error next
+	}
+	out, err := checkCmd.Output()
+	if err == nil {
+		return true // exit 0 → already trusted
+	}
+	var info struct {
+		Root    string `json:"root"`
+		Changed bool   `json:"changed"`
+	}
+	_ = json.Unmarshal(out, &info)
+
+	final, perr := tea.NewProgram(trust.New(info.Root, info.Changed), screenOpts()...).Run()
+	if perr != nil {
+		fatal(perr)
+	}
+	tm, ok := final.(trust.Model)
+	if !ok || tm.Choice == trust.No {
+		return false
+	}
+	if tm.Choice == trust.Remember {
+		if grantCmd, _ := coreCLIFor("trust", "grant"); grantCmd != nil {
+			_ = grantCmd.Run() // best-effort; worst case the next launch asks again
+		}
+	}
+	// Approved for this run either way — the spawned core's own gate must not ask a second time.
+	os.Setenv("NITI_TRUST", "1")
+	return true
+}
+
 func main() {
+	// Skipped when attached to a core we didn't spawn (NITI_SERVER_URL set) — nothing to gate,
+	// since we aren't the one reading this directory's config or spawning anything from it.
+	if os.Getenv("NITI_SERVER_URL") == "" && !ensureTrustedTUI() {
+		fmt.Println("niti: not trusted — exiting without touching this directory.")
+		return
+	}
 	c, err := startCore()
 	if err != nil {
 		fatal(err)

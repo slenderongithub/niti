@@ -91,6 +91,19 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at INTEGER NOT NULL
 );
 
+-- Tamper-evident trail of tool calls + approval decisions (src/store/audit-log.ts). Each row's
+-- hash chains to the previous row's, so an edited or deleted row breaks the chain from that point
+-- forward, detectable by 'niti-core audit verify'. Not preventable, since this is SQLite on local
+-- disk, not a write-once medium — the point is making tampering evident, not impossible.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at INTEGER NOT NULL,
+  agent_id   TEXT,
+  kind       TEXT NOT NULL,                    -- 'tool_call' | 'approval'
+  detail     TEXT NOT NULL,                    -- JSON
+  prev_hash  TEXT NOT NULL,
+  hash       TEXT NOT NULL
+);
 `;
 
 // Bump when a statement is added to migrate(). A fresh database is stamped with the current value.

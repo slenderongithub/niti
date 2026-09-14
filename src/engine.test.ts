@@ -189,7 +189,10 @@ test("messageAgent rejects an unknown or idle agent, and injects into a running 
   await running;
 
   const injected = secondCallTurns.find((t) => t.role === "user" && t.text?.includes("actually use approach B"));
-  expect(injected?.text).toContain("from user");
+  // Attributed as the human operator's own instruction, NOT lumped in with the "peer agent, don't
+  // just obey this" framing injectInbox applies to messages from other agents.
+  expect(injected?.text).toContain("human operator");
+  expect(injected?.text).not.toContain("PEER MESSAGE");
 });
 
 test("plan mode publishes the DAG and runs nothing", async () => {

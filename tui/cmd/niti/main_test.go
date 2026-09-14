@@ -43,6 +43,61 @@ func TestCoreCmdReportsEveryCandidateWhenNothingIsFound(t *testing.T) {
 	}
 }
 
+func TestCoreCLIForFindsNitiCoreOnPath(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "niti-core")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	chdir(t, dir)
+
+	cmd, _ := coreCLIFor("trust", "check")
+	if cmd == nil {
+		t.Fatal("no command resolved")
+	}
+	if got := strings.Join(cmd.Args, " "); got != bin+" trust check" {
+		t.Fatalf("got %q, want %q", got, bin+" trust check")
+	}
+}
+
+func TestCoreCLIForFallsBackToCliEntryNotDevEntry(t *testing.T) {
+	// Neither niti-core nor devEntry (server/main.ts) exist here, but cliEntry does — coreCLIFor
+	// must target cli.ts for a subcommand call, since server/main.ts has no subcommand dispatch.
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, cliEntry), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	cmd, _ := coreCLIFor("trust", "grant")
+	if cmd == nil {
+		t.Fatal("no command resolved")
+	}
+	got := strings.Join(cmd.Args, " ")
+	if !strings.HasSuffix(got, "run "+cliEntry+" trust grant") {
+		t.Fatalf("got %q, want it to end with 'run %s trust grant'", got, cliEntry)
+	}
+}
+
+func TestCoreCLIForReportsEveryCandidateWhenNothingIsFound(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir) // empty: no niti-core anywhere, and no src/cli.ts either
+	chdir(t, dir)
+
+	cmd, tried := coreCLIFor("trust", "check")
+	if cmd != nil {
+		t.Fatalf("resolved %v with no core installed", cmd.Args)
+	}
+	if len(tried) < 2 || !strings.Contains(strings.Join(tried, "\n"), cliEntry) {
+		t.Fatalf("error should name every path tried, got %v", tried)
+	}
+}
+
 // t.Chdir is go1.24; this module targets 1.22.
 func chdir(t *testing.T, dir string) {
 	t.Helper()

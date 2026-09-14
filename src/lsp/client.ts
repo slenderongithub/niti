@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { childEnv } from "../tools/tools.ts";
 
 // A minimal LSP client: JSON-RPC over the server's stdio, framed with Content-Length headers.
 // Hand-rolled for the same reason src/mcp/mcp.ts manages its own subprocesses — the wire format is
@@ -102,7 +103,13 @@ export class LspClient {
   }
 
   private async spawnAndInitialize(): Promise<void> {
-    const proc = spawn(this.command, this.args, { cwd: this.root, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
+    // env: explicit allowlist, same one shell()/MCP use — plain spawn() otherwise inherits the
+    // full parent environment (provider API keys included), unlike shell()'s already-scoped one.
+    const proc = spawn(this.command, this.args, {
+      cwd: this.root,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: childEnv(),
+    }) as ChildProcessWithoutNullStreams;
     this.proc = proc;
     // A missing binary (ENOENT) surfaces here, not as a throw from spawn — same posture as an
     // optional MCP server: a clear error string, never a crashed agent.

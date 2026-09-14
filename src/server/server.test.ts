@@ -77,6 +77,16 @@ test("health is public; data routes require the token", async () => {
   expect((await ok.json()).agents.length).toBe(3);
 });
 
+test("static dashboard assets carry a Content-Security-Policy header", async () => {
+  const { h } = setup();
+  track(h);
+  const res = await fetch(`${h.url}/dashboard`);
+  const csp = res.headers.get("content-security-policy");
+  expect(csp).toBeTruthy();
+  expect(csp).toContain("default-src 'self'");
+  expect(csp).toContain("frame-ancestors 'none'");
+});
+
 test("commands are listed and dispatched over HTTP — one registry for every client", async () => {
   const { h } = setup();
   track(h);

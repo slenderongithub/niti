@@ -13,6 +13,8 @@ import { loadSkills, skillsPrompt } from "./skills/skills.ts";
 import { loadTasks } from "./session.ts";
 import { openDb } from "./store/db.ts";
 import { SessionStore } from "./store/session-store.ts";
+import { AuditLog } from "./store/audit-log.ts";
+import { checkTrust, grantTrust } from "./trust/trust-store.ts";
 import { serveMain } from "./server/main.ts";
 import { setCredential, removeCredential, listCredentials } from "./auth/auth-store.ts";
 import { CATALOG, providerKeys } from "./providers/catalog.ts";
@@ -38,11 +40,16 @@ const USAGE = `niti-core — the headless engine + scripting CLI.
     niti-core auth login|list|logout <provider>
     niti-core keys set <provider> store a BYOK key (legacy; 'auth login' is preferred)
     niti-core login copilot       sign in with a GitHub Copilot subscription
+    niti-core audit verify        check the tamper-evident tool-call/approval log's hash chain
+    niti-core trust check|grant   query or approve this directory (do you trust the files here?)
 
   Flags:
     --auto                        approve anything not explicitly denied in agents.yaml
     --worktree                    isolate this run's writes in a fresh git worktree (manual merge)
     --port=N                      port for serve/--web (default: an ephemeral one)
+    --show-url                    --web: print the dashboard URL with its real token (default: masked)
+    --trust                       treat this run as trusted without persisting (for automation);
+                                   same as env var NITI_TRUST=1
     --help, -h · --version, -v
 
   Exit codes (headless runs): 0 all tasks done · 1 a task failed · 2 unfinished (turn cap/pending).`;
@@ -63,8 +70,11 @@ if (args.includes("--version") || args.includes("-v")) {
 // A typo must never become a billed model run. Every flag is checked against this list, and a
 // bare one-word first argument that looks like a subcommand is rejected rather than submitted as
 // a prompt — `niti-core stauts` used to reach the orchestrator and cost real money.
-const KNOWN_FLAGS = new Set(["--auto", "--worktree", "--web", "--help", "-h", "--version", "-v"]);
-const SUBCOMMANDS = new Set(["keys", "login", "auth", "serve", "init", "resume", "help"]);
+const KNOWN_FLAGS = new Set(["--auto", "--worktree", "--web", "--show-url", "--trust", "--help", "-h", "--version", "-v"]);
+const SUBCOMMANDS = new Set(["keys", "login", "auth", "serve", "init", "resume", "help", "audit", "trust"]);
+// Subcommands that never read/execute anything from the project directory — the trust gate below
+// (ensureTrusted) is skipped for these, and for "trust" itself (it IS the trust UI).
+const TRUST_EXEMPT = new Set(["keys", "login", "auth", "trust", "help"]);
 for (const a of args) {
   if (a.startsWith("-") && !KNOWN_FLAGS.has(a) && !a.startsWith("--port=")) {
     die(`unknown flag '${a}'\n\n${USAGE}`);
@@ -78,6 +88,42 @@ if (args.length === 1 && /^[a-z][a-z0-9-]*$/.test(args[0]!) && !SUBCOMMANDS.has(
 // resolved from cwd, so running from a subdirectory created a stray second project there.
 const projectRoot = findProjectRoot();
 if (projectRoot !== process.cwd()) process.chdir(projectRoot);
+
+// Claude-Code-style "do you trust this folder?" — the first time niti is about to read this
+// directory's config, spawn its MCP servers, or run agents against its code, the human confirms it.
+// Runs BEFORE any of that (loadMcpServers/mcp.connect in serveMain, agents.yaml in buildEngine),
+// so an untrusted directory's config never executes anything on the strength of just being cloned.
+//
+// --trust (or its env-var equivalent, NITI_TRUST=1) means "treat this run as already approved"
+// without persisting — the Go TUI sets the env var on the child it spawns after its own prompt
+// already got a yes, so `niti-core serve` doesn't ask again for the same already-approved run.
+// Neither is a blanket "always trust everything" flag — both are scoped to one process's run.
+async function ensureTrusted(root: string): Promise<void> {
+  if (args.includes("--trust") || process.env.NITI_TRUST === "1") return;
+  const servers = loadMcpServers();
+  const status = checkTrust(root, servers);
+  if (status === "trusted") return;
+  if (!process.stdin.isTTY) {
+    die(
+      `'${root}' is not a trusted directory (${status === "changed" ? "its mcpServers: config changed" : "first time here"}).\n` +
+        `Run 'niti-core trust grant' once to approve it, or pass --trust to run without persisting.`,
+    );
+  }
+  const why = status === "changed" ? "Its mcpServers: config has changed since you last trusted it." : "niti hasn't run here before.";
+  console.log(
+    `\n${why}\nTrusting a directory lets niti read its .niti/agents.yaml, spawn any MCP servers it ` +
+      `configures, and run agents against its code.\n\n  ${root}\n`,
+  );
+  const answer = (prompt("Trust this folder? [1] Yes, proceed  [2] Yes, and remember  [3] No, exit") ?? "3").trim();
+  if (answer === "2") {
+    grantTrust(root, servers);
+    console.log("niti: trusted — this won't ask again unless the MCP config changes.\n");
+  } else if (answer !== "1") {
+    console.log("niti: not trusted — exiting without touching this directory.");
+    process.exit(0);
+  }
+}
+if (!TRUST_EXEMPT.has(args[0] ?? "")) await ensureTrusted(projectRoot);
 
 function parsePort(): number | undefined {
   const arg = args.find((a) => a.startsWith("--port="));
@@ -134,6 +180,35 @@ if (args[0] === "auth") {
   die("usage: niti-core auth login|list|logout [provider]");
 }
 
+if (args[0] === "audit") {
+  if (args[1] === "verify") {
+    const result = new AuditLog(openDb()).verify();
+    if (result === true) {
+      console.log("niti: audit log ok — chain intact.");
+      process.exit(0);
+    }
+    console.error(`niti: audit log broken at row ${result.brokenAt} — the chain no longer matches from there forward.`);
+    process.exit(1);
+  }
+  die("usage: niti-core audit verify");
+}
+
+if (args[0] === "trust") {
+  // No server spawn, no engine — this only needs the root + the mcpServers: config to hash.
+  if (args[1] === "check") {
+    const servers = loadMcpServers();
+    const status = checkTrust(projectRoot, servers);
+    console.log(JSON.stringify({ trusted: status === "trusted", root: projectRoot, changed: status === "changed" }));
+    process.exit(status === "trusted" ? 0 : 1);
+  }
+  if (args[1] === "grant") {
+    grantTrust(projectRoot, loadMcpServers());
+    console.log(`niti: trusted ${projectRoot}`);
+    process.exit(0);
+  }
+  die("usage: niti-core trust check|grant");
+}
+
 // --- server / dashboard ----------------------------------------------------
 if (args[0] === "serve") {
   try {
@@ -159,7 +234,10 @@ if (args[0] !== "serve" && args.includes("--web")) {
       worktree: args.includes("--worktree"),
     });
     const url = `${server.url}/dashboard?token=${server.token}`;
-    console.log(`\nniti dashboard: ${url}\n`);
+    // openBrowser navigates with the real token programmatically — the human doesn't need to read
+    // or copy it, so don't put a live bearer token in scrollback/CI logs/screen-shares by default.
+    const shown = args.includes("--show-url") ? url : url.replace(/token=[^&]+/, "token=***");
+    console.log(`\nniti dashboard: ${shown}\n`);
     if (args.includes("--auto")) console.error("niti: --auto is on — writes and shell run without asking.");
     openBrowser(url);
     if (goal) engine.submit(goal).catch((e) => console.error(`niti: ${e instanceof Error ? e.message : e}`));
@@ -245,13 +323,15 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
     mcp = new McpManager();
     await mcp.connect(mcpServers, (name, err) => console.error(`niti: MCP server '${name}' unavailable: ${err}`));
   }
+  const db = openDb();
   return new Engine({
     configs,
     makeProvider,
     mcp,
     systemSuffix: skillText,
     interactive,
-    store: new SessionStore(openDb()),
+    store: new SessionStore(db),
+    audit: new AuditLog(db),
     permissions: loadPermissions(),
     auto: args.includes("--auto") || options.auto,
     lsp: new LspRegistry(loadLspServers()),

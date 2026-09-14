@@ -1,5 +1,7 @@
 import { test, expect } from "bun:test";
 import { ApprovalQueue } from "./approval.ts";
+import { AuditLog } from "./store/audit-log.ts";
+import { openDb } from "./store/db.ts";
 
 test("request resolves when answered", async () => {
   const q = new ApprovalQueue();
@@ -112,4 +114,68 @@ test("batch: denyAll resolves every queued request false", async () => {
   ];
   q.denyAll();
   expect(await Promise.all(ps)).toEqual([false, false, false]);
+});
+
+test("flood guard: an agent piling up too many unanswered requests gets refused outright, not queued", async () => {
+  const q = new ApprovalQueue();
+  const ps: Promise<boolean>[] = [];
+  for (let i = 0; i < 25; i++) ps.push(q.request("a", "shell", { command: `cmd${i}` }));
+
+  const results = await Promise.all(
+    ps.map((p) => Promise.race([p, new Promise<"pending">((r) => setTimeout(() => r("pending"), 10))])),
+  );
+  const stillPending = results.filter((r) => r === "pending").length;
+  const refusedOutright = results.filter((r) => r === false).length;
+
+  expect(stillPending).toBe(20); // the cap — these are genuinely queued, awaiting an answer
+  expect(refusedOutright).toBe(5); // the flood past the cap, resolved false without ever queuing
+
+  q.denyAll(); // resolve the 20 real ones so nothing here is left dangling
+  await Promise.all(ps);
+});
+
+test("flood guard is per-agent — one agent's flood does not refuse another agent's request", async () => {
+  const q = new ApprovalQueue();
+  for (let i = 0; i < 20; i++) q.request("a", "shell", { command: `cmd${i}` }); // fills "a" to the cap
+
+  const bResult = await Promise.race([
+    q.request("b", "shell", { command: "npm test" }),
+    new Promise<"pending">((r) => setTimeout(() => r("pending"), 10)),
+  ]);
+  expect(bResult).toBe("pending"); // queued normally, not refused by "a"'s flood
+
+  q.denyAll();
+});
+
+test("resolved requests (answer, drain, approveAgent) each append to the audit log when one is wired", async () => {
+  const audit = new AuditLog(openDb(":memory:"));
+  const q = new ApprovalQueue(audit);
+
+  const p1 = q.request("a", "shell", { command: "ls" });
+  q.answer(true);
+  await p1;
+
+  const p2 = q.request("b", "write_file", { path: "x.ts" });
+  const p3 = q.request("c", "shell", { command: "rm x" });
+  q.approveAll(); // exercises the private drain() path
+  await Promise.all([p2, p3]);
+
+  const p4 = q.request("a", "shell", { command: "npm test" });
+  q.approveAgent("a"); // exercises the approveAgent path
+  await p4;
+
+  const entries = audit.list().filter((e) => e.kind === "approval");
+  expect(entries).toHaveLength(4);
+  expect(entries.map((e) => e.agentId)).toEqual(["a", "b", "c", "a"]);
+  expect(audit.verify()).toBe(true);
+});
+
+test("an unresolved request that is auto-approved by a standing grant does not touch the audit log", async () => {
+  // Only actual decisions (a human/batch resolving a queued request) are worth auditing — the
+  // fast-path in request() isn't a decision made *now*, it's the standing grant already recorded.
+  const audit = new AuditLog(openDb(":memory:"));
+  const q = new ApprovalQueue(audit);
+  q.grant("*", "shell");
+  expect(await q.request("a", "shell", { command: "ls" })).toBe(true);
+  expect(audit.list()).toHaveLength(0);
 });

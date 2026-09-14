@@ -4,6 +4,7 @@
 // scope "path" additionally narrows the grant to the request's parent directory. A dangerous
 // call marks itself forceAsk, which always queues regardless of any standing grant.
 import { normalize } from "node:path";
+import type { AuditLog } from "./store/audit-log.ts";
 
 export interface ApprovalRequest {
   agentId: string;
@@ -22,10 +23,22 @@ export interface PermissionScope {
 const BATCH_MIN = 3; // fewer than this, show them one at a time
 const BATCH_WINDOW_MS = 5000; // ...but only batch if they arrived close together
 
+// Flood guard: an agent that piles up more than this many still-unanswered requests gets refused
+// outright rather than queued, the same "reject past a cap" shape as message-bus.ts's MAX_PER_PAIR
+// — a legitimate burst (several file writes in one turn, or the batch dialog's own 3+ case) stays
+// well under this; only a pathological flood trying to bury the human in prompts hits it.
+const MAX_PENDING_PER_AGENT = 20;
+
 export class ApprovalQueue {
   private pending: ApprovalRequest[] = [];
   private listeners = new Set<() => void>();
   private scopes: PermissionScope[] = [];
+
+  constructor(private audit?: AuditLog) {}
+
+  private logDecision(req: ApprovalRequest, ok: boolean, scope?: "agent" | "path"): void {
+    this.audit?.append({ agentId: req.agentId, kind: "approval", detail: { tool: req.tool, ok, scope } });
+  }
 
   // Pre-grant a scope — used to seed autoApprove rules from agents.yaml at startup.
   grant(agentId: string, tool: string, pathPattern?: string): void {
@@ -45,6 +58,11 @@ export class ApprovalQueue {
 
   request(agentId: string, tool: string, input: Record<string, unknown>, forceAsk = false): Promise<boolean> {
     if (!forceAsk && this.isAllowed(agentId, tool, input)) return Promise.resolve(true);
+    // Reject outright rather than queue: a flood of requests must not be able to bury a human in
+    // enough prompts that a rushed "approve all" click-through becomes the path of least resistance.
+    if (this.pending.filter((r) => r.agentId === agentId).length >= MAX_PENDING_PER_AGENT) {
+      return Promise.resolve(false);
+    }
     return new Promise((resolve) => {
       this.pending.push({ agentId, tool, input, resolve, queuedAt: Date.now() });
       this.notify();
@@ -77,6 +95,7 @@ export class ApprovalQueue {
       // silently did nothing and the user was re-prompted for every root-level file.
       this.grant(req.agentId, req.tool, dir ? `${dir}/**` : "*");
     }
+    this.logDecision(req, ok, scope);
     req.resolve(ok);
     this.notify();
   }
@@ -94,14 +113,21 @@ export class ApprovalQueue {
   approveAgent(agentId: string): void {
     const matched = this.pending.filter((r) => r.agentId === agentId);
     this.pending = this.pending.filter((r) => r.agentId !== agentId);
-    for (const r of matched) r.resolve(true);
+    for (const r of matched) {
+      this.logDecision(r, true); // one-time batch approval, not a standing "agent" scope grant
+      r.resolve(true);
+    }
     this.notify();
   }
 
   private drain(outcome: (r: ApprovalRequest) => boolean): void {
     const batch = this.pending;
     this.pending = [];
-    for (const r of batch) r.resolve(outcome(r));
+    for (const r of batch) {
+      const ok = outcome(r);
+      this.logDecision(r, ok);
+      r.resolve(ok);
+    }
     this.notify();
   }
 

@@ -36,7 +36,7 @@ export const SHELL_MAX_OUTPUT = 100_000;
 // list when someone reports it, rather than guessing at it now.
 const ENV_PASSTHROUGH = ["PATH", "HOME", "LANG", "LC_ALL", "TZ", "TERM", "TMPDIR", "SHELL", "USER"];
 
-function childEnv(): Record<string, string> {
+export function childEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const k of ENV_PASSTHROUGH) {
     const v = process.env[k];

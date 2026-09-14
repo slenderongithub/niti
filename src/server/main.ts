@@ -8,6 +8,7 @@ import { loadSkills, skillsPrompt } from "../skills/skills.ts";
 import { loadTasks } from "../session.ts";
 import { openDb } from "../store/db.ts";
 import { SessionStore } from "../store/session-store.ts";
+import { AuditLog } from "../store/audit-log.ts";
 import { startServer, type ServerHandle } from "./server.ts";
 
 export interface ServeResult {
@@ -36,13 +37,15 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
     await mcp.connect(mcpServers, (name, err) => console.error(`niti: MCP server '${name}' unavailable: ${err}`));
   }
 
+  const db = openDb();
   const engine = new Engine({
     configs,
     makeProvider,
     mcp,
     systemSuffix: skillText,
     interactive: opts.interactive ?? true, // gate write_file/shell through approvals by default
-    store: new SessionStore(openDb()),
+    store: new SessionStore(db),
+    audit: new AuditLog(db),
     permissions: loadPermissions(),
     auto: opts.auto || options.auto, // the flag and the config both turn it on; neither can turn the other off
     lsp: new LspRegistry(loadLspServers()),

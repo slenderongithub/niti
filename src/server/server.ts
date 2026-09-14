@@ -30,6 +30,17 @@ const CONTENT_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
+// Defense-in-depth, not a fix for a found XSS: every dynamic-content insertion site in web/*.js
+// already goes through a hand-rolled esc() escaper (checked, consistently applied). This is the
+// backstop for the one call site someone forgets in the future — and it matters more here than on
+// a typical page because the dashboard URL itself carries the bearer token as ?token=, so a missed
+// escape would be a token-exfiltration path, not just a defacement.
+// style-src needs 'unsafe-inline' for graph.html's one inline <style> block; nothing else here uses
+// inline script or style.
+const CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+  "connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'";
+
 // A private-by-default local server (127.0.0.1 + a bearer token from the handshake). The Go TUI
 // sends the token as a header; the browser dashboard passes it as ?token= (EventSource can't set
 // headers). Static dashboard assets are public; every data route is gated.
@@ -66,6 +77,7 @@ export function startServer(
         // Content types here are decided by extension from a fixed map; nosniff stops a browser
         // second-guessing that and executing something served as octet-stream.
         "x-content-type-options": "nosniff",
+        "content-security-policy": CSP,
       },
     });
   };

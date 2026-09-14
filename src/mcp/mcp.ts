@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { ToolSpec } from "../providers/provider.ts";
+import { childEnv } from "../tools/tools.ts";
 
 export interface McpServerConfig {
   name: string;
@@ -36,7 +37,9 @@ export class McpManager implements McpTools {
     for (const s of servers) {
       try {
         const client = new Client({ name: "niti", version: "0.0.1" }, { capabilities: {} });
-        await client.connect(new StdioClientTransport({ command: s.command, args: s.args ?? [] }));
+        // Explicit allowlist, same one `shell()` uses — the SDK's own default (getDefaultEnvironment())
+        // is already curated, but pin it to niti's own policy rather than an SDK implementation detail.
+        await client.connect(new StdioClientTransport({ command: s.command, args: s.args ?? [], env: childEnv() }));
         this.clients.set(s.name, client);
         const { tools } = await client.listTools();
         for (const t of tools) {
