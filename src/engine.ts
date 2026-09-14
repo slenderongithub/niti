@@ -471,7 +471,7 @@ export class Engine {
     for (const { agentId, usage } of this.usage.snapshot()) {
       const cfg = this.byId.get(agentId)?.config;
       if (!cfg) continue;
-      const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens);
+      const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens);
       cost += usd;
       if (!priced) costKnown = false;
     }
