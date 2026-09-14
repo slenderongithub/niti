@@ -112,7 +112,9 @@ type Model struct {
 	out       output      // the pager a multi-line command result opens, when open
 	diffv     diffview    // full-screen state for the diff-viewing approval (edit/write_file only)
 	tp        themePicker // the ctrl+t theme swatch picker, when open
+	ap        agentPicker // the ctrl+g "switch agent window" quick-picker, when open
 	view      string      // "panes" | "usage"
+	focus     string      // agent id currently maximized in the work pane, or "" for the stacked overview
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
 	root string
@@ -337,6 +339,9 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.car.open {
 		return m, m.carouselKey(k)
 	}
+	if m.ap.open {
+		return m, m.agentPickerKey(k)
+	}
 	if m.tp.open {
 		return m, m.themePickerKey(k)
 	}
@@ -404,6 +409,23 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+p":
 		return m, m.openCarousel()
+	case "ctrl+g":
+		return m, m.openAgentPicker()
+	case "esc":
+		if m.focus != "" {
+			m.focus = ""
+		}
+		return m, nil
+	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9":
+		if i := int(k.String()[len(k.String())-1] - '1'); i < len(m.order) {
+			id := m.order[i]
+			if m.focus == id {
+				m.focus = "" // pressing the same agent's key again returns to the overview
+			} else {
+				m.focus = id
+			}
+		}
+		return m, nil
 	case "shift+tab":
 		m.mode = map[string]string{"build": "plan", "plan": "build"}[m.mode]
 		m.status = m.mode + " mode"

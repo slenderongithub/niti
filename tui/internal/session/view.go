@@ -84,14 +84,22 @@ func (m Model) View() string {
 	if m.menuOpen && m.menu.Len() > 0 {
 		menuRows = clamp(m.menu.Len(), 1, 6)
 	}
+	// One row for the agent tab bar, when there's more than one agent to switch between.
+	tabRows := 0
+	if len(m.order) > 1 {
+		tabRows = 1
+	}
 
-	bodyH := h - headerRows - tasksRows - feedRows - menuRows - 2 // -2: the input row and the footer
+	bodyH := h - headerRows - tabRows - tasksRows - feedRows - menuRows - 2 // -2: the input row and the footer
 	if bodyH < 1 {
 		tasksRows, feedRows = 0, 0
-		bodyH = max(h-headerRows-menuRows-2, 1)
+		bodyH = max(h-headerRows-tabRows-menuRows-2, 1)
 	}
 	if bodyH < 1 { // a terminal too short for both: the menu is transient, the transcript isn't
-		menuRows, bodyH = 0, max(h-headerRows-2, 1)
+		menuRows, bodyH = 0, max(h-headerRows-tabRows-2, 1)
+	}
+	if bodyH < 1 { // shorter still: the tab bar is the last thing given up before the body itself
+		tabRows, bodyH = 0, max(h-headerRows-2, 1)
 	}
 
 	sw := 0
@@ -104,7 +112,11 @@ func (m Model) View() string {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, m.sidebar(sw, bodyH), body)
 	}
 
-	rows := []string{m.header(w), body}
+	rows := []string{m.header(w)}
+	if tabRows > 0 {
+		rows = append(rows, m.tabBar(w))
+	}
+	rows = append(rows, body)
 	if tasksRows > 0 {
 		rows = append(rows, m.tasksStrip(w))
 	}
@@ -130,6 +142,8 @@ func (m Model) View() string {
 		out = ui.Overlay(out, m.outputView(w, h), w, h)
 	case m.car.open:
 		out = ui.Overlay(out, m.carouselView(w, h), w, h)
+	case m.ap.open:
+		out = ui.Overlay(out, m.agentPickerView(w, h), w, h)
 	case m.tp.open:
 		out = ui.Overlay(out, m.themePickerView(w, h), w, h)
 	}
@@ -358,10 +372,42 @@ func (m Model) mainPane(mw, h int) string {
 	case "usage":
 		content = m.usageView(iw, h)
 	default:
+		// A focused agent gets the whole pane via the same agentBlock renderer workView already uses
+		// per-agent — no new rendering path, just a per-share of 1 instead of len(shown). Falls back
+		// to the stacked overview if the focused id no longer exists (agent removed, stale state).
+		if m.focus != "" {
+			if st := m.agents[m.focus]; st != nil {
+				content = m.agentBlock(st, iw, h)
+				break
+			}
+		}
 		content = m.workView(iw, h)
 	}
 	return lipgloss.NewStyle().Width(mw).Height(h).MaxHeight(h).Padding(0, 1).
 		Background(theme.BgDeep).Render(content)
+}
+
+// tabBar is the always-visible VS-Code-style strip for jumping between agent windows: ctrl+g opens
+// a picker, alt+1..9 jumps directly, esc (while focused) returns here to the stacked overview.
+func (m Model) tabBar(w int) string {
+	bg := theme.BgDeep
+	segs := make([]string, 0, len(m.order)+1)
+	overview := "≡ overview"
+	if m.focus == "" {
+		segs = append(segs, txt(theme.BgDeep, theme.Accent).Bold(true).Render(" "+overview+" "))
+	} else {
+		segs = append(segs, txt(theme.Muted, bg).Render(" "+overview+" "))
+	}
+	for _, id := range m.order {
+		st := m.agents[id]
+		label := fmt.Sprintf(" %s %s ", st.avatar, st.cfg.Role)
+		if id == m.focus {
+			segs = append(segs, txt(theme.BgDeep, st.color).Bold(true).Render(label))
+		} else {
+			segs = append(segs, txt(st.color, bg).Render(label))
+		}
+	}
+	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).Render(truncate(strings.Join(segs, ""), w))
 }
 
 // One block per agent, stacked: who it is, then its live transcript. Stacked rather than tiled
@@ -526,7 +572,7 @@ func (m Model) footer(w int) string {
 	if m.mode == "plan" {
 		next = "build"
 	}
-	hints := fmt.Sprintf("tab: %s · ctrl+p: models · shift+tab: %s · ctrl+t: %s · /help for commands",
+	hints := fmt.Sprintf("tab: %s · ctrl+p: models · ctrl+g: agent · shift+tab: %s · ctrl+t: %s · /help for commands",
 		m.view, next, theme.Current())
 	// The status is what a one-line command result (e.g. /agents with a single teammate, /cost,
 	// /export) lands in — see show() in output.go. It goes FIRST: the whole line gets truncated to

@@ -53,10 +53,17 @@ func TestOverlayKeepsTheSidebarPainted(t *testing.T) {
 	// this test's expectation out from under it.
 	sidebarBg := strings.SplitN(lipgloss.NewStyle().Background(theme.BgPane).Render("x"), "x", 2)[0]
 
+	// The agent tab bar (when there's more than one agent) is a full-width strip like the header —
+	// it never carries the sidebar background, same reason tasksRows/feedRows strips wouldn't either.
+	skipRows := headerRows
+	if len(m.order) > 1 {
+		skipRows++
+	}
+
 	frame := strings.Split(m.View(), "\n")
 	covered := 0
 	for i, line := range frame {
-		if i < headerRows || i >= len(frame)-2 {
+		if i < skipRows || i >= len(frame)-2 {
 			continue
 		}
 		if strings.Contains(ansi.Strip(line), "│") { // a row the box covers
