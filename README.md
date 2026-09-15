@@ -1,3 +1,5 @@
+<img src="assets/logo.png" alt="niti logo" width="80"><br>
+
 # niti
 
 **A terminal CLI that runs multiple AI coding agents — from different LLM providers — concurrently on one project.**
@@ -153,3 +155,6 @@ cd tui && go build ./... && go vet ./... && go test ./...    # Go TUI: build, ve
 ## License
 
 MIT.
+
+<img src="assets/logo.png" alt="niti logo" width="40">
+
