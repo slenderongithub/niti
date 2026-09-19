@@ -5,6 +5,10 @@
 //   bun run scripts/eval/run.ts --provider google --model gemini-flash-lite-latest --repeat 3
 //   bun run scripts/eval/run.ts --only navigate --keep
 //
+// Use --repeat 3 or more for any comparison you intend to act on. A single pass is a smoke test:
+// the same fixture on an unchanged harness scored 4/5 across five runs, so one run of the suite
+// has a noise floor of roughly one task.
+//
 // Why this exists: every remaining idea for making niti smarter — a repo map, per-model prompts,
 // a critic pass, cheaper compaction — is a guess until something scores it. The published numbers
 // for harness changes (same weights, different scaffold) span tens of points, in both directions.
@@ -168,6 +172,13 @@ for (const task of selected) {
 const pct = scored > 0 ? Math.round((passed / scored) * 100) : 0;
 console.log(`\n  ${passed}/${scored} passed (${pct}%)  ·  ${tokens.toLocaleString()} tokens  ·  $${cost.toFixed(4)}`);
 if (errors > 0) console.log(`  ${errors} run(s) never reached the model and were not scored`);
+// Measured, not guessed: one fixture run five times on an unchanged harness scored 4/5. A single
+// pass of this suite therefore carries a noise floor of about one task, and two runs differing by
+// one task say nothing at all. Printed rather than left in a comment, because the moment this
+// matters is the moment someone is staring at a one-task difference deciding whether it is real.
+if (repeat === 1 && passed < scored) {
+  console.log(`  note: single run — tasks here are ~80% reliable, so ±1 task is noise. Use --repeat 3 before concluding anything.`);
+}
 for (const [kind, s] of [...byKind].sort()) console.log(`    ${kind.padEnd(10)} ${s.pass}/${s.total}`);
 console.log();
 

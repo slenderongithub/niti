@@ -86,6 +86,12 @@ Both pages retheme live with whatever theme (`ctrl+t` / `/theme`) the TUI has ac
   policy; every path is jailed to the project root. Reads are line-numbered and paged, so `grep`'s
   `path:line:` output and a read share one coordinate system; independent reads in a turn run
   together rather than one round-trip at a time.
+- **Project map + ranked context** — a generated outline of the repo (directory shape plus the
+  files most of the project imports, PageRank over the import graph) rides in the system prompt, so
+  an agent starts oriented instead of guessing. `repoMap: false` turns it off.
+- **Reasoning effort** — `reasoning: off|low|medium|high|auto` per agent maps to Gemini's
+  `thinkingBudget` and OpenAI's `reasoning_effort`. Unset sends nothing; note that Flash and
+  Flash-Lite do not think at all unless you set it.
 - **Verification before "done"** — an agent that changed files must pass the project's own checks
   (a `typecheck`/`build` script, `go build`, `cargo check`, or whatever `verify:` names) before it
   may report a task complete; failures go back to it as the real compiler output, twice at most.

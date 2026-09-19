@@ -34,9 +34,10 @@ test("summarizes older turns into one turn, keeping the most recent N verbatim",
   // A naive slice(-2) would cut mid-pair here (turns[-2] is a "tool" turn without its "assistant"
   // turn) — the safe boundary walks back one more turn to keep that pair intact, so 3 are kept.
   expect(compacted).toHaveLength(4); // 1 summary + 3 kept (pair-safe boundary, not a raw slice(-2))
+  // The model's summary, plus the ledger recovered from the dropped turns without asking it.
   expect(compacted[0]).toEqual({
     role: "user",
-    text: "[Earlier conversation summary]\nBuilt a login page, wrote a.tsx and b.tsx.",
+    text: "[Earlier conversation summary]\nBuilt a login page, wrote a.tsx and b.tsx.\n\nFiles changed so far: a.tsx",
   });
   expect(compacted.slice(1)).toEqual(turns.slice(-3));
   expect(seenTranscript).toContain("build a login page");
@@ -63,4 +64,49 @@ test("never keeps a tool-result turn without its preceding assistant turn (injec
   if (toolIdx !== -1) {
     expect(compacted[toolIdx - 1]).toMatchObject({ role: "assistant", toolCalls: [{ id: "X" }] });
   }
+});
+
+test("the file ledger survives a summarizer that mentions no files at all", async () => {
+  // The real failure: a summarizer under a length budget writes prose and names nothing, so the
+  // next turn re-reads and re-edits files the agent had already finished with.
+  const turns: Turn[] = [
+    { role: "user", text: "wire up auth" },
+    { role: "assistant", text: "", toolCalls: [{ id: "1", name: "write_file", input: {} }] },
+    { role: "tool", results: [{ id: "1", name: "write_file", output: "wrote src/auth/login.ts" }] },
+    { role: "assistant", text: "", toolCalls: [{ id: "2", name: "edit", input: {} }] },
+    { role: "tool", results: [{ id: "2", name: "edit", output: "edited src/routes/index.ts" }] },
+    { role: "assistant", text: "", toolCalls: [{ id: "3", name: "shell", input: {} }] },
+    { role: "tool", results: [{ id: "3", name: "shell", output: "error: tsc: Cannot find module './session.ts'" }] },
+    // Two more rounds, so the error above falls into the half being dropped rather than the half
+    // kept verbatim — it is the dropped half the ledger has to rescue.
+    { role: "assistant", text: "", toolCalls: [{ id: "4", name: "read_file", input: {} }] },
+    { role: "tool", results: [{ id: "4", name: "read_file", output: "     1\texport {}" }] },
+    { role: "assistant", text: "still working", toolCalls: [] },
+  ];
+  const vague: Provider = { async send() { return { text: "Made progress on the auth work.", toolCalls: [] }; } };
+
+  const summary = (await compactTurns(turns, vague, 2))[0] as { text: string };
+
+  expect(summary.text).toContain("src/auth/login.ts");
+  expect(summary.text).toContain("src/routes/index.ts");
+  expect(summary.text).toContain("Cannot find module");
+});
+
+test("the summarizer is asked for decisions and open work, not a length", async () => {
+  const turns: Turn[] = [
+    { role: "user", text: "a" },
+    { role: "assistant", text: "b", toolCalls: [] },
+    { role: "user", text: "c" },
+    { role: "assistant", text: "d", toolCalls: [] },
+  ];
+  let prompt = "";
+  const provider: Provider = {
+    async send(sys) {
+      prompt = sys;
+      return { text: "x", toolCalls: [] };
+    },
+  };
+  await compactTurns(turns, provider, 2);
+  expect(prompt).toContain("Decisions:");
+  expect(prompt).toContain("Open:");
 });

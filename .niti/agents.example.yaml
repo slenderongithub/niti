@@ -19,6 +19,9 @@ agents:
     # `mcp` grants every configured MCP server's tools; list a single mcp__server__tool to
     # narrow it. Without it, MCP tools are not offered to this agent at all.
     allowedTools: [read_file, write_file, edit, shell, mcp]
+    # reasoning: auto  # off | low | medium | high | auto — Gemini thinkingBudget / OpenAI
+                       # reasoning_effort. Unset sends nothing; Flash and Flash-Lite think only
+                       # when this is set.
     reviewer: qa # qa must answer "VERDICT: approve" before this agent's tasks are accepted
 
   - id: qa
@@ -39,6 +42,7 @@ permissions:
 # maxTurns: 30         # tool-loop cap per agent turn
 # verify: [bun run typecheck, bun test]   # checks a changed task must pass before it reports done
 #                                         # omitted: detected from the project · false: never verify
+# repoMap: true        # generated project outline in every system prompt (false to turn it off)
 # maxAgents: 6         # ceiling on team size
 # worktree: false      # isolate each run's writes in a throwaway git worktree
 # instructions: [AGENTS.md]   # files appended to every agent's system prompt

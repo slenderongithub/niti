@@ -338,6 +338,7 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
     watch: options.watch,
     maxTurns: options.maxTurns,
     verify: options.verify,
+    repoMap: options.repoMap,
     worktree: args.includes("--worktree") || options.worktree,
   });
 }

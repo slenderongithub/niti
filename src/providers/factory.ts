@@ -32,9 +32,9 @@ export function makeProvider(cfg: AgentConfig): Provider {
     case "anthropic":
       return new AnthropicProvider(cfg.model, apiKey, baseURL);
     case "gemini":
-      return new GeminiProvider(cfg.model, apiKey, baseURL);
+      return new GeminiProvider(cfg.model, apiKey, baseURL, cfg.reasoning);
     case "openai":
-      return new OpenAIProvider(cfg.model, apiKey, baseURL);
+      return new OpenAIProvider(cfg.model, apiKey, baseURL, undefined, cfg.reasoning);
     case "copilot":
       return new CopilotProvider(cfg.model, apiKey); // apiKey is the GitHub OAuth token
   }

@@ -98,7 +98,8 @@ This file is the single merged source of project history/architecture context, r
 | `src/engine.ts` | Wires agents + orchestrator + messaging + approvals + usage + locks + store + watcher into one `EventHub`; `submit()`/`resume()`/`undo()`/`switchModel()` |
 | `src/agent/agent.ts` | Multi-turn tool loop (read-only calls in a turn run concurrently), `send_message`/`ask_agent`/`spawn_fork`, approval + quota checks, checkpoint-before-write, `maxTurns` override, verification pass before a changed task may report done |
 | `src/agent/verify.ts` | `detectChecks()` (package.json typecheck/build script, `go build`, `cargo check`) + `runChecks()`; overridden by `verify:` in agents.yaml |
-| `src/agent/context.ts` | `compactTurns()` — summarizes older turns near the context ceiling |
+| `src/agent/context.ts` | `compactTurns()` — structured summary (Goal/Done/Decisions/Open) near the context ceiling, plus a ledger of changed files and recent errors recovered from the dropped turns without a model call |
+| `src/agent/repomap.ts` | PageRank over the import graph → a ranked project outline for the system prompt; uses `git ls-files` so a vendored tree inside the repo can't crowd out the project's own source |
 | `src/orchestrator/planner.ts`, `scheduler.ts`, `runner.ts`, `orchestrator.ts`, `locks.ts`, `task.ts` | Goal→DAG planning, concurrent topological execution, the shared task queue, the lock registry |
 | `src/messaging/message-bus.ts` | Cross-provider agent↔agent channel: `post`/`announce`/`authorize`/`drain`, per-pair rate cap |
 | `src/providers/*` | `Provider` interface; `anthropic.ts`/`gemini.ts`/`openai.ts`/`copilot.ts` clients; `catalog.ts` (+ generated) provider metadata; `pricing.ts` cost table; `factory.ts` instantiation |

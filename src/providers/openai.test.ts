@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { OpenAIProvider } from "./openai.ts";
+import { OpenAIProvider, reasoningEffort } from "./openai.ts";
 import type { Turn } from "./provider.ts";
 
 // This class is the transport for every non-Anthropic, non-Gemini model in the catalog — the
@@ -105,4 +105,11 @@ test("stream_options is withheld from local runtimes, which reject unknown param
 
   expect(seenHosted.params?.stream_options).toEqual({ include_usage: true });
   expect(seenLocal.params?.stream_options).toBeUndefined();
+});
+
+test("reasoning_effort is sent only when asked for, since most catalog models reject it", () => {
+  expect(reasoningEffort("high")).toEqual({ reasoning_effort: "high" });
+  expect(reasoningEffort("off")).toEqual({ reasoning_effort: "minimal" });
+  expect(reasoningEffort("auto")).toEqual({}); // auto = leave the model's own default alone
+  expect(reasoningEffort(undefined)).toEqual({});
 });

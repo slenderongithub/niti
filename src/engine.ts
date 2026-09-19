@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 import { Agent, type AgentConfig } from "./agent/agent.ts";
 import { detectChecks, parseChecks } from "./agent/verify.ts";
+import { repoMapSection } from "./agent/repomap.ts";
 import { Bus } from "./events/bus.ts";
 import { MessageBus, USER, type Messenger } from "./messaging/message-bus.ts";
 import { Orchestrator } from "./orchestrator/orchestrator.ts";
@@ -40,6 +41,9 @@ export interface EngineOptions {
   // done; omitted → detected from the project (a typecheck/build script, go build, cargo check);
   // `verify: false` → nothing is run.
   verify?: string[] | false;
+  // false → no generated project map in the system prompt. On by default; it is skipped
+  // automatically for projects too small to need one.
+  repoMap?: boolean;
 }
 
 // The Engine wires the whole multi-agent runtime: agents (with a live messenger so they can talk to
@@ -141,9 +145,14 @@ export class Engine {
       this.bus.publish({ agentId: "orchestrator", type: "thought", payload: `verifying changes with: ${checks.map((c) => c.name).join(", ")}`, time: Date.now() });
     }
 
+    // Built once, not per agent: it walks the tree and shells out to git, and every agent gets the
+    // same map. Placed in the system prompt (ahead of the conversation) so a provider's cache
+    // prefix still matches call to call — see anthropic.ts's cache_control placement.
+    const mapSection = opts.repoMap === false ? "" : repoMapSection(this.root);
+
     for (const c of opts.configs) {
       this.declaredPrompts.set(c.id, c.systemPrompt);
-      const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + TOOL_GUIDANCE };
+      const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + mapSection + TOOL_GUIDANCE };
       // A missing key (revoked, keychain wiped, never set) must not take the whole server down —
       // that would crash boot before the handshake line prints, leaving the TUI staring at an EOF
       // with no way back in short of editing agents.yaml by hand. Defer the failure to first use,

@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, RateLimit } from "./provider.ts";
+import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, RateLimit, Reasoning } from "./provider.ts";
 import { parseRateLimit } from "./provider.ts";
 
 function parseArgs(s: string | undefined): Record<string, unknown> {
@@ -25,6 +25,7 @@ export class OpenAIProvider implements Provider {
     apiKey?: string,
     baseURL?: string, // set for OpenAI-compatible providers (DeepSeek, Groq, OpenRouter, Ollama, …)
     headers?: Record<string, string>, // extra default headers (e.g. Copilot's editor headers)
+    private reasoning?: Reasoning,
   ) {
     this.supportsUsageOption = !/localhost|127\.0\.0\.1|\[::1\]/.test(baseURL ?? "");
     const trackedFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -71,6 +72,7 @@ export class OpenAIProvider implements Provider {
     const params = {
       model: this.model,
       messages,
+      ...reasoningEffort(this.reasoning),
       ...(tools.length
         ? {
             tools: tools.map((t) => ({
@@ -136,4 +138,12 @@ function mapUsage(
     // to report (there's no separate "cache write" action, unlike Anthropic's explicit markers).
     cacheReadTokens: u.prompt_tokens_details?.cached_tokens ?? undefined,
   };
+}
+
+// o-series and GPT-5 models take reasoning_effort; everything else 400s on it. Sent only when the
+// user opted in, for the same reason as Gemini's thinkingConfig — this catalog covers 29 providers
+// and most of their models have no reasoning mode to configure.
+export function reasoningEffort(r?: Reasoning): Record<string, unknown> {
+  if (!r || r === "auto") return {}; // auto = whatever the model does on its own
+  return { reasoning_effort: r === "off" ? "minimal" : r };
 }

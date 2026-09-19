@@ -1,4 +1,4 @@
-import type { Provider, Turn, ToolResult, ToolSpec, ToolCall, Usage } from "../providers/provider.ts";
+import type { Provider, Turn, ToolResult, ToolSpec, ToolCall, Usage, Reasoning } from "../providers/provider.ts";
 import { summarizeError } from "../providers/provider.ts";
 import type { Bus } from "../events/bus.ts";
 import type { Approve } from "../approval.ts";
@@ -203,6 +203,9 @@ export interface AgentConfig {
   baseURL?: string; // for provider "custom" (any OpenAI-compatible endpoint)
   autoApprove?: string[]; // tool names pre-granted for this agent, no prompt (still gated for dangerous shell calls)
   permissions?: PermissionRules; // per-agent tool policy; overrides the project-level block
+  // How hard this model should think per call (Gemini thinkingBudget / OpenAI reasoning_effort).
+  // Unset sends nothing, which is what models without a reasoning mode require.
+  reasoning?: Reasoning;
 }
 
 export interface AgentDeps {

@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta } from "./provider.ts";
+import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, Reasoning } from "./provider.ts";
 
 export class GeminiProvider implements Provider {
   private client: GoogleGenAI;
@@ -8,6 +8,7 @@ export class GeminiProvider implements Provider {
     private model: string,
     apiKey: string, // required — the SDK has no env fallback
     baseURL?: string, // a Gemini-compatible proxy; the factory computes it and used to drop it here
+    private reasoning?: Reasoning,
   ) {
     // The @google/genai transport falls back to a bare fetch() — no retries, no timeout — unless
     // httpOptions.retryOptions is set. Anthropic and OpenAI's SDKs both retry twice by default, so
@@ -49,6 +50,7 @@ export class GeminiProvider implements Provider {
       contents: contents as any,
       config: {
         systemInstruction: sysPrompt,
+        ...thinkingConfig(this.reasoning),
         ...(tools.length
           ? {
               tools: [
@@ -115,4 +117,17 @@ export class GeminiProvider implements Provider {
     const res = await this.client.models.embedContent({ model: "gemini-embedding-001", contents: texts });
     return (res.embeddings ?? []).map((e) => e.values ?? []);
   }
+}
+
+// Flash and Flash-Lite ship with thinking effectively off, so a model that can reason is answering
+// coding tasks without doing any — the single cheapest quality knob in this provider, and one
+// nothing in niti was touching. Sent only when the user asked for it: `thinkingConfig` is rejected
+// by models that have no thinking mode at all, so an unconditional default would break them.
+//
+// -1 is Gemini's "dynamic" budget: the model sizes its own thinking per request, which is the
+// right answer whenever the user has not got a specific number in mind.
+export function thinkingConfig(r?: Reasoning): Record<string, unknown> {
+  if (!r) return {};
+  const budget = { off: 0, low: 1024, medium: 8192, high: 24576, auto: -1 }[r];
+  return { thinkingConfig: { thinkingBudget: budget } };
 }

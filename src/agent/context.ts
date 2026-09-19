@@ -32,12 +32,51 @@ export async function compactTurns(
   // A second, fully billed model call. Its tokens went entirely unrecorded, so /usage and /cost
   // understated real spend by exactly the amount compaction cost — and compaction fires on the
   // longest, most expensive conversations. onUsage lets the caller book it against the agent.
-  const { text, usage } = await provider.send(
-    "Summarize this conversation excerpt in 2-4 sentences: what was asked, what was done, what's still pending. Be concise.",
-    [{ role: "user", text: transcript }],
-    [],
-  );
+  const { text, usage } = await provider.send(SUMMARY_PROMPT, [{ role: "user", text: transcript }], []);
   if (usage) onUsage?.(usage);
-  const summaryTurn: Turn = { role: "user", text: `[Earlier conversation summary]\n${text}` };
+  // The summary is what the model says it remembers; the ledger is what actually happened. Both,
+  // because they fail differently — a summarizer under a length budget drops file paths first, and
+  // the path of the file you already edited is the single fact a resumed task most needs.
+  const ledger = factsFrom(old);
+  const summaryTurn: Turn = {
+    role: "user",
+    text: `[Earlier conversation summary]\n${text}${ledger ? `\n\n${ledger}` : ""}`,
+  };
   return [summaryTurn, ...recent];
+}
+
+// Asking for "2-4 sentences" reliably produced 2-4 sentences that named nothing: no files, no
+// decisions, no unresolved errors — so the turn after a compaction re-read files it had already
+// read and re-made choices it had already made. Naming the sections is what gets them filled in.
+const SUMMARY_PROMPT =
+  "You are compacting a work log so the engineer who continues this task loses nothing. " +
+  "Write under these exact headings, omitting any that have no content:\n" +
+  "Goal: what was asked.\n" +
+  "Done: what has actually been completed.\n" +
+  "Decisions: choices made that later work must stay consistent with (names, formats, conventions, locations).\n" +
+  "Open: what is unfinished, failing, or still to verify.\n" +
+  "Be specific and name files, functions and errors exactly. Facts over prose, no preamble.";
+
+// Recovered mechanically from the turns being dropped, not from the model. `wrote x`/`edited x`
+// are the literal strings the sandbox returns, and an `error:` prefix is how every failed tool
+// call comes back — so this is exact where a summary is merely likely.
+const FILE_RESULT = /^(?:wrote|edited) (.+)$/;
+
+function factsFrom(turns: Turn[]): string {
+  const files = new Set<string>();
+  const errors: string[] = [];
+  for (const t of turns) {
+    if (t.role !== "tool") continue;
+    for (const r of t.results) {
+      const m = FILE_RESULT.exec(r.output.trim());
+      if (m) files.add(m[1]!);
+      // Only the most recent few, and only the first line: a stack trace re-pasted into every
+      // later turn is how a context window fills up in the first place.
+      if (r.output.startsWith("error:")) errors.push(`${r.name}: ${r.output.split("\n")[0]!.slice(0, 160)}`);
+    }
+  }
+  const parts: string[] = [];
+  if (files.size > 0) parts.push(`Files changed so far: ${[...files].join(", ")}`);
+  if (errors.length > 0) parts.push(`Recent tool errors:\n${errors.slice(-3).map((e) => `- ${e}`).join("\n")}`);
+  return parts.join("\n");
 }
