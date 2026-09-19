@@ -9,7 +9,7 @@ import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "./events.ts";
 import { CATALOG, contextWindow, providersByCategory, splitModelId, type Category } from "../providers/catalog.ts";
 import { costOf } from "../providers/pricing.ts";
-import { buildFileGraph } from "../graph/filegraph.ts";
+import { buildFileGraph, trackedFiles } from "../graph/filegraph.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
 import { saveAgents, setTheme, setAuto } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
@@ -104,7 +104,9 @@ export function startServer(
   const fileGraph = (root: string) => {
     const now = Date.now();
     if (graphCache && graphCache.root === root && now - graphCache.at < GRAPH_TTL_MS) return graphCache.value;
-    const value = buildFileGraph(root);
+    // Same correction the agent-facing project map needs: the walk cannot tell this project
+    // from a vendored tree checked out inside it, and would render that tree instead.
+    const value = buildFileGraph(root, 400, trackedFiles(root));
     graphCache = { at: now, root, value };
     return value;
   };

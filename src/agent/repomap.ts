@@ -1,5 +1,4 @@
-import { spawnSync } from "node:child_process";
-import { buildFileGraph } from "../graph/filegraph.ts";
+import { buildFileGraph, trackedFiles } from "../graph/filegraph.ts";
 
 // An agent dropped into an unfamiliar repository starts with no idea what is in it. Search tools
 // answer "where is X" once it knows to ask for X — but the first turn of a real task is usually
@@ -27,22 +26,6 @@ const MIN_FILES = 12;
 export interface RepoMapOptions {
   maxFiles?: number; // how many ranked files to show
   maxChars?: number; // hard ceiling on the rendered map
-}
-
-// git's tracked files, which is the most accurate cheap answer to "what is this project's own
-// source". A plain directory walk cannot distinguish a project from a vendored tree checked out
-// inside it: run it on a repo with an unpacked editor in a subdirectory and the entire budget goes
-// to that, with none of the actual project in the map. Untracked new files are missed, which is
-// the right trade for an orientation aid — the agent's search tools find those, and a map that is
-// 100% noise finds nothing. undefined (not a git repo, or git is unavailable) falls back to the walk.
-function trackedFiles(root: string): string[] | undefined {
-  try {
-    const r = spawnSync("git", ["-C", root, "ls-files"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-    if (r.status !== 0 || !r.stdout) return undefined;
-    return r.stdout.split("\n").filter(Boolean);
-  } catch {
-    return undefined;
-  }
 }
 
 // PageRank over "A imports B" edges, reversed: importance flows to the file being imported. An

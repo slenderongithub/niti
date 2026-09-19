@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, dirname, extname, basename } from "node:path";
 
 // The project's file-dependency graph: nodes are source files, edges are intra-project imports.
@@ -14,11 +15,24 @@ export interface FileGraph {
 const SRC_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go"]);
 const IGNORE = new Set(["node_modules", ".git", "dist", "build", ".niti", "vendor", ".next", "out", "target", "coverage", "old-tech"]);
 
-// `files` overrides the directory walk with a caller-supplied list of project-relative paths.
-// The walk has no way to tell a project's own source from a vendored tree that merely sits inside
-// it — point it at a repo containing a checked-out editor or an unpacked app bundle and it fills
-// its whole budget with that, never reaching the real code. A caller that has a better list (e.g.
-// git's tracked files) can hand it over instead.
+// git's tracked files: the cheapest accurate answer to "what is this project's own source".
+// The walk below cannot tell a project from a vendored tree checked out inside it — point it at a
+// repo holding an unpacked editor or app bundle and it spends its whole budget in there, with none
+// of the actual project in the result. Untracked new files are missed, which is the right trade
+// for both callers: the graph view redraws on the next change, and an agent's search tools find
+// what an outline omits. undefined (not a git repo, or no git) falls back to the walk.
+export function trackedFiles(root: string): string[] | undefined {
+  try {
+    const r = spawnSync("git", ["-C", root, "ls-files"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+    if (r.status !== 0 || !r.stdout) return undefined;
+    return r.stdout.split("\n").filter(Boolean);
+  } catch {
+    return undefined;
+  }
+}
+
+// `files` overrides the directory walk with a caller-supplied list of project-relative paths —
+// see trackedFiles above for why a caller would want to.
 export function buildFileGraph(root: string, maxFiles = 400, files?: string[]): FileGraph {
   if (!files) {
     files = [];
