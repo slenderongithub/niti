@@ -1118,14 +1118,16 @@ test("a check the model cannot satisfy stops instead of looping on it", async ()
 
 // ── The working checklist: written by the agent, kept in front of it ─────────────────────────
 
-test("the checklist is re-stated to the model, and one current copy replaces the last", async () => {
+test("the checklist rides on the todo tool's result, and the history is only ever appended to", async () => {
   // The drift this prevents: the original instruction scrolls up, and by turn eight the agent is
-  // still polishing step one. Keeping the list recent is the whole mechanism.
-  const seen: string[][] = [];
+  // still polishing step one. The list is in front of it in the todo result it just received. What
+  // it must not do is rewrite the middle of the history to keep a second copy current — that changes
+  // every byte after the edit and throws away the provider's cached prefix on each update.
+  const snapshots: string[][] = [];
   let call = 0;
   const stub: Provider = {
     async send(_s, turns) {
-      seen.push(turns.filter((t) => t.role === "user").map((t) => (t as { text: string }).text));
+      snapshots.push(turns.map((t) => JSON.stringify(t)));
       call++;
       if (call === 1) {
         return { text: "", toolCalls: [{ id: "1", name: "todo", input: { items: [{ text: "find it", status: "doing" }, { text: "fix it", status: "pending" }] } }] };
@@ -1138,11 +1140,35 @@ test("the checklist is re-stated to the model, and one current copy replaces the
   };
   await new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), {}).run("do the thing");
 
-  const third = seen[2] ?? [];
-  const boards = third.filter((t) => t.startsWith("Your working checklist"));
-  expect(boards).toHaveLength(1); // replaced, not accumulated
-  expect(boards[0]).toContain("[x] find it"); // the current state, not the first version
-  expect(boards[0]).toContain("[~] fix it");
+  // Every request is the previous request plus new turns: nothing already sent was rewritten.
+  for (let k = 1; k < snapshots.length; k++) {
+    expect(snapshots[k]!.slice(0, snapshots[k - 1]!.length)).toEqual(snapshots[k - 1]!);
+  }
+  const last = snapshots[2]!.join("\n");
+  expect(last).toContain("[x] find it"); // the latest todo result carries the current state
+  expect(last).toContain("[~] fix it");
+  expect(last).not.toContain("Your working checklist"); // no second, injected copy
+});
+
+test("after a compaction swallows the todo call, the current checklist is re-stated once at the tail", async () => {
+  let seen: Turn[] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(sys, turns) {
+      if (sys !== "s") return { text: "summary of the work so far", toolCalls: [] }; // compactTurns' own call
+      seen = turns;
+      n++;
+      if (n === 1) return { text: "", toolCalls: [{ id: "t", name: "todo", input: { items: [{ text: "ship it", status: "doing" }] } }] };
+      if (n <= 4) return { text: "", toolCalls: [{ id: `w${n}`, name: "write_file", input: { path: `f${n}.txt`, content: "x" } }] };
+      if (n === 5) return { text: "", toolCalls: [{ id: "w5", name: "write_file", input: { path: "f5.txt", content: "x" } }], usage: { inputTokens: 960_000, outputTokens: 10 } };
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root }).run("go");
+  const boards = seen.filter((t) => t.role === "user" && t.text.startsWith("Your working checklist"));
+  expect(boards).toHaveLength(1);
+  expect((boards[0] as { text: string }).text).toContain("[~] ship it");
 });
 
 test("the todo tool needs no permission and touches nothing", async () => {
@@ -1165,11 +1191,11 @@ test("the todo tool needs no permission and touches nothing", async () => {
 });
 
 test("a checklist does not leak from one task into the next", async () => {
-  const seen: string[] = [];
+  const historyByTask: Record<number, string[]> = { 1: [], 2: [] };
   let task = 0;
   const stub: Provider = {
     async send(_s, turns) {
-      for (const t of turns) if (t.role === "user" && t.text.startsWith("Your working checklist")) seen.push(t.text);
+      historyByTask[task]!.push(JSON.stringify(turns));
       if (turns.some((t) => t.role === "tool")) return { text: "ok", toolCalls: [] };
       return task === 1
         ? { text: "", toolCalls: [{ id: "1", name: "todo", input: { items: ["first task step"] } }] }
@@ -1181,11 +1207,9 @@ test("a checklist does not leak from one task into the next", async () => {
   await agent.run("task one");
   task = 2;
   await agent.run("task two");
-  expect(seen.some((s) => s.includes("first task step"))).toBe(true);
-  expect(seen.filter((s) => s.includes("first task step")).length).toBeGreaterThan(0);
+  expect(historyByTask[1]!.some((h) => h.includes("first task step"))).toBe(true); // the plan was visible while it was live
   // The second run must never have been shown the first run's plan.
-  const duringSecond = seen.slice(seen.findIndex((s) => s.includes("first task step")) + 1);
-  expect(duringSecond.filter((s) => s.includes("first task step"))).toHaveLength(0);
+  expect(historyByTask[2]!.filter((h) => h.includes("first task step"))).toHaveLength(0);
 });
 
 // ── The check-gaming guard ──────────────────────────────────────────────────────────────────

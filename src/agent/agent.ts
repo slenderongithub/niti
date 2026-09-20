@@ -292,7 +292,7 @@ export class Agent {
   private inFlightCount = 0;
   private lastNotesVersion = -1; // cursor into the shared notes board, so injectNotes only fires on change
   private todos: TodoItem[] = []; // this run's working checklist (the `todo` tool)
-  private todosDirty = false; // set on a todo call, cleared once re-injected
+  private todosLost = false; // set when compaction summarized the todo call away, cleared once re-stated
   // Cached and only rebuilt when something that could change the result actually has — a
   // byte-identical tools array call to call is what lets a provider's prompt-caching breakpoint
   // (see anthropic.ts) actually hit, since caching matches on the serialized request bytes.
@@ -379,7 +379,7 @@ export class Agent {
     // Per run: a checklist is scoped to the task that wrote it, and carrying the previous task's
     // steps into the next one is worse than having none.
     this.todos = [];
-    this.todosDirty = false;
+    this.todosLost = false;
     this.inFlightCount++;
     try {
       for (let i = 0; i < this.maxTurns; i++) {
@@ -393,7 +393,7 @@ export class Agent {
         }
         this.injectInbox(turns, sessionId);
         this.injectNotes(turns, sessionId);
-        this.injectTodos(turns, sessionId);
+        this.restateTodos(turns, sessionId);
         const tools = this.buildTools(allowed, ctx);
         const reply = await this.provider.send(this.config.systemPrompt, turns, tools, onDelta);
         if (reply.text) {
@@ -432,6 +432,7 @@ export class Agent {
           );
           if (turns.length < before) {
             compacted = true;
+            this.todosLost = true;
             ctx.reads?.clear();
             this.bus.publish({ agentId: id, type: "warning", payload: `context compacted automatically (${before} → ${turns.length} turns)`, time: Date.now() });
           }
@@ -737,16 +738,18 @@ export class Agent {
     this.push(turns, { role: "user", text: `${NOTES_BOARD_MARKER}\n\n${text}` }, sessionId);
   }
 
-  // Re-state the checklist as the most recent context whenever it has changed. Only on change:
-  // re-pasting an unchanged list every turn would spend tokens to tell the model something it can
-  // already see a few turns up.
-  private injectTodos(turns: Turn[], sessionId?: string): void {
-    if (!this.todosDirty || this.todos.length === 0) return;
-    this.todosDirty = false;
-    for (let i = turns.length - 1; i >= 0; i--) {
-      const t = turns[i]!;
-      if (t.role === "user" && t.text.startsWith(TODO_MARKER)) turns.splice(i, 1);
-    }
+  // The checklist's carrier is the todo tool's own result: todoAck returns the whole list, and it
+  // lands in the history as an ordinary append. This used to also inject the list as a user turn
+  // after every change, deleting the previous copy from the middle of the history. That copy sat
+  // directly behind the ack it repeated, so it added nothing the model could not already see, and
+  // the mid-history delete changed every byte after it — a cache miss on the whole tail, per update.
+  //
+  // One case remains where the list is genuinely gone: compaction summarizes the older turns, and
+  // the last todo call with them. The prefix is being rewritten then anyway, so the current list is
+  // appended once, at the tail, and never touched again.
+  private restateTodos(turns: Turn[], sessionId?: string): void {
+    if (!this.todosLost || this.todos.length === 0) return;
+    this.todosLost = false;
     this.push(turns, { role: "user", text: `${TODO_MARKER}\n\n${renderTodos(this.todos)}` }, sessionId);
   }
 
@@ -1037,7 +1040,6 @@ export class Agent {
     // it resolves above the permission gate exactly as the messaging tools do.
     if (call.name === "todo") {
       this.todos = parseTodos(call.input.items);
-      this.todosDirty = true;
       this.bus.publish({ agentId: id, type: "thought", payload: `plan: ${renderTodos(this.todos).replace(/\n/g, " · ")}`, time: Date.now() });
       return todoAck(this.todos);
     }
