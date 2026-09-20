@@ -97,7 +97,7 @@ This file is the single merged source of project history/architecture context, r
 | `src/permissions.ts` | Wildcard pattern resolver (`resolve()`), `Bun.Glob`-based, layered session→agent→project→default-ask |
 | `src/engine.ts` | Wires agents + orchestrator + messaging + approvals + usage + locks + store + watcher into one `EventHub`; `submit()`/`resume()`/`undo()`/`switchModel()` |
 | `src/agent/agent.ts` | Multi-turn tool loop (read-only calls in a turn run concurrently), `send_message`/`ask_agent`/`spawn_fork`, approval + quota checks, checkpoint-before-write, `maxTurns` override, verification pass before a changed task may report done |
-| `src/agent/verify.ts` | `detectChecks()` (package.json typecheck/build script, `go build`, `cargo check`) + `runChecks()`; overridden by `verify:` in agents.yaml |
+| `src/agent/verify.ts` | `detectChecks()` + `checkSurface()` (which files decide a verdict rather than being judged by it — the check-gaming guard) and  (package.json typecheck/build script, `go build`, `cargo check`) `runChecks()`; overridden by `verify:` in agents.yaml |
 | `src/agent/context.ts` | `compactTurns()` — structured summary (Goal/Done/Decisions/Open) near the context ceiling, plus a ledger of changed files and recent errors recovered from the dropped turns without a model call |
 | `src/agent/todo.ts` | The `todo` tool's list parsing/rendering — tolerant of the shapes models actually emit; whole-list replace, bounded at 20 items |
 | `src/agent/steering.ts` | Per-model-family prompt addendum (`familyOf` keys off the model id, not the provider — many providers serve other vendors' weights); mechanical steering only, never shared conventions |

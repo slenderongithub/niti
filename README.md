@@ -102,6 +102,15 @@ Both pages retheme live with whatever theme (`ctrl+t` / `/theme`) the TUI has ac
 - **Verification before "done"** — an agent that changed files must pass the project's own checks
   (a `typecheck`/`build` script, `go build`, `cargo check`, or whatever `verify:` names) before it
   may report a task complete; failures go back to it as the real compiler output, twice at most.
+  A task whose checks never pass ends `unverified` rather than `done`, so the DAG never releases
+  dependents onto a tree that doesn't build.
+- **Check-gaming guard** — a green result that arrived only because the agent edited the tests,
+  the lint config or the check script itself is refused, and the agent is told to revert it and fix
+  the code. Judged by content, not by touch, so reverting as instructed isn't flagged; and only
+  ever after a failure, so writing a test in a task that never failed is ordinary work.
+- **Objective retry** — an `unverified` task is handed to a *different* model with the check output
+  attached, before any replan. Best-of-N where the selector is a compiler rather than a judge
+  model, and where the tasks that were right first time cost nothing extra.
 - **Approval gates** — agents pause for `[y] approve · [n] deny · [a] always` before risky actions,
   answered from the TUI or the web dashboard; dangerous shell patterns always prompt.
 - **Persistence** — every turn checkpoints to SQLite (`.niti/niti.db`); `niti-core resume` picks up

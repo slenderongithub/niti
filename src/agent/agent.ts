@@ -14,11 +14,11 @@ import { resolve as resolvePermission, DEFAULT_RULES, SAFE_SHELL_RULES, type Per
 import { runTool, toolSpecs, toSandboxCall, safePath, editDiff, writeFileDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
 import { compactTurns } from "./context.ts";
-import { runChecks, type Check } from "./verify.ts";
+import { runChecks, checkSurface, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 
 // Bounds the tool loop so a misbehaving model can't spin forever (maxTurns: in agents.yaml raises
@@ -161,7 +161,11 @@ export function overContextThreshold(inputTokens: number, context: number, ratio
   return context > 0 && inputTokens > context * ratio;
 }
 
-export type RunOutcome = "done" | "failed" | "exhausted";
+// "unverified" is a failure with a known cause: the work ran to completion but the project's own
+// checks never passed on it. Kept distinct from "failed" so the scheduler can do the one thing
+// that actually helps here — hand the task to a different model, with the check output attached —
+// before falling back to a replan.
+export type RunOutcome = "done" | "failed" | "exhausted" | "unverified";
 
 // One run's own result. Read this instead of the `output`/`error` getters when correctness depends
 // on it belonging to *this* call — those getters expose shared state that a concurrent loop on the
@@ -246,6 +250,11 @@ export interface LoopCtx {
   forkDepth: number;
   sessionId?: string;
   wrote?: boolean; // set by execTool on a successful file write — gates the verification pass
+  // First-seen content of every check-surface file this run has written, so tampering is judged by
+  // content rather than by touch. Without it, an agent doing exactly what it was told — reverting
+  // its edit to the check and fixing the code — trips the guard on the way back, because reverting
+  // a file is still writing it.
+  checkBaseline?: Map<string, string | undefined>;
 }
 
 export class Agent {
@@ -263,6 +272,9 @@ export class Agent {
   private shouldStop?: () => boolean;
   private maxTurns: number;
   private verify: Check[];
+  // Rebuilt when the root moves (worktree mode repoints it mid-session) — resolving a package
+  // script to the file it runs is root-relative, so a stale surface would protect the wrong tree.
+  private surfaceCache?: { root: string; fn: (path: string) => CheckRole | undefined };
   private lastText = "";
   private forkCount = 0; // breadth budget for spawn_fork, see MAX_FORKS_PER_AGENT
   private lastError = "";
@@ -433,23 +445,49 @@ export class Agent {
           // Ground truth before "done". Only for a run that actually changed files — a review or
           // research task cannot have broken the build, and running one for it would be a minute
           // of latency for a foregone conclusion.
-          if (ctx.wrote && this.verify.length > 0 && verifyRounds < MAX_VERIFY_ROUNDS && i < this.maxTurns - 1) {
-            verifyRounds++;
+          if (ctx.wrote && this.verify.length > 0) {
             this.bus.publish({ agentId: id, type: "thought", payload: `verifying: ${this.verify.map((c) => c.name).join(", ")}`, time: Date.now() });
             const v = await runChecks(this.root, this.verify);
-            if (!v.ok) {
-              this.bus.publish({ agentId: id, type: "warning", payload: "verification failed — returning the errors to the agent", time: Date.now() });
-              this.push(
-                turns,
-                {
-                  role: "user",
-                  text:
-                    `Your changes do not pass this project's checks. Fix them — this is the real output, not a review:\n\n${v.report}\n\n` +
-                    `Fix the cause, not the symptom, and do not disable, delete or weaken a check to make it pass. When you are done, say so.`,
-                },
-                sessionId,
-              );
-              continue;
+            // A green result that arrived only because the checks themselves were edited is not
+            // evidence of anything. Measured by reverting them and asking again, not inferred —
+            // see tamperedChecks(). Only worth asking when the checks currently pass.
+            const gamedFiles = v.ok ? await this.tamperedChecks(ctx) : { enforcer: [], test: [] };
+            // A dual-use file (a manifest, a test that legitimately follows a rename) is reported,
+            // never refused: blocking those would derail ordinary refactoring. The reviewer and the
+            // human see it; the agent is not stopped by it.
+            if (gamedFiles.test.length > 0) {
+              this.bus.publish({
+                agentId: id,
+                type: "warning",
+                payload: `the checks would fail without this run's changes to ${gamedFiles.test.join(", ")} — worth a human's eye`,
+                time: Date.now(),
+              });
+            }
+            if (!v.ok || gamedFiles.enforcer.length > 0) {
+              const gamed = gamedFiles.enforcer;
+              if (verifyRounds < MAX_VERIFY_ROUNDS && i < this.maxTurns - 1) {
+                verifyRounds++;
+                this.bus.publish({
+                  agentId: id,
+                  type: "warning",
+                  payload: gamed.length > 0
+                    ? `checks pass only because ${gamed.join(", ")} changed — asking for a real fix`
+                    : "verification failed — returning the errors to the agent",
+                  time: Date.now(),
+                });
+                this.push(turns, { role: "user", text: gamed.length > 0 ? tamperMessage(gamed) : failureMessage(v.report) }, sessionId);
+                continue;
+              }
+              // Out of rounds. Reporting "done" here is what released dependents onto a tree that
+              // does not build — the exact failure this whole pass exists to prevent, arriving one
+              // level up instead.
+              if (gamed.length > 0) await this.restoreChecks(ctx, gamed);
+              this.lastError = gamed.length > 0
+                ? `the checks pass only because the checks themselves were changed (${gamed.join(", ")}) — the work is unverified, and those files have been restored`
+                : `the project's checks still fail after ${verifyRounds} fix attempt(s):\n${v.report}`;
+              if (sessionId) this.store?.setStatus(sessionId, "failed");
+              this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
+              return { outcome: "unverified", text: finalText, error: this.lastError };
             }
             this.bus.publish({ agentId: id, type: "thought", payload: "verification passed", time: Date.now() });
           }
@@ -837,6 +875,89 @@ export class Agent {
     return out;
   }
 
+  private get isCheckFile(): (path: string) => CheckRole | undefined {
+    if (this.surfaceCache?.root !== this.root) {
+      this.surfaceCache = { root: this.root, fn: checkSurface(this.verify, this.root) };
+    }
+    return this.surfaceCache.fn;
+  }
+
+  // Did this green result actually depend on the agent editing the checks?
+  //
+  // Nothing here guesses at intent. Candidates are check-surface files that stand changed from how
+  // this run found them (by content, not by touch — an agent told to revert its edit, that does,
+  // has left nothing changed, and flagging it there would punish the exact correction asked for).
+  // For those, the checks are put back as they were and run again: if the verdict survives, the
+  // edits were incidental; if it flips to failing, the pass was bought.
+  //
+  // That reversion is the only way to answer this honestly. The agent runs the project's checks
+  // itself with `shell` — that is encouraged — so by the time this pass runs, a gamed check has
+  // been green for several turns and there is no failure left to infer from.
+  //
+  // Files created during the run are skipped: a file that did not exist cannot have been weakened,
+  // and a newly added test does not turn a failing check green.
+  private async tamperedChecks(ctx: LoopCtx): Promise<{ enforcer: string[]; test: string[] }> {
+    const candidates: { rel: string; role: CheckRole; baseline: string; current: string }[] = [];
+    // Every check-surface file this run has touched, not just those touched since the last pass.
+    // Scoping it to the last window left a hole worth keeping: once the guard fired, an agent that
+    // simply re-asserted "done" without writing anything presented an empty window, and the still-
+    // neutered check sailed through on the next pass.
+    for (const [rel, baseline] of ctx.checkBaseline ?? []) {
+      const role = this.isCheckFile(rel);
+      if (role === undefined || baseline === undefined) continue;
+      const current = await this.readForCheckpoint(rel);
+      if (current === undefined || current === baseline) continue;
+      candidates.push({ rel, role, baseline, current });
+    }
+    if (candidates.length === 0) return { enforcer: [], test: [] };
+
+    // Briefly restores the originals. Locked, so a teammate writing the same file cannot be
+    // clobbered by the restore; and `finally`, so the agent's version always goes back — if the
+    // process dies inside the window the file is left at its ORIGINAL content, which is the safe
+    // side to fail on.
+    const held: string[] = [];
+    try {
+      for (const c of candidates) {
+        const abs = safePath(this.root, c.rel);
+        if (this.locks) await this.locks.acquire(abs, this.config.id);
+        held.push(abs);
+        await writeFile(abs, c.baseline);
+      }
+      const again = await runChecks(this.root, this.verify);
+      if (again.ok) return { enforcer: [], test: [] }; // the verdict did not depend on the edits
+    } finally {
+      for (const c of candidates) {
+        await writeFile(safePath(this.root, c.rel), c.current).catch(() => {});
+      }
+      for (const abs of held) this.locks?.release(abs, this.config.id);
+    }
+    return {
+      enforcer: candidates.filter((c) => c.role === "enforcer").map((c) => c.rel),
+      test: candidates.filter((c) => c.role === "test").map((c) => c.rel),
+    };
+  }
+
+  // Put the project's checks back as this run found them. Called only when a task is being failed
+  // for weakening an enforcer, and only for the enforcers it actually weakened.
+  //
+  // Leaving a neutered check on disk is worse than the failed task: every later task in the session
+  // verifies against it and passes spuriously, so one gamed check quietly disarms the whole run.
+  // The agent's own work is untouched — this reverts the ruler, not the measurement.
+  private async restoreChecks(ctx: LoopCtx, files: string[]): Promise<void> {
+    for (const rel of files) {
+      const baseline = ctx.checkBaseline?.get(rel);
+      if (baseline === undefined) continue;
+      const abs = safePath(this.root, rel);
+      if (this.locks) await this.locks.acquire(abs, this.config.id);
+      try {
+        await writeFile(abs, baseline);
+        this.bus.publish({ agentId: this.config.id, type: "file_edit", payload: `restored ${rel} (a check this run had disabled)`, time: Date.now(), path: rel });
+      } finally {
+        this.locks?.release(abs, this.config.id);
+      }
+    }
+  }
+
   // Execute one tool call: coordination tools first, then approval + MCP/sandbox dispatch. Publishes
   // the tool_call / file_edit / error telemetry. Returns the string result fed back to the model.
   private async execTool(call: ToolCall, allowed: string[], ctx: LoopCtx): Promise<string> {
@@ -983,7 +1104,15 @@ export class Agent {
       const kind = WRITE_TOOLS.has(call.name) ? "file_edit" : "tool_call";
       // Only reached when the write actually landed (runTool throws on a failed one), so a run
       // whose every edit missed is not sent off to a build that cannot have changed.
-      if (writeRel !== undefined) ctx.wrote = true;
+      if (writeRel !== undefined) {
+        ctx.wrote = true;
+        // `before` is this file's content as of the first time this run touched it; recording it
+        // only once is what makes a later revert recognisable as a revert.
+        if (this.isCheckFile(writeRel) !== undefined) {
+          ctx.checkBaseline ??= new Map();
+          if (!ctx.checkBaseline.has(writeRel)) ctx.checkBaseline.set(writeRel, before);
+        }
+      }
       this.bus.publish({
         agentId: id,
         type: kind,
@@ -1030,4 +1159,26 @@ export class Agent {
     if (ctx.askDepth + 1 > MAX_ASK_DEPTH) return "ask-depth limit reached — answer from what you already know.";
     return m.ask(this.config.id, to, String(call.input.question ?? ""), ctx.askDepth + 1, ctx.sessionId);
   }
+}
+
+// What the agent is told when its work fails the project's checks. The last clause matters: it is
+// the difference between "make this green" and "make this correct".
+function failureMessage(report: string): string {
+  return (
+    `Your changes do not pass this project's checks. This is the real output, not a review:\n\n${report}\n\n` +
+    `Fix the cause, not the symptom. Do not disable, delete or weaken a check to make it pass.`
+  );
+}
+
+// What it is told when the checks went green only because it edited the checks. Deliberately
+// leaves the legitimate case open — a check really can be wrong — but routes it to a human instead
+// of letting the agent quietly decide it was, which is indistinguishable from gaming it.
+function tamperMessage(files: string[]): string {
+  const list = files.join(", ");
+  return (
+    `You changed ${list}. That is part of what checks this project, not part of what it checks. ` +
+    `The checks pass now, but only because you changed them, so this is not evidence that the work is correct.\n\n` +
+    `Revert your changes to ${list} and fix the code the check was complaining about instead. ` +
+    `If you believe the check itself is genuinely wrong, still revert it, and say so plainly in your final answer so a human can decide.`
+  );
 }

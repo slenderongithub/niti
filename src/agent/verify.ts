@@ -84,3 +84,106 @@ export async function runChecks(root: string, checks: Check[]): Promise<VerifyRe
   if (failures.length === 0) return { ok: true, report: "" };
   return { ok: false, report: failures.join("\n\n") };
 }
+
+// ── The check surface: files whose contents decide a verdict rather than being judged by it ──
+//
+// Observed directly on the eval's `fix-what-it-broke` fixture: told its changes failed the check,
+// gemini-flash-lite read the check script, edited the check script, re-ran it green, and reported
+// the task done. It did not fix the code — it broke the thermometer and reported a normal
+// temperature. A prompt rule against this was tried first and did not hold.
+//
+// Two things are classified here, because they deserve different answers:
+//
+//   "enforcer" — the script a check runs, and the config that sets how strict it is. Editing one
+//   of these to clear a failure is essentially never legitimate mid-task, so it is blocked.
+//
+//   "test" — test files, and manifests like package.json that are genuinely dual-use. These change
+//   for honest reasons all the time: rename a function and its tests must follow; add a dependency
+//   and the manifest must follow. Blocking those would derail ordinary refactors, so a suspicious
+//   edit here is reported loudly instead of refused.
+//
+// Whether an edit is *suspicious* at all is not guessed from filenames — see tamperedChecks() in
+// agent.ts, which reverts the file and re-runs the check to find out whether the green result
+// actually depended on it.
+
+export type CheckRole = "enforcer" | "test";
+
+const TEST_PATH = [
+  /(^|\/)__tests__\//,
+  /(^|\/)tests?\//,
+  /(^|\/)spec\//,
+  /\.test\.[cm]?[jt]sx?$/,
+  /\.spec\.[cm]?[jt]sx?$/,
+  /_test\.(go|py|rb|rs)$/,
+  /(^|\/)test_[^/]+\.py$/,
+  /(^|\/)conftest\.py$/,
+];
+
+// Config whose only job is deciding how strict a check is. Loosening one turns a failure green
+// without touching a line of the code under test, and no ordinary task needs to.
+const ENFORCER_FILE = new Set([
+  "tsconfig.json", "jsconfig.json",
+  "eslint.config.js", "eslint.config.mjs", "eslint.config.cjs",
+  ".eslintrc", ".eslintrc.js", ".eslintrc.json", ".eslintrc.cjs", ".eslintrc.yml",
+  "jest.config.js", "jest.config.ts", "vitest.config.ts", "vitest.config.js",
+  "mypy.ini", ".flake8", "ruff.toml", "pytest.ini", "tox.ini", "setup.cfg",
+  ".golangci.yml", ".golangci.yaml", "clippy.toml",
+]);
+
+// Dual-use: real reasons to edit these mid-task exist (a new dependency, a new build step), so they
+// are reported rather than refused.
+const DUAL_USE_FILE = new Set(["package.json", "Cargo.toml", "pyproject.toml", "Makefile", "justfile"]);
+
+const RUNNERS = new Set(["npm", "bun", "pnpm", "yarn", "npx"]);
+
+// File-looking tokens in a command line, e.g. `node check.js` or `pytest tests/unit`.
+function fileTokens(parts: string[]): string[] {
+  return parts
+    .filter((a) => !a.startsWith("-"))
+    .filter((a) => /\.[a-z0-9]{1,5}$/i.test(a) || a.includes("/"))
+    .map((a) => a.replace(/^\.\//, ""));
+}
+
+// What a check actually runs. `npm run typecheck` names no files at all — the real command lives in
+// package.json — and almost every project's check is exactly that shape, so without this expansion
+// the guard cannot see the one file most worth protecting: the script doing the checking. Found the
+// hard way: the eval fixture verifies with `npm run typecheck` → `node check.js`, and an agent
+// editing check.js sailed straight past a guard that had only ever looked at ["run", "typecheck"].
+function commandTargets(checks: Check[], root: string): string[] {
+  const out: string[] = [];
+  let scripts: Record<string, unknown> | undefined;
+  const loadScripts = (): Record<string, unknown> => {
+    if (scripts) return scripts;
+    try {
+      scripts = (JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {}) as Record<string, unknown>;
+    } catch {
+      scripts = {};
+    }
+    return scripts;
+  };
+
+  for (const c of checks) {
+    out.push(...fileTokens(c.args));
+    const base = c.command.split("/").pop() ?? c.command;
+    if (!RUNNERS.has(base) || c.args[0] !== "run" || !c.args[1]) continue;
+    const body = loadScripts()[c.args[1]];
+    // Split on whitespace and shell operators — a script is routinely `tsc --noEmit && node check.js`,
+    // and both halves decide the verdict.
+    if (typeof body === "string") out.push(...fileTokens(body.split(/[\s;|&]+/).filter(Boolean)));
+  }
+  return out;
+}
+
+// Classifies a project-relative path, or undefined when it is ordinary source. `root` is needed to
+// resolve a package-manager script to the command it actually runs.
+export function checkSurface(checks: Check[], root = process.cwd()): (path: string) => CheckRole | undefined {
+  const named = new Set(commandTargets(checks, root));
+  return (path: string): CheckRole | undefined => {
+    const rel = path.replace(/^\.\//, "");
+    const base = rel.split("/").pop() ?? rel;
+    if (named.has(rel) || named.has(base)) return "enforcer";
+    if (ENFORCER_FILE.has(base)) return "enforcer";
+    if (DUAL_USE_FILE.has(base)) return "test";
+    return TEST_PATH.some((re) => re.test(rel)) ? "test" : undefined;
+  };
+}

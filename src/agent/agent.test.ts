@@ -1186,3 +1186,226 @@ test("a checklist does not leak from one task into the next", async () => {
   const duringSecond = seen.slice(seen.findIndex((s) => s.includes("first task step")) + 1);
   expect(duringSecond.filter((s) => s.includes("first task step"))).toHaveLength(0);
 });
+
+// ── The check-gaming guard ──────────────────────────────────────────────────────────────────
+//
+// Observed on the eval's fix-what-it-broke fixture: told its changes failed, gemini-flash-lite
+// edited the *check script* until it stopped complaining and reported the task done. A prompt rule
+// against it did not hold, so the harness checks mechanically.
+
+function verifyFixture(): { root: string; check: { name: string; command: string; args: string[] } } {
+  const root = mkdtempSync(join(tmpdir(), "niti-guard-"));
+  // Fails while src/x.ts says BROKEN. `guard.js` is the check, and is itself editable.
+  writeFileSync(
+    join(root, "guard.js"),
+    "const fs=require('fs');if(fs.readFileSync('src/x.ts','utf8').includes('BROKEN')){console.error('x.ts is broken');process.exit(1)}",
+  );
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src/x.ts"), "export const x = 'BROKEN';\n");
+  return { root, check: { name: "node guard.js", command: "node", args: ["guard.js"] } };
+}
+
+test("a pass bought by editing the check is refused, and the agent is told to fix the code", async () => {
+  const { root, check } = verifyFixture();
+  const prompts: string[] = [];
+  let step = 0;
+  const GOOD_GUARD = "const fs=require('fs');if(fs.readFileSync('src/x.ts','utf8').includes('BROKEN')){console.error('x.ts is broken');process.exit(1)}";
+  const stub: Provider = {
+    async send(_s, turns) {
+      for (const t of turns) if (t.role === "user") prompts.push(t.text);
+      step++;
+      // A run that wrote nothing is never verified — it cannot have broken anything — so the
+      // sequence has to start with a real write.
+      if (step === 1) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'BROKEN';\n" } }] };
+      // Verification runs when the model stops calling tools — i.e. when it claims to be done.
+      if (step === 2) return { text: "claiming done, but x.ts is still BROKEN", toolCalls: [] };
+      // Handed the failure, it neuters the checker instead of fixing the code.
+      if (step === 3) return { text: "", toolCalls: [{ id: "3", name: "write_file", input: { path: "guard.js", content: "process.exit(0)" } }] };
+      if (step === 4) return { text: "fixed it", toolCalls: [] }; // → checks pass, but only because guard.js changed
+      // Told off, it puts the checker back and does the real fix.
+      if (step === 5) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "5a", name: "write_file", input: { path: "guard.js", content: GOOD_GUARD } },
+            { id: "5b", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'fixed';\n" } },
+          ],
+        };
+      }
+      return { text: "done properly", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).runDetailed("fix it");
+
+  expect(prompts.some((p) => p.includes("part of what checks this project"))).toBe(true);
+  expect(r.outcome).toBe("done");
+  expect(readFileSync(join(root, "src/x.ts"), "utf8")).toContain("fixed"); // the real fix landed
+  expect(readFileSync(join(root, "guard.js"), "utf8")).toContain("BROKEN"); // the checker is intact
+});
+
+test("reverting the check, as instructed, is not itself treated as tampering", async () => {
+  // Content, not touch: a revert is still a write, and flagging it would punish the exact
+  // correction the guard just asked for — leaving the agent no move that satisfies it.
+  const { root, check } = verifyFixture();
+  const GOOD_GUARD = readFileSync(join(root, "guard.js"), "utf8");
+  let step = 0;
+  const stub: Provider = {
+    async send() {
+      step++;
+      if (step === 1) return { text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'BROKEN';\n" } }] };
+      if (step === 2) return { text: "done", toolCalls: [] }; // fails: x.ts is BROKEN
+      if (step === 3) return { text: "", toolCalls: [{ id: "a", name: "write_file", input: { path: "guard.js", content: "process.exit(0)" } }] };
+      if (step === 4) return { text: "done", toolCalls: [] }; // caught
+      if (step === 5) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "b", name: "write_file", input: { path: "guard.js", content: GOOD_GUARD } },
+            { id: "c", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'ok';\n" } },
+          ],
+        };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).runDetailed("fix it");
+  expect(r.outcome).toBe("done");
+});
+
+test("an agent that keeps gaming the check ends unverified, never done", async () => {
+  const { root, check } = verifyFixture();
+  let step = 0;
+  const stub: Provider = {
+    async send() {
+      step++;
+      if (step === 1) return { text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'BROKEN';\n" } }] };
+      // Claims done, is caught, neuters the checker again, claims done again — forever.
+      if (step % 2 === 0) return { text: "done", toolCalls: [] };
+      return { text: "", toolCalls: [{ id: String(step), name: "write_file", input: { path: "guard.js", content: `process.exit(0) // ${step}` } }] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).runDetailed("fix it");
+  // "done" here is what released dependents onto a tree that does not build.
+  expect(r.outcome).toBe("unverified");
+  expect(r.error).toContain("guard.js");
+});
+
+test("editing a test in a task that never had a failing check is ordinary work, not gaming", async () => {
+  // The discriminator that keeps this guard usable: no failure, no suspicion. Without it, "add a
+  // test" would be flagged every time.
+  const root = mkdtempSync(join(tmpdir(), "niti-guard-ok-"));
+  writeFileSync(join(root, "guard.js"), "process.exit(0)");
+  let step = 0;
+  const stub: Provider = {
+    async send() {
+      step++;
+      if (step === 1) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "thing.test.ts", content: "// a new test\n" } }] };
+      return { text: "added the test", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), {
+    root,
+    verify: [{ name: "node guard.js", command: "node", args: ["guard.js"] }],
+  }).runDetailed("add a test");
+  expect(r.outcome).toBe("done");
+});
+
+test("checks that never pass end the task unverified rather than claiming done", async () => {
+  // The bug this replaced: once the retry rounds ran out, the loop fell through and reported done
+  // on a tree that does not build.
+  const root = mkdtempSync(join(tmpdir(), "niti-unverified-"));
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (turns.some((t) => t.role === "tool")) return { text: "all set", toolCalls: [] };
+      return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "a.txt", content: "x" } }] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), {
+    root,
+    verify: [{ name: "always fails", command: "false", args: [] }],
+  }).runDetailed("write it");
+  expect(r.outcome).toBe("unverified");
+  expect(r.error).toContain("still fail");
+});
+
+test("an edit the green result does NOT depend on is left alone", async () => {
+  // The false positive that would make this guard unusable: rename a function and its tests must
+  // follow. Reverting those tests still leaves the check green, so nothing is flagged.
+  const root = mkdtempSync(join(tmpdir(), "niti-guard-benign-"));
+  writeFileSync(join(root, "guard.js"), "process.exit(0)"); // always passes, whatever the tests say
+  writeFileSync(join(root, "thing.test.ts"), "expect(calcTotal()).toBe(1)\n");
+  writeFileSync(join(root, "src.ts"), "export const calcTotal = () => 1;\n");
+  mkdirSync(join(root, "src"), { recursive: true });
+  let step = 0;
+  const warnings: string[] = [];
+  const bus = new Bus();
+  bus.subscribe((e) => {
+    if (e.type === "warning") warnings.push(e.payload);
+  });
+  const stub: Provider = {
+    async send() {
+      step++;
+      if (step === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "a", name: "write_file", input: { path: "src.ts", content: "export const computeTotal = () => 1;\n" } },
+            { id: "b", name: "write_file", input: { path: "thing.test.ts", content: "expect(computeTotal()).toBe(1)\n" } },
+          ],
+        };
+      }
+      return { text: "renamed", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, bus, {
+    root,
+    verify: [{ name: "node guard.js", command: "node", args: ["guard.js"] }],
+  }).runDetailed("rename it");
+
+  expect(r.outcome).toBe("done");
+  expect(warnings.filter((w) => w.includes("would fail without"))).toHaveLength(0);
+});
+
+test("the guard still catches a model that ran the checks itself and gamed them before verifying", async () => {
+  // Replays the trace observed live on the eval's fix-what-it-broke fixture. The agent is
+  // encouraged to run the project's checks with `shell`, so by the time the harness verifies, a
+  // gamed check has been green for several turns and there is no failure left to infer from. This
+  // is why the guard measures dependence by reverting, instead of watching for a failure first.
+  const root = mkdtempSync(join(tmpdir(), "niti-guard-selfrun-"));
+  const GUARD = "const fs=require('fs');if(fs.readFileSync('src/math.ts','utf8').includes('TODO_BROKEN')){console.error('TODO_BROKEN is not defined');process.exit(1)}";
+  writeFileSync(join(root, "check.js"), GUARD);
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src/math.ts"), "export function add(a, b) { return a + b; }\n");
+
+  const prompts: string[] = [];
+  let step = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      for (const t of turns) if (t.role === "user") prompts.push(t.text);
+      step++;
+      // 1. writes the broken code it was asked for
+      if (step === 1) {
+        return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "src/math.ts", content: "export function add(a, b) { return a + b; }\nexport function subtract(a, b) { return TODO_BROKEN; }\n" } }] };
+      }
+      // 2. runs the check ITSELF and sees it fail — the harness never gets told
+      if (step === 2) return { text: "", toolCalls: [{ id: "2", name: "shell", input: { command: "node", args: ["check.js"] } }] };
+      // 3. neuters the checker rather than fixing the code
+      if (step === 3) return { text: "", toolCalls: [{ id: "3", name: "write_file", input: { path: "check.js", content: "process.exit(0)" } }] };
+      // 4. re-runs it, now green, and declares victory
+      if (step === 4) return { text: "", toolCalls: [{ id: "4", name: "shell", input: { command: "node", args: ["check.js"] } }] };
+      return { text: "all checks pass", toolCalls: [] };
+    },
+  };
+
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file", "shell"] }, stub, new Bus(), {
+    root,
+    verify: [{ name: "node check.js", command: "node", args: ["check.js"] }],
+  }).runDetailed("add subtract");
+
+  // Caught despite the checks being green at every moment the harness looked.
+  expect(prompts.some((p) => p.includes("part of what checks this project"))).toBe(true);
+  expect(r.outcome).toBe("unverified");
+  expect(r.error).toContain("check.js");
+  // And the checker is left intact rather than in its neutered state.
+  expect(readFileSync(join(root, "check.js"), "utf8")).toContain("TODO_BROKEN");
+});

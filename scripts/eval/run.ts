@@ -92,8 +92,11 @@ async function runOne(task: Task): Promise<Attempt> {
   const bus = new Bus();
   if (verbose) {
     bus.subscribe((e) => {
-      if (e.type === "tool_call" || e.type === "file_edit" || e.type === "error") {
-        console.log(`    ${e.type === "error" ? "!" : "·"} ${e.payload.slice(0, 110)}`);
+      // Warnings carry the verification verdict and the check-gaming guard — the two things most
+      // worth seeing when a task fails for a reason the file diff doesn't explain.
+      if (e.type === "tool_call" || e.type === "file_edit" || e.type === "error" || e.type === "warning" || e.type === "thought") {
+        const mark = e.type === "error" ? "!" : e.type === "warning" ? "⚠" : "·";
+        console.log(`    ${mark} ${e.payload.slice(0, 140)}`);
       }
     });
   }

@@ -1,4 +1,4 @@
-import type { Agent } from "../agent/agent.ts";
+import type { Agent, RunOutcome } from "../agent/agent.ts";
 import type { Bus } from "../events/bus.ts";
 import type { TaskNode } from "./task.ts";
 import type { MessageBus } from "../messaging/message-bus.ts";
@@ -41,6 +41,8 @@ const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_CAP_MS = 30_000;
 const MAX_REPLAN_ATTEMPTS = 1; // recovery attempts asking the lead to replan a task before giving up on it
 const MAX_REVIEW_ROUNDS = 2; // review→revise cycles before a persistently-rejected task is marked failed
+// Outcomes worth handing to another model rather than escalating straight to a replan.
+const RETRYABLE = new Set<RunOutcome>(["exhausted", "unverified"]);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // DFS cycle check. Returns the offending cycle path (ids) if any, else undefined — so the caller
@@ -160,6 +162,11 @@ async function runReviewGate(t: TaskNode, prompt: string, runner: Agent, agentsB
     const review = await reviewer.runDetailed(
       `Review the work for task ${t.id}: ${t.description}${t.acceptance ? `\nAcceptance: ${t.acceptance}` : ""}\n\n` +
         `Reported output:\n${(t.output ?? "").slice(0, DEP_CONTEXT_MAX)}\n\nInspect the actual changes (shell "git diff", read_file, diagnostics tools) as needed. ` +
+        // A task only reaches review once the project's own checks pass on it (see agent.ts's
+        // verification pass), so re-deriving "does it compile" is spent effort. Point the reviewer
+        // at the questions a compiler cannot answer.
+        `The project's automated checks already pass on this change — do not re-litigate whether it builds. ` +
+        `Judge what a check cannot: whether it does what was actually asked, whether it broke behaviour no test covers, and whether any check, test or type was weakened to get here. ` +
         `End with exactly one line: "VERDICT: approve" or "VERDICT: changes_requested" followed by why.`,
       { taskId: t.id },
     );
@@ -240,7 +247,13 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     let result = await runner.runDetailed(prompt, { taskId: t.id, priorTurns: deps.priorTurns?.(t.id) });
     // A retry is NEW work (a fresh billed model call), not the original call finishing — so it
     // must honor cancellation too, or "stop launching new work" is broken for exhausted tasks.
-    while (result.outcome === "exhausted" && (t.attempts ?? 0) < MAX_ATTEMPTS && !(deps.shouldStop?.() ?? false)) {
+    // Retried on a different model, not just re-run. "exhausted" means it ran out of turns or hit a
+    // provider limit; "unverified" means it finished and the project's own checks say the result is
+    // wrong. Both are worth another model's attempt — and the second is the only form of best-of-N
+    // worth paying for, because the selection is an objective check rather than a judge model, and
+    // it costs nothing on the tasks that were right the first time.
+    while (RETRYABLE.has(result.outcome) && (t.attempts ?? 0) < MAX_ATTEMPTS && !(deps.shouldStop?.() ?? false)) {
+      const unverified = result.outcome === "unverified";
       t.attempts = (t.attempts ?? 0) + 1;
       // Actually fail over. The whole point of a multi-provider team is that Anthropic's 429
       // doesn't stall the run — but this loop re-ran the *same* exhausted agent three times while
@@ -252,7 +265,14 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
         runner = alt;
         t.role = alt.config.id;
         t.assignedTo = alt.config.id;
-        bus?.publish({ agentId: alt.config.id, type: "failover", payload: `${t.id} failed over to ${alt.config.id} (attempt ${t.attempts}/${MAX_ATTEMPTS})`, time: Date.now() });
+        bus?.publish({
+          agentId: alt.config.id,
+          type: "failover",
+          payload: unverified
+            ? `${t.id} failed its checks under ${runner!.config.id} — retrying on ${alt.config.id} (attempt ${t.attempts}/${MAX_ATTEMPTS})`
+            : `${t.id} failed over to ${alt.config.id} (attempt ${t.attempts}/${MAX_ATTEMPTS})`,
+          time: Date.now(),
+        });
       } else {
         // No idle teammate — a same-agent retry is a retry, not a failover. Say so.
         bus?.publish({ agentId: t.role, type: "warning", payload: `${t.role} exhausted — retry ${t.attempts}/${MAX_ATTEMPTS} of ${t.id}`, time: Date.now() });
@@ -260,8 +280,15 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
       // 2s, 4s, 8s, 16s, 30s. ponytail: one flat curve for every provider, not a Retry-After read —
       // anthropic/openai surface a reset time on `rateLimit`, Gemini's SDK surfaces nothing, and the
       // 429s that motivated this were Gemini's. Wire result.rateLimit.resetAt in here if that changes.
-      await sleep(Math.min(BACKOFF_BASE_MS * 2 ** (t.attempts - 1), BACKOFF_CAP_MS));
-      result = await runner.runDetailed(prompt, { taskId: t.id });
+      // No backoff for an unverified retry: nothing is rate-limited, the work was simply wrong,
+      // and sleeping 16s before trying again only makes the run slower.
+      if (!unverified) await sleep(Math.min(BACKOFF_BASE_MS * 2 ** (t.attempts - 1), BACKOFF_CAP_MS));
+      // Carry the failure forward. A blind re-run is a coin flip that often lands the same way;
+      // the next model gets the compiler's actual complaint and what the last attempt tried.
+      const retryPrompt = unverified
+        ? `${prompt}\n\nA previous attempt by ${runner.config.id} left the project failing its own checks:\n${(result.error || "").slice(0, DEP_CONTEXT_MAX)}\n\nFix the cause. Do not weaken or edit the checks themselves.`
+        : prompt;
+      result = await runner.runDetailed(retryPrompt, { taskId: t.id });
     }
 
     t.output = result.text;
