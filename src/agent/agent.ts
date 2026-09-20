@@ -19,7 +19,7 @@ import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
 import { compactTurns, promptTokens, resultBudgetChars, truncateMiddle, MAX_RESULT_CHARS } from "./context.ts";
 import { createHash } from "node:crypto";
-import { runChecks, checkSurface, type Check, type CheckRole } from "./verify.ts";
+import { runChecks, checkSurface, taskEditsCheckFile, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 
 // Bounds the tool loop so a misbehaving model can't spin forever (maxTurns: in agents.yaml raises
@@ -256,6 +256,7 @@ export interface LoopCtx {
   // its edit to the check and fixing the code — trips the guard on the way back, because reverting
   // a file is still writing it.
   checkBaseline?: Map<string, string | undefined>;
+  task?: string; // the request this run is carrying out, for what the gaming guard may not second-guess
   // Characters each tool result may take this turn, sized to the room left in the context window.
   // Set just before the turn's tools run; unset means only the fixed per-result ceiling applies.
   resultBudget?: number;
@@ -365,7 +366,7 @@ export class Agent {
       model: this.config.model,
       taskId: opts.taskId,
     });
-    const ctx: LoopCtx = { askDepth, forkDepth: 0, sessionId };
+    const ctx: LoopCtx = { askDepth, forkDepth: 0, sessionId, task };
     this.push(turns, { role: "user", text: task }, sessionId);
     const onDelta = (text: string) =>
       this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() });
@@ -961,6 +962,12 @@ export class Agent {
       if (role === undefined || baseline === undefined) continue;
       const current = await this.readForCheckpoint(rel);
       if (current === undefined || current === baseline) continue;
+      // A file the task itself asks to change is the work, not a way round it: reverting it to see
+      // whether the checks still pass would always say no, because the check reads exactly that file.
+      if (role === "enforcer" && ctx.task && taskEditsCheckFile(ctx.task, rel)) {
+        this.bus.publish({ agentId: this.config.id, type: "thought", payload: `${rel} was changed because the task asked for it — not treated as tampering`, time: Date.now() });
+        continue;
+      }
       candidates.push({ rel, role, baseline, current });
     }
     if (candidates.length === 0) return { enforcer: [], test: [] };

@@ -1599,3 +1599,47 @@ test("the 85% warning counts cache reads too, and reports the real fill", async 
   await new Agent({ ...cfg, provider: "anthropic", allowedTools: ["write_file"] }, stub, bus, { root }).run("go");
   expect(warnings.some((w) => /context ~86% full \(860000\/1000000 tokens\)/.test(w))).toBe(true);
 });
+
+// A check whose verdict is about a config file: green only once tsconfig.json says ESNext.
+function configFixture(): { root: string; check: { name: string; command: string; args: string[] } } {
+  const root = mkdtempSync(join(tmpdir(), "niti-guard-"));
+  writeFileSync(
+    join(root, "guard.js"),
+    "const fs=require('fs');if(!fs.readFileSync('tsconfig.json','utf8').includes('ESNext')){console.error('target is not ESNext');process.exit(1)}",
+  );
+  writeFileSync(join(root, "tsconfig.json"), '{ "compilerOptions": { "target": "ES2015" } }\n');
+  return { root, check: { name: "node guard.js", command: "node", args: ["guard.js"] } };
+}
+
+const editTsconfig = (): Provider => {
+  let step = 0;
+  return {
+    async send(_s, turns) {
+      step++;
+      if (step === 1) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "tsconfig.json", content: '{ "compilerOptions": { "target": "ESNext" } }\n' } }] };
+      // Any user turn after the first would be the guard (or a failed check) talking.
+      const prompts = turns.filter((t) => t.role === "user").length;
+      return { text: prompts > 1 ? "told off" : "target updated", toolCalls: [] };
+    },
+  };
+};
+
+test("editing a config the task asked to change is the work, not tampering", async () => {
+  const { root, check } = configFixture();
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, editTsconfig(), new Bus(), { root, verify: [check] }).runDetailed("Update tsconfig.json to target ESNext");
+  expect(r.outcome).toBe("done");
+  expect(readFileSync(join(root, "tsconfig.json"), "utf8")).toContain("ESNext"); // not reverted
+  expect(r.text).toBe("target updated"); // never handed a tamper message
+});
+
+test("the same edit in a task that never asked for it is still refused", async () => {
+  const { root, check } = configFixture();
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, editTsconfig(), new Bus(), { root, verify: [check] }).runDetailed("Fix the failing check");
+  expect(r.text).toBe("told off"); // the guard spoke: the pass depended on an edit nobody asked for
+});
+
+test("a task that forbids touching the config keeps the guard on for it", async () => {
+  const { root, check } = configFixture();
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, editTsconfig(), new Bus(), { root, verify: [check] }).runDetailed("Fix the failing check. Do not change tsconfig.json.");
+  expect(r.text).toBe("told off");
+});

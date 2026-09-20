@@ -187,3 +187,40 @@ export function checkSurface(checks: Check[], root = process.cwd()): (path: stri
     return TEST_PATH.some((re) => re.test(rel)) ? "test" : undefined;
   };
 }
+
+// ── A task that asks for the change ──
+//
+// The guard above reverts an enforcer file, re-runs the checks, and calls it gaming when they fail
+// without the edit. That is the right test for "the agent quietly loosened the thermometer", and
+// the wrong one when the task IS the thermometer: "update tsconfig to ESNext" is finished exactly
+// when the check that reads tsconfig goes green, so reverting the file always makes the check fail.
+//
+// The guard therefore steps aside for a file the task text asks to have edited. This is read from
+// the text because a task carries nothing else (TaskNode has no file targets), and it is built to
+// fail toward the guard staying on: one sentence must contain an edit verb and a specific reference
+// to the file, and nothing negating it. A missed match is today's behaviour; only a wrong match
+// weakens the guard, so the reference must be the file's name or a phrase for the tool's
+// *configuration* — never the bare tool, because "make eslint pass" names the check, not the config.
+// ponytail: prose heuristic, English only. Upgrade path: the planner emits explicit file targets.
+
+const EDIT_VERB = /\b(update|change|edit|modify|add|enable|disable|set|configure|bump|switch|migrate|upgrade|tighten|loosen|relax|raise|lower|remove|turn (on|off))\b/i;
+const NEGATION = /\b(do not|don't|dont|never|without|avoid|leave|shouldn't|must not|not)\b/i;
+
+const CONFIG_PHRASES: [file: RegExp, phrase: RegExp][] = [
+  [/^[jt]sconfig\.json$/, /\b[jt]sconfig\b|\b(typescript|ts) (config|compiler)|\bcompiler options?\b/i],
+  [/eslint/, /\b(eslint|lint(er)?) (config|configuration|rules?|settings?)\b|\beslintrc\b/i],
+  [/^(jest|vitest)\.config/, /\b(jest|vitest) (config|configuration|settings?)\b/i],
+  [/^(mypy\.ini|\.flake8|ruff\.toml|pytest\.ini|tox\.ini|setup\.cfg)$/, /\b(ruff|mypy|flake8|pytest|tox) (config|configuration|settings?|options?|rules?)\b/i],
+  [/golangci|clippy/, /\b(golangci(-lint)?|clippy) (config|configuration|rules?)\b/i],
+];
+
+export function taskEditsCheckFile(task: string, rel: string): boolean {
+  const base = rel.split("/").pop() ?? rel;
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const refs = [new RegExp(`(^|[\\s"'\`(/])${escaped}(?![\\w.-])`, "i")];
+  for (const [file, phrase] of CONFIG_PHRASES) if (file.test(base)) refs.push(phrase);
+  // Split on sentence ends followed by whitespace, so "tsconfig.json" is not cut at its dot.
+  return task
+    .split(/(?<=[.!?;])\s+|\n+/)
+    .some((sentence) => EDIT_VERB.test(sentence) && !NEGATION.test(sentence) && refs.some((re) => re.test(sentence)));
+}
