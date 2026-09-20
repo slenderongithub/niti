@@ -9,11 +9,13 @@ import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "./events.ts";
 import { CATALOG, contextWindow, providersByCategory, splitModelId, type Category } from "../providers/catalog.ts";
 import { costOf } from "../providers/pricing.ts";
-import { buildFileGraph } from "../graph/filegraph.ts";
+import { buildFileGraph, trackedFiles } from "../graph/filegraph.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
 import { saveAgents, setTheme, setAuto } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
 import type { AgentConfig } from "../agent/agent.ts";
+import { makeProvider } from "../providers/factory.ts";
+import { summarizeError, scrubSecrets } from "../providers/provider.ts";
 
 export interface ServerHandle {
   url: string;
@@ -46,11 +48,21 @@ const CSP =
 // headers). Static dashboard assets are public; every data route is gated.
 export function startServer(
   engine: Engine,
-  opts: { port?: number; token?: string; webDir?: string; commands?: CommandRegistry; theme?: string } = {},
+  opts: {
+    port?: number;
+    token?: string;
+    webDir?: string;
+    commands?: CommandRegistry;
+    theme?: string;
+    makeProvider?: typeof makeProvider;
+  } = {},
 ): ServerHandle {
   const token = opts.token ?? crypto.randomUUID();
   const webDir = opts.webDir ?? resolveWebDir();
   const commands = opts.commands ?? new CommandRegistry();
+  // Same DI seam as Engine's own `makeProvider` option — /complete calls a provider directly,
+  // bypassing the engine, so it needs its own injection point for tests to avoid real network calls.
+  const makeCompletionProvider = opts.makeProvider ?? makeProvider;
   // Mutable, unlike the rest of `opts` — POST /theme updates this in place so /session reflects a
   // theme changed mid-session (by the TUI carousel or the web dropdown) without a server restart.
   let currentTheme = opts.theme ?? "";
@@ -92,7 +104,9 @@ export function startServer(
   const fileGraph = (root: string) => {
     const now = Date.now();
     if (graphCache && graphCache.root === root && now - graphCache.at < GRAPH_TTL_MS) return graphCache.value;
-    const value = buildFileGraph(root);
+    // Same correction the agent-facing project map needs: the walk cannot tell this project
+    // from a vendored tree checked out inside it, and would render that tree instead.
+    const value = buildFileGraph(root, 400, trackedFiles(root));
     graphCache = { at: now, root, value };
     return value;
   };
@@ -160,11 +174,35 @@ export function startServer(
     });
   };
 
+  // The desktop app's renderer loads from file:// (no "web siblings" — see project_context.md),
+  // which makes every fetch/EventSource call here cross-origin; the TUI never hits this (it isn't a
+  // browser) and the browser dashboard never did either (same-origin, served from this same
+  // server). CORS headers are the only thing standing between the desktop app and "every request
+  // silently fails." `*` rather than echoing the request Origin because the security boundary here
+  // has always been the bearer token, not network topology — see tokensMatch below; anyone who
+  // already has the token can call this API directly with curl anyway, so a permissive CORS policy
+  // grants no meaningfully new access to an attacker who doesn't have it.
+  const CORS_HEADERS: Record<string, string> = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+    "access-control-allow-headers": "content-type, authorization",
+  };
+  const withCors = (res: Response): Response => {
+    for (const [k, v] of Object.entries(CORS_HEADERS)) res.headers.set(k, v);
+    return res;
+  };
+
   const server = Bun.serve({
     port: opts.port ?? 0,
     hostname: "127.0.0.1",
     idleTimeout: 0, // SSE connections are long-lived
     async fetch(req) {
+      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
+      return withCors(await handle(req));
+    },
+  });
+
+  async function handle(req: Request): Promise<Response> {
       const u = new URL(req.url);
       const p = u.pathname;
       const method = req.method;
@@ -208,6 +246,67 @@ export function startServer(
           contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider)])),
           theme: currentTheme, // `theme:` from agents.yaml, or whatever POST /theme last set
         });
+      }
+
+      // A direct, single-model call independent of the orchestration engine — for editor-side
+      // features (inline completion, Cmd+K) that need one fast round-trip and must work whether or
+      // not a team is currently running. /prompt is the wrong shape for this: it's single-flight
+      // (409 while engine.running) and always launches the full multi-agent orchestrator.
+      if (p === "/complete" && method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as {
+          provider?: string;
+          model?: string;
+          prompt?: string;
+          system?: string;
+          baseURL?: string;
+        };
+        if (!body.provider || !body.model || !body.prompt?.trim()) {
+          return json({ error: "expected {provider, model, prompt}" }, 400);
+        }
+        try {
+          const provider = makeCompletionProvider({
+            id: "complete",
+            provider: body.provider,
+            model: body.model,
+            role: "completion",
+            systemPrompt: body.system ?? "",
+            baseURL: body.baseURL,
+          });
+          // Same redaction scrubSecrets already applies to outbound error text (see its own doc
+          // comment) — a completion/edit prompt built from a user's open files is exactly as likely
+          // to accidentally carry a live key (a .env snippet, a config file with a token in it) as
+          // an error message is, and this is the literal last point before it leaves the process to
+          // a third-party provider.
+          const reply = await provider.send(scrubSecrets(body.system ?? ""), [{ role: "user", text: scrubSecrets(body.prompt) }], []);
+          return json({ text: reply.text });
+        } catch (err) {
+          return json({ error: summarizeError(err) }, 400);
+        }
+      }
+
+      // Batch text embedding for editor-side semantic search (niti IDE's codebase index) — same
+      // bypass-the-engine reasoning as /complete. Not every provider supports this (see Provider.embed's
+      // doc comment), so a provider without it is a clean 400, not a 500.
+      if (p === "/embed" && method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { provider?: string; texts?: string[]; baseURL?: string };
+        if (!body.provider || !Array.isArray(body.texts) || !body.texts.length) {
+          return json({ error: "expected {provider, texts: string[]}" }, 400);
+        }
+        try {
+          const provider = makeCompletionProvider({
+            id: "embed",
+            provider: body.provider,
+            model: "embed", // unused for embeddings — see e.g. GeminiProvider.embed's fixed model id
+            role: "embed",
+            systemPrompt: "",
+            baseURL: body.baseURL,
+          });
+          if (!provider.embed) return json({ error: `provider '${body.provider}' does not support embeddings` }, 400);
+          const embeddings = await provider.embed(body.texts.map(scrubSecrets)); // same redaction as /complete, see its comment
+          return json({ embeddings });
+        } catch (err) {
+          return json({ error: summarizeError(err) }, 400);
+        }
       }
 
       if (p === "/prompt" && method === "POST") {
@@ -276,6 +375,13 @@ export function startServer(
         return json({ perDay: s.perDay, perModel, sessions: s.sessions, inTokens, outTokens, longestSessionMs: s.longestSessionMs, totalUsd, costComplete });
       }
 
+      if (p === "/checkpoints" && method === "GET") {
+        if (!engine.store) return json({ checkpoints: [] });
+        const sessionId = u.searchParams.get("sessionId") ?? undefined;
+        const limit = Number(u.searchParams.get("limit") ?? 20);
+        return json({ checkpoints: engine.store.listCheckpoints(sessionId, limit) });
+      }
+
       if (p === "/sessions" && method === "GET") {
         if (!engine.store) return json({ sessions: [] });
         const taskId = u.searchParams.get("taskId") ?? undefined;
@@ -337,6 +443,12 @@ export function startServer(
         const err = engine.switchModel(agentId, parsed.provider, parsed.model, baseURL);
         return err ? json({ error: err }, 400) : json({ ok: true });
       }
+      if (p === "/reassign" && method === "POST") {
+        const { taskId, agentId } = (await req.json().catch(() => ({}))) as { taskId?: string; agentId?: string };
+        if (!taskId || !agentId) return json({ error: "taskId and agentId required" }, 400);
+        const err = engine.reassignTask(taskId, agentId);
+        return err ? json({ error: err }, 400) : json({ ok: true });
+      }
 
       if (p === "/auth" && method === "GET") {
         return json({ credentials: listCredentials().map(redact) });
@@ -362,10 +474,19 @@ export function startServer(
         return json((await engine.worktreeStatus()) ?? { active: false });
       }
       if (p === "/worktree/merge" && method === "POST") {
-        return json(await engine.mergeWorktree());
+        // An optional `files` list selects a partial merge (see engine.mergeWorktreeFiles) — no
+        // body, or no `files` key, keeps the original whole-run merge behavior unchanged.
+        const { files } = (await req.json().catch(() => ({}))) as { files?: string[] };
+        return json(Array.isArray(files) ? await engine.mergeWorktreeFiles(files) : await engine.mergeWorktree());
       }
       if (p === "/worktree/discard" && method === "POST") {
         return json(await engine.discardWorktree());
+      }
+      if (p === "/worktree/hunks" && method === "GET") {
+        const filePath = u.searchParams.get("path");
+        if (!filePath) return json({ error: "expected ?path=" }, 400);
+        const patch = await engine.worktreeFileHunks(filePath);
+        return json({ patch: patch ?? "" });
       }
 
       if (p.startsWith("/agents/") && p.endsWith("/message") && method === "POST") {
@@ -388,8 +509,7 @@ export function startServer(
       }
 
       return json({ error: `no route ${method} ${p}` }, 404);
-    },
-  });
+  }
 
   const port = server.port ?? 0;
   return {

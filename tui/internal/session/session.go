@@ -64,6 +64,9 @@ func (s *agentState) push(line string) {
 	if line = strings.TrimRight(line, " \t\r"); line == "" {
 		return
 	}
+	if len(s.log) > 0 && s.log[len(s.log)-1] == line { // a retry loop repeating itself is one line, not ten
+		return
+	}
 	s.log = append(s.log, line)
 	if len(s.log) > agentLogMax {
 		s.log = s.log[len(s.log)-agentLogMax:]
@@ -82,11 +85,11 @@ func (s *agentState) feedDelta(chunk string) {
 		if i < 0 {
 			break
 		}
-		s.push(s.pending[:i])
+		s.push(cleanMarkdown(s.pending[:i]))
 		s.pending = s.pending[i+1:]
 	}
 	if len(s.pending) > maxPendingLine {
-		s.push(s.pending)
+		s.push(cleanMarkdown(s.pending))
 		s.pending = ""
 	}
 }
@@ -752,29 +755,12 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 	if ae.Payload == "" {
 		return
 	}
-	st.activity = truncate(ae.Payload, 46)
-	st.push(eventPrefix(ae.Type) + strings.ReplaceAll(ae.Payload, "\n", " "))
-}
-
-// A one-glyph prefix so a transcript line's kind is readable without color (and survives being
-// copied out of the terminal).
-func eventPrefix(kind string) string {
-	switch kind {
-	case "tool_call":
-		return "⚒ "
-	case "file_edit":
-		return "✎ "
-	case "thought":
-		return "· "
-	case "error":
-		return "✖ "
-	case "failover":
-		return "⇄ "
-	case "warning":
-		return "⚠ "
-	default:
-		return "  "
+	line := humanize(ae.Type, ae.Payload)
+	if line == "" {
+		return
 	}
+	st.activity = truncate(strings.TrimLeft(line, "⏺⎿▸·✖ "), 46)
+	st.push(line)
 }
 
 func (m *Model) applyOrch(oe api.OrchestrationEvent) {

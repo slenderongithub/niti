@@ -337,6 +337,8 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
     lsp: new LspRegistry(loadLspServers()),
     watch: options.watch,
     maxTurns: options.maxTurns,
+    verify: options.verify,
+    repoMap: options.repoMap,
     worktree: args.includes("--worktree") || options.worktree,
   });
 }

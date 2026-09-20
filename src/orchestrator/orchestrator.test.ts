@@ -46,6 +46,21 @@ test("claimTask hands one task to one agent, and requeue excludes the agent that
   expect(t.attempts).toBe(1);
 });
 
+test("reassign moves a pending task to a new role, but refuses an in_progress one", () => {
+  const orch = new Orchestrator();
+  orch.load([
+    { id: "t1", description: "a", status: "pending", role: "agent-a", dependsOn: [] },
+    { id: "t2", description: "b", status: "in_progress", role: "agent-a", dependsOn: [] },
+  ]);
+
+  expect(orch.reassign("t1", "agent-b")).toBeUndefined();
+  expect(orch.all.find((t) => t.id === "t1")?.role).toBe("agent-b");
+
+  const err = orch.reassign("t2", "agent-b");
+  expect(err).toMatch(/in_progress/);
+  expect(orch.all.find((t) => t.id === "t2")?.role).toBe("agent-a"); // unchanged
+});
+
 // --- PLAN mode → BUILD runs the reviewed DAG, not a second planning call -------------------
 
 // A lead whose every ask() returns a fixed two-task plan, counting how often it was asked.

@@ -54,7 +54,11 @@ test("agent runs the full tool loop: request → sandboxed execute → feed back
 
   const bus = new Bus();
   const events: string[] = [];
-  bus.subscribe((e) => events.push(e.type));
+  let fileEditPath: string | undefined;
+  bus.subscribe((e) => {
+    events.push(e.type);
+    if (e.type === "file_edit") fileEditPath = e.path;
+  });
 
   const agent = new Agent(cfg, stub, bus, { root });
   const ok = await agent.run("make a file");
@@ -63,6 +67,10 @@ test("agent runs the full tool loop: request → sandboxed execute → feed back
   expect(n).toBe(2); // looped: executed the tool, then finished
   expect(readFileSync(join(root, "out.txt"), "utf8")).toBe("hi"); // the sandbox actually wrote it
   expect(events).toEqual(expect.arrayContaining(["message", "tool_call", "file_edit", "done"]));
+  // A structured path on the event, not just baked into the human-readable payload string — this
+  // is what lets a consumer (e.g. the IDE's file-tree decorations) know which file changed without
+  // parsing "write_file → wrote 2 bytes".
+  expect(fileEditPath).toBe("out.txt");
 });
 
 test("streams text deltas to the bus, then a final message", async () => {
@@ -999,4 +1007,405 @@ test("injectNotes replaces the previous board turn instead of accumulating a new
   expect(boardTurns).toHaveLength(1); // not 3 — each change replaced the last, not appended to it
   expect((boardTurns[0] as { text: string }).text).toContain("v3"); // and it's the latest content
   expect((boardTurns[0] as { text: string }).text).not.toContain("v1");
+});
+
+// ── One turn's tool calls: read-only together, anything that changes the world in order ──────
+
+test("independent reads in one turn run together, not one round-trip at a time", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-par-"));
+  for (const n of ["a", "b", "c"]) writeFileSync(join(root, `${n}.txt`), n);
+  let inFlight = 0;
+  let peak = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (turns.some((t) => t.role === "tool")) return { text: "done", toolCalls: [] };
+      return {
+        text: "",
+        toolCalls: ["a", "b", "c"].map((n, i) => ({ id: String(i), name: "read_file", input: { path: `${n}.txt` } })),
+      };
+    },
+  };
+  const bus = new Bus();
+  bus.subscribe((e) => {
+    if (e.type !== "tool_call") return;
+    // "read_file {…}" is published on entry; "read_file → …" on completion.
+    if (e.payload.includes("→")) inFlight--;
+    else peak = Math.max(peak, ++inFlight);
+  });
+  await new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, bus, { root }).run("read them");
+  expect(peak).toBe(3);
+});
+
+test("a write is never overlapped with the calls around it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-seq-"));
+  writeFileSync(join(root, "a.txt"), "a");
+  const order: string[] = [];
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (turns.some((t) => t.role === "tool")) return { text: "done", toolCalls: [] };
+      return {
+        text: "",
+        toolCalls: [
+          { id: "0", name: "read_file", input: { path: "a.txt" } },
+          { id: "1", name: "write_file", input: { path: "b.txt", content: "b" } },
+          { id: "2", name: "read_file", input: { path: "b.txt" } },
+        ],
+      };
+    },
+  };
+  const bus = new Bus();
+  bus.subscribe((e) => {
+    if (e.type === "tool_call" || e.type === "file_edit") order.push(e.payload.slice(0, 24));
+  });
+  await new Agent({ ...cfg, allowedTools: ["read_file", "write_file"] }, stub, bus, { root }).run("read, write, read");
+  // The final read sees the file the write just created — which is only true if they were ordered.
+  const last = order[order.length - 1] ?? "";
+  expect(last).toContain("read_file →");
+});
+
+// ── Verification: "done" has to survive the project's own checks ─────────────────────────────
+
+test("a run that changed files must pass the checks before it reports done", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-verify-"));
+  let calls = 0;
+  let fixed = false;
+  const stub: Provider = {
+    async send(_s, turns) {
+      // Writes v1, claims to be done, is handed the failing check, then writes v2 and stops.
+      if (calls++ === 0) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "x.txt", content: "v1" } }] };
+      if (!fixed && turns.some((t) => t.role === "user" && t.text.includes("do not pass"))) {
+        fixed = true;
+        return { text: "", toolCalls: [{ id: "2", name: "write_file", input: { path: "x.txt", content: "v2" } }] };
+      }
+      return { text: "finished", toolCalls: [] };
+    },
+  };
+  // Fails while the file says v1, passes once it says v2 — a check with a real, changeable verdict.
+  const check = { name: "grep v2", command: "grep", args: ["-q", "v2", "x.txt"] };
+  const agent = new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] });
+  const r = await agent.runDetailed("write it");
+  expect(r.outcome).toBe("done");
+  expect(readFileSync(join(root, "x.txt"), "utf8")).toBe("v2");
+});
+
+test("a run that wrote nothing is not sent off to a build it cannot have broken", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-noverify-"));
+  let ran = false;
+  const stub: Provider = { async send() { return { text: "nothing to do here", toolCalls: [] }; } };
+  const check = { name: "touch ran", command: "touch", args: ["ran"] };
+  await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).run("look only");
+  ran = existsSync(join(root, "ran"));
+  expect(ran).toBe(false);
+});
+
+test("a check the model cannot satisfy stops instead of looping on it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-verify-loop-"));
+  let writes = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (!turns.some((t) => t.role === "tool") || turns[turns.length - 1]?.role === "user") {
+        writes++;
+        return { text: "", toolCalls: [{ id: String(writes), name: "write_file", input: { path: "x.txt", content: "nope" } }] };
+      }
+      return { text: "done I promise", toolCalls: [] };
+    },
+  };
+  const check = { name: "always fails", command: "false", args: [] };
+  await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).run("write it");
+  expect(writes).toBeLessThanOrEqual(3); // the initial write plus at most MAX_VERIFY_ROUNDS retries
+});
+
+// ── The working checklist: written by the agent, kept in front of it ─────────────────────────
+
+test("the checklist is re-stated to the model, and one current copy replaces the last", async () => {
+  // The drift this prevents: the original instruction scrolls up, and by turn eight the agent is
+  // still polishing step one. Keeping the list recent is the whole mechanism.
+  const seen: string[][] = [];
+  let call = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      seen.push(turns.filter((t) => t.role === "user").map((t) => (t as { text: string }).text));
+      call++;
+      if (call === 1) {
+        return { text: "", toolCalls: [{ id: "1", name: "todo", input: { items: [{ text: "find it", status: "doing" }, { text: "fix it", status: "pending" }] } }] };
+      }
+      if (call === 2) {
+        return { text: "", toolCalls: [{ id: "2", name: "todo", input: { items: [{ text: "find it", status: "done" }, { text: "fix it", status: "doing" }] } }] };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), {}).run("do the thing");
+
+  const third = seen[2] ?? [];
+  const boards = third.filter((t) => t.startsWith("Your working checklist"));
+  expect(boards).toHaveLength(1); // replaced, not accumulated
+  expect(boards[0]).toContain("[x] find it"); // the current state, not the first version
+  expect(boards[0]).toContain("[~] fix it");
+});
+
+test("the todo tool needs no permission and touches nothing", async () => {
+  // It runs no command and writes no file, so gating it would cost an approval dialog per plan.
+  let asked = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (turns.some((t) => t.role === "tool")) return { text: "ok", toolCalls: [] };
+      return { text: "", toolCalls: [{ id: "1", name: "todo", input: { items: ["a", "b", "c"] } }] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), {
+    approve: async () => {
+      asked++;
+      return true;
+    },
+  });
+  expect(await agent.run("plan it")).toBe("done");
+  expect(asked).toBe(0);
+});
+
+test("a checklist does not leak from one task into the next", async () => {
+  const seen: string[] = [];
+  let task = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      for (const t of turns) if (t.role === "user" && t.text.startsWith("Your working checklist")) seen.push(t.text);
+      if (turns.some((t) => t.role === "tool")) return { text: "ok", toolCalls: [] };
+      return task === 1
+        ? { text: "", toolCalls: [{ id: "1", name: "todo", input: { items: ["first task step"] } }] }
+        : { text: "second task done", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), {});
+  task = 1;
+  await agent.run("task one");
+  task = 2;
+  await agent.run("task two");
+  expect(seen.some((s) => s.includes("first task step"))).toBe(true);
+  expect(seen.filter((s) => s.includes("first task step")).length).toBeGreaterThan(0);
+  // The second run must never have been shown the first run's plan.
+  const duringSecond = seen.slice(seen.findIndex((s) => s.includes("first task step")) + 1);
+  expect(duringSecond.filter((s) => s.includes("first task step"))).toHaveLength(0);
+});
+
+// ── The check-gaming guard ──────────────────────────────────────────────────────────────────
+//
+// Observed on the eval's fix-what-it-broke fixture: told its changes failed, gemini-flash-lite
+// edited the *check script* until it stopped complaining and reported the task done. A prompt rule
+// against it did not hold, so the harness checks mechanically.
+
+function verifyFixture(): { root: string; check: { name: string; command: string; args: string[] } } {
+  const root = mkdtempSync(join(tmpdir(), "niti-guard-"));
+  // Fails while src/x.ts says BROKEN. `guard.js` is the check, and is itself editable.
+  writeFileSync(
+    join(root, "guard.js"),
+    "const fs=require('fs');if(fs.readFileSync('src/x.ts','utf8').includes('BROKEN')){console.error('x.ts is broken');process.exit(1)}",
+  );
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src/x.ts"), "export const x = 'BROKEN';\n");
+  return { root, check: { name: "node guard.js", command: "node", args: ["guard.js"] } };
+}
+
+test("a pass bought by editing the check is refused, and the agent is told to fix the code", async () => {
+  const { root, check } = verifyFixture();
+  const prompts: string[] = [];
+  let step = 0;
+  const GOOD_GUARD = "const fs=require('fs');if(fs.readFileSync('src/x.ts','utf8').includes('BROKEN')){console.error('x.ts is broken');process.exit(1)}";
+  const stub: Provider = {
+    async send(_s, turns) {
+      for (const t of turns) if (t.role === "user") prompts.push(t.text);
+      step++;
+      // A run that wrote nothing is never verified — it cannot have broken anything — so the
+      // sequence has to start with a real write.
+      if (step === 1) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'BROKEN';\n" } }] };
+      // Verification runs when the model stops calling tools — i.e. when it claims to be done.
+      if (step === 2) return { text: "claiming done, but x.ts is still BROKEN", toolCalls: [] };
+      // Handed the failure, it neuters the checker instead of fixing the code.
+      if (step === 3) return { text: "", toolCalls: [{ id: "3", name: "write_file", input: { path: "guard.js", content: "process.exit(0)" } }] };
+      if (step === 4) return { text: "fixed it", toolCalls: [] }; // → checks pass, but only because guard.js changed
+      // Told off, it puts the checker back and does the real fix.
+      if (step === 5) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "5a", name: "write_file", input: { path: "guard.js", content: GOOD_GUARD } },
+            { id: "5b", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'fixed';\n" } },
+          ],
+        };
+      }
+      return { text: "done properly", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).runDetailed("fix it");
+
+  expect(prompts.some((p) => p.includes("part of what checks this project"))).toBe(true);
+  expect(r.outcome).toBe("done");
+  expect(readFileSync(join(root, "src/x.ts"), "utf8")).toContain("fixed"); // the real fix landed
+  expect(readFileSync(join(root, "guard.js"), "utf8")).toContain("BROKEN"); // the checker is intact
+});
+
+test("reverting the check, as instructed, is not itself treated as tampering", async () => {
+  // Content, not touch: a revert is still a write, and flagging it would punish the exact
+  // correction the guard just asked for — leaving the agent no move that satisfies it.
+  const { root, check } = verifyFixture();
+  const GOOD_GUARD = readFileSync(join(root, "guard.js"), "utf8");
+  let step = 0;
+  const stub: Provider = {
+    async send() {
+      step++;
+      if (step === 1) return { text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'BROKEN';\n" } }] };
+      if (step === 2) return { text: "done", toolCalls: [] }; // fails: x.ts is BROKEN
+      if (step === 3) return { text: "", toolCalls: [{ id: "a", name: "write_file", input: { path: "guard.js", content: "process.exit(0)" } }] };
+      if (step === 4) return { text: "done", toolCalls: [] }; // caught
+      if (step === 5) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "b", name: "write_file", input: { path: "guard.js", content: GOOD_GUARD } },
+            { id: "c", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'ok';\n" } },
+          ],
+        };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).runDetailed("fix it");
+  expect(r.outcome).toBe("done");
+});
+
+test("an agent that keeps gaming the check ends unverified, never done", async () => {
+  const { root, check } = verifyFixture();
+  let step = 0;
+  const stub: Provider = {
+    async send() {
+      step++;
+      if (step === 1) return { text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "src/x.ts", content: "export const x = 'BROKEN';\n" } }] };
+      // Claims done, is caught, neuters the checker again, claims done again — forever.
+      if (step % 2 === 0) return { text: "done", toolCalls: [] };
+      return { text: "", toolCalls: [{ id: String(step), name: "write_file", input: { path: "guard.js", content: `process.exit(0) // ${step}` } }] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).runDetailed("fix it");
+  // "done" here is what released dependents onto a tree that does not build.
+  expect(r.outcome).toBe("unverified");
+  expect(r.error).toContain("guard.js");
+});
+
+test("editing a test in a task that never had a failing check is ordinary work, not gaming", async () => {
+  // The discriminator that keeps this guard usable: no failure, no suspicion. Without it, "add a
+  // test" would be flagged every time.
+  const root = mkdtempSync(join(tmpdir(), "niti-guard-ok-"));
+  writeFileSync(join(root, "guard.js"), "process.exit(0)");
+  let step = 0;
+  const stub: Provider = {
+    async send() {
+      step++;
+      if (step === 1) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "thing.test.ts", content: "// a new test\n" } }] };
+      return { text: "added the test", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), {
+    root,
+    verify: [{ name: "node guard.js", command: "node", args: ["guard.js"] }],
+  }).runDetailed("add a test");
+  expect(r.outcome).toBe("done");
+});
+
+test("checks that never pass end the task unverified rather than claiming done", async () => {
+  // The bug this replaced: once the retry rounds ran out, the loop fell through and reported done
+  // on a tree that does not build.
+  const root = mkdtempSync(join(tmpdir(), "niti-unverified-"));
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (turns.some((t) => t.role === "tool")) return { text: "all set", toolCalls: [] };
+      return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "a.txt", content: "x" } }] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), {
+    root,
+    verify: [{ name: "always fails", command: "false", args: [] }],
+  }).runDetailed("write it");
+  expect(r.outcome).toBe("unverified");
+  expect(r.error).toContain("still fail");
+});
+
+test("an edit the green result does NOT depend on is left alone", async () => {
+  // The false positive that would make this guard unusable: rename a function and its tests must
+  // follow. Reverting those tests still leaves the check green, so nothing is flagged.
+  const root = mkdtempSync(join(tmpdir(), "niti-guard-benign-"));
+  writeFileSync(join(root, "guard.js"), "process.exit(0)"); // always passes, whatever the tests say
+  writeFileSync(join(root, "thing.test.ts"), "expect(calcTotal()).toBe(1)\n");
+  writeFileSync(join(root, "src.ts"), "export const calcTotal = () => 1;\n");
+  mkdirSync(join(root, "src"), { recursive: true });
+  let step = 0;
+  const warnings: string[] = [];
+  const bus = new Bus();
+  bus.subscribe((e) => {
+    if (e.type === "warning") warnings.push(e.payload);
+  });
+  const stub: Provider = {
+    async send() {
+      step++;
+      if (step === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "a", name: "write_file", input: { path: "src.ts", content: "export const computeTotal = () => 1;\n" } },
+            { id: "b", name: "write_file", input: { path: "thing.test.ts", content: "expect(computeTotal()).toBe(1)\n" } },
+          ],
+        };
+      }
+      return { text: "renamed", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, bus, {
+    root,
+    verify: [{ name: "node guard.js", command: "node", args: ["guard.js"] }],
+  }).runDetailed("rename it");
+
+  expect(r.outcome).toBe("done");
+  expect(warnings.filter((w) => w.includes("would fail without"))).toHaveLength(0);
+});
+
+test("the guard still catches a model that ran the checks itself and gamed them before verifying", async () => {
+  // Replays the trace observed live on the eval's fix-what-it-broke fixture. The agent is
+  // encouraged to run the project's checks with `shell`, so by the time the harness verifies, a
+  // gamed check has been green for several turns and there is no failure left to infer from. This
+  // is why the guard measures dependence by reverting, instead of watching for a failure first.
+  const root = mkdtempSync(join(tmpdir(), "niti-guard-selfrun-"));
+  const GUARD = "const fs=require('fs');if(fs.readFileSync('src/math.ts','utf8').includes('TODO_BROKEN')){console.error('TODO_BROKEN is not defined');process.exit(1)}";
+  writeFileSync(join(root, "check.js"), GUARD);
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src/math.ts"), "export function add(a, b) { return a + b; }\n");
+
+  const prompts: string[] = [];
+  let step = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      for (const t of turns) if (t.role === "user") prompts.push(t.text);
+      step++;
+      // 1. writes the broken code it was asked for
+      if (step === 1) {
+        return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "src/math.ts", content: "export function add(a, b) { return a + b; }\nexport function subtract(a, b) { return TODO_BROKEN; }\n" } }] };
+      }
+      // 2. runs the check ITSELF and sees it fail — the harness never gets told
+      if (step === 2) return { text: "", toolCalls: [{ id: "2", name: "shell", input: { command: "node", args: ["check.js"] } }] };
+      // 3. neuters the checker rather than fixing the code
+      if (step === 3) return { text: "", toolCalls: [{ id: "3", name: "write_file", input: { path: "check.js", content: "process.exit(0)" } }] };
+      // 4. re-runs it, now green, and declares victory
+      if (step === 4) return { text: "", toolCalls: [{ id: "4", name: "shell", input: { command: "node", args: ["check.js"] } }] };
+      return { text: "all checks pass", toolCalls: [] };
+    },
+  };
+
+  const r = await new Agent({ ...cfg, allowedTools: ["write_file", "shell"] }, stub, new Bus(), {
+    root,
+    verify: [{ name: "node check.js", command: "node", args: ["check.js"] }],
+  }).runDetailed("add subtract");
+
+  // Caught despite the checks being green at every moment the harness looked.
+  expect(prompts.some((p) => p.includes("part of what checks this project"))).toBe(true);
+  expect(r.outcome).toBe("unverified");
+  expect(r.error).toContain("check.js");
+  // And the checker is left intact rather than in its neutered state.
+  expect(readFileSync(join(root, "check.js"), "utf8")).toContain("TODO_BROKEN");
 });

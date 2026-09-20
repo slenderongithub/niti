@@ -61,7 +61,10 @@ test("MCP and LSP tools are offered side by side — adding LSP replaces nothing
   const lsp = new LspRegistry([{ name: "fake", command: "does-not-need-to-exist", extensions: [".ts"] }], ".");
 
   await new Agent({ ...cfg, allowedTools: ["read_file", "edit", "mcp"] }, stub, new Bus(), { mcp: fakeMcp(), lsp }).run("look around");
-  expect(offered).toEqual(["read_file", "edit", "mcp__demo__ping", "diagnostics", "hover", "spawn_fork"]);
+  // read_file carries the read-only search tools with it (expandTools) — an agent trusted to read
+  // files is trusted to find them, and existing agents.yaml files never listed them.
+  // `todo` is harness-internal (no file access, no command) and is offered to every agent.
+  expect(offered).toEqual(["read_file", "edit", "list_dir", "glob", "grep", "mcp__demo__ping", "diagnostics", "hover", "spawn_fork", "todo"]);
   lsp.close();
 });
 

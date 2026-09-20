@@ -17,6 +17,11 @@ export interface AgentEvent {
   type: EventType;
   payload: string;
   time: number;
+  // Populated only for "file_edit" (and "external_change") — the project-relative path touched,
+  // as a real field rather than something a consumer has to scrape out of `payload`'s human-
+  // readable string. Optional and additive: every existing consumer that only reads `payload`
+  // is unaffected.
+  path?: string;
 }
 
 // Thin typed wrapper over node:events. Many agents publish; the log/TUI subscribes.

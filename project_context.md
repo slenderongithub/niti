@@ -24,8 +24,8 @@ This file is the single merged source of project history/architecture context, r
 ## Architecture (as built)
 
 ```
-                    Go + Bubbletea TUI (niti)         Web dashboard (optional, --web)
-                     team picker · panes · comm-graph   localhost force-graph
+       Go + Bubbletea TUI (niti)   Web dashboard (--web)   Electron desktop app (desktop/)
+        team picker · panes · graph   localhost force-graph   embedded panels, file:// renderer
                               └──────────── HTTP + SSE (src/server) ────────────┘
                                                   ▼
                                     Engine (src/engine.ts)
@@ -96,12 +96,17 @@ This file is the single merged source of project history/architecture context, r
 | `src/config/config.ts` | Parses/validates `.niti/agents.yaml`: agents, `permissions:`, `lsp:`, `mcpServers:`, top-level options (`loadOptions`/`loadInstructions`), `saveAgents()` (replaces only the `agents:` key so hand-written config survives a picker relaunch) |
 | `src/permissions.ts` | Wildcard pattern resolver (`resolve()`), `Bun.Glob`-based, layered session→agent→project→default-ask |
 | `src/engine.ts` | Wires agents + orchestrator + messaging + approvals + usage + locks + store + watcher into one `EventHub`; `submit()`/`resume()`/`undo()`/`switchModel()` |
-| `src/agent/agent.ts` | Multi-turn tool loop, `send_message`/`ask_agent`/`spawn_fork`, approval + quota checks, checkpoint-before-write, `maxTurns` override |
-| `src/agent/context.ts` | `compactTurns()` — summarizes older turns near the context ceiling |
+| `src/agent/agent.ts` | Multi-turn tool loop (read-only calls in a turn run concurrently), `send_message`/`ask_agent`/`spawn_fork`, approval + quota checks, checkpoint-before-write, `maxTurns` override, verification pass before a changed task may report done |
+| `src/agent/verify.ts` | `detectChecks()` + `checkSurface()` (which files decide a verdict rather than being judged by it — the check-gaming guard) and  (package.json typecheck/build script, `go build`, `cargo check`) `runChecks()`; overridden by `verify:` in agents.yaml |
+| `src/agent/context.ts` | `compactTurns()` — structured summary (Goal/Done/Decisions/Open) near the context ceiling, plus a ledger of changed files and recent errors recovered from the dropped turns without a model call |
+| `src/agent/todo.ts` | The `todo` tool's list parsing/rendering — tolerant of the shapes models actually emit; whole-list replace, bounded at 20 items |
+| `src/agent/steering.ts` | Per-model-family prompt addendum (`familyOf` keys off the model id, not the provider — many providers serve other vendors' weights); mechanical steering only, never shared conventions |
+| `src/agent/repomap.ts` | PageRank over the import graph → a ranked project outline for the system prompt; uses `git ls-files` so a vendored tree inside the repo can't crowd out the project's own source |
 | `src/orchestrator/planner.ts`, `scheduler.ts`, `runner.ts`, `orchestrator.ts`, `locks.ts`, `task.ts` | Goal→DAG planning, concurrent topological execution, the shared task queue, the lock registry |
 | `src/messaging/message-bus.ts` | Cross-provider agent↔agent channel: `post`/`announce`/`authorize`/`drain`, per-pair rate cap |
 | `src/providers/*` | `Provider` interface; `anthropic.ts`/`gemini.ts`/`openai.ts`/`copilot.ts` clients; `catalog.ts` (+ generated) provider metadata; `pricing.ts` cost table; `factory.ts` instantiation |
-| `src/tools/tools.ts` | Sandboxed `read_file`/`write_file`/`edit`/`shell`, `safePath()` jail; `edit` requires a unique `oldString` match |
+| `src/tools/tools.ts` | Sandboxed `read_file`/`write_file`/`edit`/`shell` + read-only `grep`/`glob`/`list_dir`, `safePath()` jail; line-numbered paged reads; `edit` requires a unique match but recovers from pasted line numbers and indentation drift (`resolveEdit`) |
+| `scripts/eval/` | Harness benchmark: 6 fixture tasks (navigate/edit/verify/restraint) scored on what lands on disk — run before and after any loop or tool change |
 | `src/tools/lsp-tools.ts`, `src/lsp/client.ts`, `src/lsp/registry.ts` | `diagnostics`/`hover` tools over hand-rolled LSP JSON-RPC |
 | `src/mcp/mcp.ts` | MCP subprocess manager, `mcp__<server>__<tool>` namespacing |
 | `src/store/db.ts`, `src/store/session-store.ts` | SQLite (WAL) open/migrate; `SessionStore` — sessions/messages/parts, checkpoint/undo, `listSessions`, `recordMessage` |
@@ -258,6 +263,7 @@ and a live server smoke test:
 | Local HTTP + SSE server (constant-time token auth, replay, routes, static dashboard) | `src/server/*` |
 | Go + Bubbletea TUI: every-launch team picker, live session view, model carousel, command menu | `tui/internal/*` |
 | Web dashboard (self-contained SSE force-graph, tasks, messages, usage) | `web/*` |
+| Electron desktop app (M1: native shell + Session panel — agent list, task board, Block-rendered live feed, approvals, model swap, prompt bar — over the same HTTP+SSE API, CORS-enabled since it's cross-origin unlike the TUI/browser dashboard) | `desktop/*` |
 
 The headline end-to-end path — orchestrator plans a DAG, a frontend agent **asks the backend agent
 directly**, the answer flows back without clobbering the frontend's task output, and every message
@@ -297,7 +303,7 @@ streams over SSE — is asserted in `src/engine.test.ts` and `src/server/server.
   busy) agent — avoids concurrency races; upgrade if cross-agent failover is needed.
 - Credential validation is deferred to first use (no live provider ping on `auth` save).
 - Re-planning after integrate is not implemented (the orchestrator reviews + summarizes only).
-- The web dashboard is a read-only viewer (no prompt submission from the browser).
+- ~~The web dashboard is a read-only viewer (no prompt submission from the browser).~~ Corrected: `web/app.js` already submits prompts, switches models, answers approvals, and sends mid-task agent messages via `POST /prompt`/`/model`/`/approval`/`/agents/:id/message` — it has not been read-only for some time; this line was stale.
 - One global shell lock (`*shell*`) rather than per-path — real path extraction from an arbitrary
   shell command is a guessing game; upgrade only if shell contention shows up in practice.
 - File watching has no debounce or full `.gitignore` parsing, just an inline ignore list.
@@ -312,7 +318,7 @@ streams over SSE — is asserted in `src/engine.test.ts` and `src/server/server.
 | Surface | Decision | Reason |
 |---|---|---|
 | ACP (Zed/VS Code embedding) | Out of scope | niti is a standalone CLI/TUI, no IDE host to embed into |
-| Desktop app (SolidJS) | Out of scope | Terminal + optional web dashboard is the UI surface |
+| Desktop app (SolidJS) | Superseded 2026-09-15 — see `desktop/*` | Electron GUI added additively, alongside (not replacing) the TUI/web dashboard, as a native panel-based front end; SolidJS was never built, Electron was chosen instead |
 | 20+ TUI themes | Deferred | Pure polish, addable to `tui/internal/theme/theme.go` any time |
 | Frecency-based autocomplete | Deferred | UX polish on top of the command registry, not parity-critical |
 | tree-sitter | Descoped, subprocess LSP instead | No syntax-highlighting UI surface to justify it |

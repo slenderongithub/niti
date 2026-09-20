@@ -6,6 +6,7 @@ import type { McpServerConfig } from "../mcp/mcp.ts";
 import type { LspServerConfig } from "../lsp/registry.ts";
 import { parsePermissions, type PermissionRules } from "../permissions.ts";
 import { CATALOG, providerKeys } from "../providers/catalog.ts";
+import { parseReasoning } from "../providers/provider.ts";
 
 // Find the project root the way git finds a repo: walk up for the first ancestor holding .niti/
 // (or, failing that, .git/). Every path in niti is cwd-relative, so running from a subdirectory
@@ -58,6 +59,10 @@ export interface NitiOptions {
   maxTurns?: number; // tool-loop cap per agent turn; the built-in default is 12
   maxAgents?: number; // ceiling on team size, enforced when agents.yaml is loaded
   worktree?: boolean; // isolate each run's file writes in a fresh git worktree (same as --worktree)
+  // Commands an agent's changes must pass before it may report a task done, e.g.
+  // ["bun run typecheck", "bun test"]. Omitted → detected from the project; `false` → never verify.
+  verify?: string[] | false;
+  repoMap?: boolean; // false → don't put a generated project map in the system prompt
 }
 
 export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
@@ -72,6 +77,9 @@ export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
     maxTurns: num(raw.maxTurns),
     maxAgents: num(raw.maxAgents),
     worktree: raw.worktree === true,
+    // `false` is meaningful here (turn detection off), so it can't collapse into undefined.
+    verify: raw.verify === false ? false : Array.isArray(raw.verify) ? raw.verify.filter((v): v is string => typeof v === "string") : undefined,
+    repoMap: raw.repoMap === false ? false : undefined,
   };
 }
 
@@ -154,6 +162,7 @@ export function saveAgents(agents: AgentConfig[], path = ".niti/agents.yaml"): v
       ...(a.autoApprove ? { autoApprove: a.autoApprove } : {}),
       ...(a.permissions ? { permissions: a.permissions } : {}),
       ...(a.reviewer ? { reviewer: a.reviewer } : {}),
+      ...(a.reasoning ? { reasoning: a.reasoning } : {}),
     })),
   };
   doc.set("agents", next.agents);
@@ -210,5 +219,6 @@ function validate(a: unknown, i: number, path: string): AgentConfig {
     autoApprove: Array.isArray(rec.autoApprove) ? (rec.autoApprove as string[]) : undefined,
     permissions: parsePermissions(rec.permissions, `${path} agent[${i}]`),
     reviewer: typeof rec.reviewer === "string" ? rec.reviewer : undefined,
+    reasoning: parseReasoning(rec.reasoning),
   };
 }

@@ -1,5 +1,8 @@
 import { relative } from "node:path";
 import { Agent, type AgentConfig } from "./agent/agent.ts";
+import { detectChecks, parseChecks } from "./agent/verify.ts";
+import { repoMapSection } from "./agent/repomap.ts";
+import { steeringFor } from "./agent/steering.ts";
 import { Bus } from "./events/bus.ts";
 import { MessageBus, USER, type Messenger } from "./messaging/message-bus.ts";
 import { Orchestrator } from "./orchestrator/orchestrator.ts";
@@ -18,7 +21,7 @@ import { costOf } from "./providers/pricing.ts";
 import { watchProject, type ProjectWatcher } from "./watch.ts";
 import { TOOL_GUIDANCE } from "./tools/tools.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
-import { isGitRepo, createWorktree, diffStat, commitPending, mergeBack, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
+import { isGitRepo, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
 
 export interface EngineOptions {
   configs: AgentConfig[];
@@ -35,6 +38,13 @@ export interface EngineOptions {
   watch?: boolean; // true → emit external_change events for edits made outside niti
   maxTurns?: number; // `maxTurns:` from agents.yaml — tool-loop cap per agent turn
   worktree?: boolean; // isolate each run's file writes in a fresh git worktree instead of the real root
+  // `verify:` from agents.yaml. Command lines an agent's changes must pass before it may report
+  // done; omitted → detected from the project (a typecheck/build script, go build, cargo check);
+  // `verify: false` → nothing is run.
+  verify?: string[] | false;
+  // false → no generated project map in the system prompt. On by default; it is skipped
+  // automatically for projects too small to need one.
+  repoMap?: boolean;
 }
 
 // The Engine wires the whole multi-agent runtime: agents (with a live messenger so they can talk to
@@ -129,9 +139,23 @@ export class Engine {
     const permissionLayers = [...(opts.permissions ? [opts.permissions] : []), ...(opts.auto ? [AUTO_RULES] : [])];
     this.permissionLayers = permissionLayers;
 
+    // Resolved once, at wiring time: detection reads package.json/go.mod off disk, and doing that
+    // per task would re-read it on every one of them for an answer that cannot change mid-run.
+    const checks = opts.verify === false ? [] : opts.verify ? parseChecks(opts.verify) : detectChecks(this.root);
+    if (checks.length > 0) {
+      this.bus.publish({ agentId: "orchestrator", type: "thought", payload: `verifying changes with: ${checks.map((c) => c.name).join(", ")}`, time: Date.now() });
+    }
+
+    // Built once, not per agent: it walks the tree and shells out to git, and every agent gets the
+    // same map. Placed in the system prompt (ahead of the conversation) so a provider's cache
+    // prefix still matches call to call — see anthropic.ts's cache_control placement.
+    const mapSection = opts.repoMap === false ? "" : repoMapSection(this.root);
+
     for (const c of opts.configs) {
       this.declaredPrompts.set(c.id, c.systemPrompt);
-      const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + TOOL_GUIDANCE };
+      // Per agent, because two agents on the same team routinely run different model families.
+      // Appended last so it qualifies the shared guidance rather than being buried above it.
+      const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + mapSection + TOOL_GUIDANCE + steeringFor(c.provider, c.model) };
       // A missing key (revoked, keychain wiped, never set) must not take the whole server down —
       // that would crash boot before the handshake line prints, leaving the TUI staring at an EOF
       // with no way back in short of editing agents.yaml by hand. Defer the failure to first use,
@@ -170,6 +194,7 @@ export class Engine {
         lsp: opts.lsp,
         onWrite: (path) => this.watcher?.markSelfWrite(path),
         maxTurns: opts.maxTurns,
+        verify: checks,
         shouldStop: () => this.cancelled,
       });
       this.agents.push(agent);
@@ -296,6 +321,15 @@ export class Engine {
     return { path: this.worktreeHandle.path, branch: this.worktreeHandle.branch, diffStat: await diffStat(this.worktreeHandle) };
   }
 
+  // GET /worktree/hunks?path=<file> — zero-context per-file diff for the IDE's per-hunk review.
+  // Computed on demand for one file at a time rather than folded into worktreeStatus (which the
+  // dashboard polls repeatedly): most polls don't need hunk-level detail, only opening a specific
+  // file's review does.
+  async worktreeFileHunks(path: string): Promise<string | undefined> {
+    if (!this.worktreeHandle) return undefined;
+    return diffPatchZeroContext(this.worktreeHandle, path);
+  }
+
   // POST /worktree/merge — explicit user action, never automatic. Cleans up the worktree only on a
   // successful merge; a conflict leaves it in place so the user can resolve it themselves (via the
   // branch directly) and retry.
@@ -316,6 +350,21 @@ export class Engine {
       ok: false,
       message: `${result.message}\n\nYour working tree was restored. Resolve it on branch ${this.worktreeHandle.branch}, or POST /worktree/discard to throw the run away.`,
     };
+  }
+
+  // POST /worktree/merge with a `files` list — bring in only those files, then throw away the
+  // worktree. A reviewer who has already picked which files they want has implicitly decided
+  // against the rest; leaving the worktree/branch around "in case" just accumulates abandoned
+  // branches (same reasoning as discardWorktree below).
+  async mergeWorktreeFiles(files: string[]): Promise<{ ok: boolean; message: string }> {
+    if (!this.worktreeHandle) return { ok: false, message: "no active worktree" };
+    await commitPending(this.worktreeHandle);
+    const result = await mergeFiles(this.root, this.worktreeHandle.branch, files);
+    if (result.ok) {
+      await removeWorktree(this.root, this.worktreeHandle.path);
+      this.worktreeHandle = undefined;
+    }
+    return result;
   }
 
   // /auto and /manual, and the team picker's setup question. Toggling approval mode for a live
@@ -443,6 +492,18 @@ export class Engine {
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }
+  }
+
+  // User-triggered task reassignment (drives POST /reassign). Only pending tasks are eligible — see
+  // Orchestrator.reassign. Publishes on hub, same broadcast path runProject's onOrchestration uses,
+  // so every connected client (TUI, web, desktop) picks up the move, not just the caller.
+  reassignTask(taskId: string, agentId: string): string | undefined {
+    if (!this.byId.get(agentId)) return `no such agent: ${agentId}`;
+    const err = this.orch.reassign(taskId, agentId);
+    if (err) return err;
+    const event = { type: "reassign" as const, taskId, role: agentId, time: Date.now() };
+    this.hub.publish({ kind: "orchestration", event, time: event.time });
+    return undefined;
   }
 
   // Release the long-lived subprocess/OS resources (file watcher, language servers). The agents,

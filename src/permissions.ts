@@ -19,6 +19,12 @@ export const DECISIONS: Decision[] = ["allow", "ask", "deny"];
 // tools, …) prompts. An agent with no `permissions:` block therefore behaves exactly as before.
 export const DEFAULT_RULES: PermissionRules = {
   read_file: { "*": "allow" },
+  // Navigation. Read-only and jailed to the project root exactly as read_file is, so gating them
+  // would only mean an approval dialog per search — which is what makes an agent stop searching
+  // and start guessing at paths instead.
+  list_dir: { "*": "allow" },
+  glob: { "*": "allow" },
+  grep: { "*": "allow" },
   // Read-only questions about code, answered by a language server — prompting for these would make
   // "check your work compiles" cost a dialog per call.
   diagnostics: { "*": "allow" },

@@ -72,6 +72,19 @@ export class Orchestrator {
     task.availableAt = Date.now() + Math.min(task.attempts * 500, 3000);
   }
 
+  // User-triggered reassignment of a not-yet-started task to a different agent. Only "pending"
+  // tasks qualify — an in_progress task already has a live agent working it, and interrupting that
+  // is a different, unbuilt feature (failover via requeue() handles the failure case, not a user
+  // changing their mind mid-task). The scheduler reads t.role to decide who picks up a pending task
+  // (scheduler.ts's readiness loop), so changing it here is sufficient to redirect it.
+  reassign(taskId: string, role: string): string | undefined {
+    const t = this.tasks.find((t) => t.id === taskId);
+    if (!t) return `no such task: ${taskId}`;
+    if (t.status !== "pending") return `only pending tasks can be reassigned (${taskId} is ${t.status})`;
+    t.role = role;
+    return undefined;
+  }
+
   // True while any task is still pending or being worked (so workers wait for possible failovers).
   hasUnfinished(): boolean {
     return this.tasks.some((t) => t.status === "pending" || t.status === "in_progress");

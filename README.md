@@ -81,8 +81,36 @@ Both pages retheme live with whatever theme (`ctrl+t` / `/theme`) the TUI has ac
   hand-offs), not a flat queue; independent tasks run concurrently and the lead reviews at the end.
 - **Agent-to-agent messaging** — any teammate can `ask_agent`/`send_message` another mid-task (e.g.
   frontend asking backend about an API shape), rate-capped per pair as the loop guard.
-- **Sandboxed tools** — `read_file` / `write_file` / `edit` / `shell`, gated per-agent by
-  `allowedTools` and a wildcard permission policy; every path is jailed to the project root.
+- **Sandboxed tools** — `read_file` / `write_file` / `edit` / `shell` plus read-only navigation
+  (`grep` / `glob` / `list_dir`), gated per-agent by `allowedTools` and a wildcard permission
+  policy; every path is jailed to the project root. Reads are line-numbered and paged, so `grep`'s
+  `path:line:` output and a read share one coordinate system; independent reads in a turn run
+  together rather than one round-trip at a time.
+- **Project map + ranked context** — a generated outline of the repo (directory shape plus the
+  files most of the project imports, PageRank over the import graph) rides in the system prompt, so
+  an agent starts oriented instead of guessing. `repoMap: false` turns it off.
+- **Working checklist** — agents write a `todo` list for multi-step tasks, re-stated to the model
+  whenever it changes so the plan stays recent context instead of something to reconstruct from a
+  transcript. Scoped to one task; never carried into the next.
+- **Per-model steering** — each agent's prompt carries a short addendum for its model family
+  (`src/agent/steering.ts`). Mechanical only — verbosity, tool-call shape, when to stop. Anything
+  two agents must agree on stays in the shared guidance, since they message each other across
+  providers.
+- **Reasoning effort** — `reasoning: off|low|medium|high|auto` per agent maps to Gemini's
+  `thinkingBudget` and OpenAI's `reasoning_effort`. Unset sends nothing; note that Flash and
+  Flash-Lite do not think at all unless you set it.
+- **Verification before "done"** — an agent that changed files must pass the project's own checks
+  (a `typecheck`/`build` script, `go build`, `cargo check`, or whatever `verify:` names) before it
+  may report a task complete; failures go back to it as the real compiler output, twice at most.
+  A task whose checks never pass ends `unverified` rather than `done`, so the DAG never releases
+  dependents onto a tree that doesn't build.
+- **Check-gaming guard** — a green result that arrived only because the agent edited the tests,
+  the lint config or the check script itself is refused, and the agent is told to revert it and fix
+  the code. Judged by content, not by touch, so reverting as instructed isn't flagged; and only
+  ever after a failure, so writing a test in a task that never failed is ordinary work.
+- **Objective retry** — an `unverified` task is handed to a *different* model with the check output
+  attached, before any replan. Best-of-N where the selector is a compiler rather than a judge
+  model, and where the tasks that were right first time cost nothing extra.
 - **Approval gates** — agents pause for `[y] approve · [n] deny · [a] always` before risky actions,
   answered from the TUI or the web dashboard; dangerous shell patterns always prompt.
 - **Persistence** — every turn checkpoints to SQLite (`.niti/niti.db`); `niti-core resume` picks up
@@ -163,4 +191,3 @@ cd tui && go build ./... && go vet ./... && go test ./...    # Go TUI: build, ve
 MIT.
 
 <img src="assets/logo.png" alt="niti logo" width="40">
-

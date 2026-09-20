@@ -77,10 +77,20 @@ export async function diffStat(handle: WorktreeHandle): Promise<string> {
 // (a status read, polled by the dashboard) was silently staging the user's work-in-progress, so
 // a later `git commit` in that worktree committed more than they had chosen. `--intent-to-add`
 // records the paths without staging content, which is exactly what a diff needs and nothing more.
-async function stagedDiff(handle: WorktreeHandle, flags: string[]): Promise<string> {
+async function stagedDiff(handle: WorktreeHandle, flags: string[], pathspec?: string): Promise<string> {
   await git(handle.path, ["add", "--intent-to-add", "-A"]);
-  const r = await git(handle.path, ["diff", ...flags, handle.baseSha]);
+  const args = ["diff", ...flags, handle.baseSha];
+  if (pathspec) args.push("--", pathspec);
+  const r = await git(handle.path, args);
   return r.stdout.trim();
+}
+
+// Zero-context hunks for the IDE's per-hunk review (see ide/extensions/niti-agents/src/hunks.ts):
+// with git's default 3-line context, two nearby edits merge into one hunk, coupling their accept/
+// reject decisions together even though they're unrelated changes. -U0 keeps every changed line
+// range independent, matching what a reviewer actually wants to select between.
+export async function diffPatchZeroContext(handle: WorktreeHandle, path?: string): Promise<string> {
+  return await stagedDiff(handle, ["-U0"], path);
 }
 
 // The full patch (not just the stat summary) for /export's report — same staging as diffStat, so
@@ -120,6 +130,26 @@ export async function snapshotBranch(root: string, name: string): Promise<{ ok: 
   const back = await git(root, ["checkout", "-"]);
   if (back.code !== 0) return { ok: false, message: `branch created, but couldn't switch back: ${back.stderr.trim()}` };
   return { ok: true, message };
+}
+
+// Selective merge: bring only the named files' content in from the worktree branch, leaving
+// everything else on the branch untouched (the caller decides what happens to it — typically
+// discarding the worktree afterward, since a reviewer who selected some files has already made
+// their call on the rest). `git checkout <branch> -- <paths>` updates both the index and working
+// tree for those paths from that branch, including paths that don't exist on the current branch
+// yet (a file an agent created fresh) — then a pathspec-scoped commit records only those paths,
+// leaving any other currently-staged changes in `root` untouched.
+export async function mergeFiles(root: string, branch: string, files: string[]): Promise<{ ok: boolean; message: string }> {
+  if (!files.length) return { ok: false, message: "no files selected" };
+  const checkout = await git(root, ["checkout", branch, "--", ...files]);
+  if (checkout.code !== 0) return { ok: false, message: checkout.stderr.trim() || checkout.stdout.trim() };
+  const commit = await git(root, ["commit", "-q", "-m", `niti: merge ${files.length} file(s) from ${branch}`, "--", ...files]);
+  // Nothing to commit (the checked-out content is identical to what's already in root) isn't a
+  // failure — it means those files were already up to date, not that the merge went wrong.
+  if (commit.code !== 0 && !(commit.stdout + commit.stderr).includes("nothing to commit")) {
+    return { ok: false, message: commit.stderr.trim() || commit.stdout.trim() };
+  }
+  return { ok: true, message: `merged ${files.length} file(s) from ${branch}` };
 }
 
 // Merge the worktree's branch into whatever is currently checked out in `root`. Never automatic —

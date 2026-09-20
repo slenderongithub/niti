@@ -109,4 +109,23 @@ export type OnDelta = (text: string) => void;
 export interface Provider {
   // When onDelta is given, the provider streams text chunks to it and still returns the full reply.
   send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply>;
+  // Optional: not every provider has an embeddings API (Anthropic doesn't at all). Callers that
+  // want semantic search (see niti IDE's codebase index) must check for this before calling it,
+  // and fall back to a non-semantic strategy when it's absent — never assume every provider has it.
+  embed?(texts: string[]): Promise<number[][]>;
+}
+
+// How hard a model should think before answering. Portable across providers because the thing
+// being expressed — "spend more inference on this" — is portable; the encoding is not, so each
+// client maps it to its own parameter (Gemini's thinkingBudget, OpenAI's reasoning_effort).
+//
+// `undefined` means "send nothing" and is the default, deliberately: this parameter is rejected
+// outright by models that have no reasoning mode, so opting in has to be an explicit act rather
+// than something a default inflicts on every provider in the catalog.
+export type Reasoning = "off" | "low" | "medium" | "high" | "auto";
+
+export const REASONING_LEVELS: Reasoning[] = ["off", "low", "medium", "high", "auto"];
+
+export function parseReasoning(v: unknown): Reasoning | undefined {
+  return typeof v === "string" && (REASONING_LEVELS as string[]).includes(v) ? (v as Reasoning) : undefined;
 }
