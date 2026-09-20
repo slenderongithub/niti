@@ -15,7 +15,7 @@ import (
 
 // Version is the niti release string. It lives here because both the setup screens and the live
 // session view put it on screen, and `ui` is the one package both already import.
-const Version = "0.2.0"
+const Version = "0.3.2"
 
 // Item is one selectable row. Value is what the caller acts on; Label/Desc are what it reads as.
 type Item struct {
