@@ -64,3 +64,23 @@ test("a nested go.mod resolves Go imports instead of leaving every file an islan
   expect(g.nodes.some((n) => n.id.endsWith("go.mod"))).toBe(false); // walked, but not a node
   expect(g.edges).toContainEqual({ from: "tui/cmd/niti/main.go", to: "tui/internal/api/client.go" });
 });
+
+test("a caller-supplied file list is held to the same boundary as the walk", () => {
+  // niti's sibling products (ide/, desktop/) and the archived v1 TUI (old-tech/) live in this tree
+  // but are not the CLI. A supplied list used to bypass IGNORE entirely, so they were handed to
+  // CLI agents as part of the project — and a checked-out editor outnumbers src/ many times over.
+  const supplied = [
+    "src/a.ts",
+    "ide/extensions/x.ts",
+    "desktop/main.ts",
+    "old-tech/ink-tui/theme.ts",
+    "node_modules/pkg/index.js",
+  ];
+  const dir = scaffold({ "src/a.ts": "export const a = 1;" });
+  const g = buildFileGraph(dir, 400, supplied);
+  const ids = g.nodes.map((n) => n.id);
+  expect(ids).not.toContain("ide/extensions/x.ts");
+  expect(ids).not.toContain("desktop/main.ts");
+  expect(ids).not.toContain("old-tech/ink-tui/theme.ts");
+  expect(ids).not.toContain("node_modules/pkg/index.js");
+});

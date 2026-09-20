@@ -13,7 +13,23 @@ export interface FileGraph {
 }
 
 const SRC_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go"]);
-const IGNORE = new Set(["node_modules", ".git", "dist", "build", ".niti", "vendor", ".next", "out", "target", "coverage", "old-tech"]);
+// Build output and dependencies, plus niti's own sibling products. `ide/` and `desktop/` are
+// separate applications that live in this tree; `old-tech/` is the archived v1 TUI. None of them
+// is part of the CLI, so none belongs in the CLI's dependency graph or in what its agents are told
+// the project contains — a checked-out editor would otherwise outnumber src/ by an order of
+// magnitude. Listed by name rather than inferred, because "which sibling directories are their own
+// product" is a fact about this repo that nothing in the tree states.
+const IGNORE = new Set([
+  "node_modules", ".git", "dist", "build", ".niti", "vendor", ".next", "out", "target", "coverage",
+  "old-tech", "ide", "desktop",
+]);
+
+// True when any segment of a project-relative path sits in IGNORE. The walk applies IGNORE as it
+// descends; a caller-supplied list has never been filtered at all, so the same boundary has to be
+// enforced here or the two paths disagree about what the project is.
+function ignored(rel: string): boolean {
+  return rel.split("/").some((seg) => IGNORE.has(seg));
+}
 
 // git's tracked files: the cheapest accurate answer to "what is this project's own source".
 // The walk below cannot tell a project from a vendored tree checked out inside it — point it at a
@@ -38,7 +54,10 @@ export function buildFileGraph(root: string, maxFiles = 400, files?: string[]): 
     files = [];
     walk(root, "", files, maxFiles);
   } else {
-    files = files.filter((f) => f === "go.mod" || f.endsWith("/go.mod") || (SRC_EXT.has(extname(f)) && !f.endsWith(".d.ts"))).slice(0, maxFiles);
+    files = files
+      .filter((f) => !ignored(f))
+      .filter((f) => f === "go.mod" || f.endsWith("/go.mod") || (SRC_EXT.has(extname(f)) && !f.endsWith(".d.ts")))
+      .slice(0, maxFiles);
   }
   const set = new Set(files);
   const goModule = findGoModule(root, files);
