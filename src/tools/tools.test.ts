@@ -3,7 +3,7 @@ import { mkdtempSync, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, editDiff } from "./tools.ts";
+import { runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, editDiff, splitCommand, normalizeShellInput, canonicalizeShellCall } from "./tools.ts";
 
 const root = mkdtempSync(join(tmpdir(), "niti-tools-"));
 const ALL = ["read_file", "write_file", "edit", "shell"];
@@ -259,4 +259,44 @@ test("the approval diff shows the hunk that will actually be written", () => {
   const before = "function a() {\n  return 1;\n}\n";
   const diff = editDiff(before, "     2\t  return 1;", "     2\t  return 2;");
   expect(diff).toBe("@@ line 2 @@\n-  return 1;\n+  return 2;");
+});
+
+test("splitCommand honours quotes and escapes, and does nothing else", () => {
+  expect(splitCommand('git commit -m "fix bug"')).toEqual(["git", "commit", "-m", "fix bug"]);
+  expect(splitCommand("echo 'a  b' c")).toEqual(["echo", "a  b", "c"]);
+  expect(splitCommand('echo "say \\"hi\\""')).toEqual(["echo", 'say "hi"']);
+  expect(splitCommand("a\\ b c")).toEqual(["a b", "c"]);
+  expect(splitCommand('x "" y')).toEqual(["x", "", "y"]);
+  expect(splitCommand("  ls   -la ")).toEqual(["ls", "-la"]);
+  // No expansion, globbing or operators: what the model wrote is what spawn receives.
+  expect(splitCommand("rm $HOME/* | cat > out")).toEqual(["rm", "$HOME/*", "|", "cat", ">", "out"]);
+});
+
+test("an unterminated quote is an immediate, explained error, not a mangled command", () => {
+  expect(() => splitCommand('echo "oops')).toThrow(/unterminated/);
+});
+
+test("args[] still wins over a command string", () => {
+  expect(normalizeShellInput({ command: "git", args: ["commit", "-m", "fix bug"] })).toEqual({ command: "git", args: ["commit", "-m", "fix bug"] });
+  expect(toSandboxCall({ id: "1", name: "shell", input: { command: 'git commit -m "fix bug"' } })).toEqual({
+    tool: "shell",
+    command: "git",
+    args: ["commit", "-m", "fix bug"],
+  });
+});
+
+test("canonicalizing is idempotent: a command containing a space is not split a second time", () => {
+  const call = { name: "shell", input: { command: '"/tmp/My App/tool"' } as Record<string, unknown> };
+  canonicalizeShellCall(call);
+  expect(call.input.command).toBe("/tmp/My App/tool");
+  expect(call.input.args).toEqual([]);
+  expect(toSandboxCall({ id: "1", name: "shell", input: call.input })).toMatchObject({ command: "/tmp/My App/tool", args: [] });
+});
+
+test("shell output over the cap keeps the end, where a failure summary lives", async () => {
+  const r = await shell(root, "sh", ["-c", "echo START; head -c 5000 /dev/zero | tr '\\0' x; echo; echo FINAL-FAILURE-SUMMARY"], { maxOutput: 500 });
+  expect(r.stdout).toContain("START");
+  expect(r.stdout).toContain("FINAL-FAILURE-SUMMARY");
+  expect(r.stdout).toContain("[output truncated]");
+  expect(r.stdout.length).toBeLessThan(700);
 });

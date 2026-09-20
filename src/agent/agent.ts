@@ -11,13 +11,14 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, safePath, editDiff, writeFileDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
-import { compactTurns } from "./context.ts";
+import { compactTurns, promptTokens, resultBudgetChars, truncateMiddle, MAX_RESULT_CHARS } from "./context.ts";
+import { createHash } from "node:crypto";
 import { runChecks, checkSurface, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 
@@ -255,6 +256,13 @@ export interface LoopCtx {
   // its edit to the check and fixing the code — trips the guard on the way back, because reverting
   // a file is still writing it.
   checkBaseline?: Map<string, string | undefined>;
+  // Characters each tool result may take this turn, sized to the room left in the context window.
+  // Set just before the turn's tools run; unset means only the fixed per-result ceiling applies.
+  resultBudget?: number;
+  // Hash of every read_file result that is still in this conversation in full, by path and window.
+  // A repeat of an unchanged read is answered with a pointer instead of the same text again.
+  // Cleared on compaction, because the earlier copy is what compaction removes.
+  reads?: Map<string, string>;
 }
 
 export class Agent {
@@ -411,6 +419,7 @@ export class Agent {
         // Past 95%, summarize older turns instead of letting the next call overflow the window —
         // but only if there *is* a next call. With no tool calls this turn ends the loop, so
         // compacting here paid for a whole extra billed summarization whose result nothing read.
+        let compacted = false;
         if (reply.toolCalls.length > 0 && reply.usage && overContextThreshold(reply.usage.inputTokens, context, COMPACT_RATIO)) {
           const before = turns.length;
           turns.splice(
@@ -421,6 +430,8 @@ export class Agent {
             )),
           );
           if (turns.length < before) {
+            compacted = true;
+            ctx.reads?.clear();
             this.bus.publish({ agentId: id, type: "warning", payload: `context compacted automatically (${before} → ${turns.length} turns)`, time: Date.now() });
           }
         }
@@ -495,6 +506,7 @@ export class Agent {
           this.bus.publish({ agentId: id, type: "done", payload: "", time: Date.now() });
           return { outcome: "done", text: finalText, error: "" };
         }
+        ctx.resultBudget = this.resultBudgetFor(reply, context, compacted);
         const results = await this.execCalls(reply.toolCalls, allowed, ctx);
         // Pushed after execution (not before): execTool can mutate a call's input in place (e.g.
         // attaching the approval-time diff) — persisting first would silently drop that from history.
@@ -582,6 +594,7 @@ export class Agent {
         // run() warns at 85% and compacts at 95%; this loop had neither, so a fork doing real work
         // (a 12-turn loop with full file contents in its tool results) hit a hard provider error on
         // overflow instead of shrinking — and the parent only saw "fork failed".
+        let compacted = false;
         if (reply.toolCalls.length > 0 && reply.usage && overContextThreshold(reply.usage.inputTokens, context, COMPACT_RATIO)) {
           const before = turns.length;
           turns.splice(
@@ -592,6 +605,8 @@ export class Agent {
             )),
           );
           if (turns.length < before) {
+            compacted = true;
+            ctx.reads?.clear();
             this.bus.publish({ agentId: id, type: "warning", payload: `${o.kind} context compacted (${before} → ${turns.length} turns)`, time: Date.now() });
           }
         }
@@ -602,6 +617,7 @@ export class Agent {
           if (i < o.maxTurns - 1 && this.pendingInbox() > 0) continue;
           break;
         }
+        ctx.resultBudget = this.resultBudgetFor(reply, context, compacted);
         const results = await this.execCalls(reply.toolCalls, allowed, ctx);
         // See run(): pushed after execution so any input mutation from execTool (e.g. the diff) persists.
         this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
@@ -842,6 +858,33 @@ export class Agent {
     return specs;
   }
 
+  // Room for this turn's tool results, from the request that just returned. After a compaction the
+  // usage figure describes a history that no longer exists, so only the fixed ceiling applies.
+  private resultBudgetFor(reply: { usage?: Usage; toolCalls: ToolCall[] }, context: number, compacted: boolean): number | undefined {
+    if (compacted || !reply.usage) return undefined;
+    return resultBudgetChars(promptTokens(this.config.provider, reply.usage) + reply.usage.outputTokens, context, COMPACT_RATIO, reply.toolCalls.length);
+  }
+
+  // Bound one tool result before it enters the history (where it is re-sent on every later turn),
+  // and answer a repeat of an unchanged read_file with a pointer to the copy already there.
+  private admit(call: ToolCall, output: string, ctx: LoopCtx): string {
+    const limit = Math.min(ctx.resultBudget ?? MAX_RESULT_CHARS, MAX_RESULT_CHARS);
+    let key: string | undefined;
+    let hash: string | undefined;
+    if (call.name === "read_file" && !output.startsWith("error:") && output.length >= 800) {
+      key = `${safePath(this.root, String(call.input.path ?? ""))}|${call.input.offset ?? ""}|${call.input.limit ?? ""}`;
+      hash = createHash("sha256").update(output).digest("hex");
+      if (ctx.reads?.get(key) === hash) {
+        return `[unchanged: ${call.input.path} is identical to your earlier read of it (same range), which is still in this conversation above. Not repeated — use that copy.]`;
+      }
+    }
+    const capped = truncateMiddle(output, limit);
+    // Only a read that went into the history in full can be pointed back to.
+    if (key && hash && capped === output) (ctx.reads ??= new Map()).set(key, hash);
+    else if (key) ctx.reads?.delete(key);
+    return capped;
+  }
+
   // One turn's tool calls, executed as the model actually meant them. A run of read-only calls is
   // independent by construction — no grep can change what a sibling read sees — so the run goes out
   // together instead of costing one round-trip each; five reads used to be five sequential waits on
@@ -963,6 +1006,11 @@ export class Agent {
   private async execTool(call: ToolCall, allowed: string[], ctx: LoopCtx): Promise<string> {
     const id = this.config.id;
     const sessionId = ctx.sessionId;
+    try {
+      canonicalizeShellCall(call);
+    } catch (err) {
+      return `error: ${err instanceof Error ? err.message : err}`;
+    }
     this.bus.publish({ agentId: id, type: "tool_call", payload: `${call.name} ${JSON.stringify(call.input)}`.slice(0, 180), time: Date.now() });
 
     // Internal coordination tools: not sandboxed (whatever the fork or the peer then does goes
@@ -1120,7 +1168,7 @@ export class Agent {
         time: Date.now(),
         path: writeRel,
       });
-      return output;
+      return this.admit(call, output, ctx);
     } catch (err) {
       const output = `error: ${err}`;
       this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: ${output}`, time: Date.now() });

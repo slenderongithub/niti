@@ -1,4 +1,5 @@
 import type { Provider, Turn, Usage } from "../providers/provider.ts";
+import { inputIncludesCache } from "../providers/pricing.ts";
 
 // A task's turn array grows with every tool round-trip; past a point the model starts ignoring
 // earlier instructions. compactTurns replaces everything but the most recent turns with one
@@ -79,4 +80,52 @@ function factsFrom(turns: Turn[]): string {
   if (files.size > 0) parts.push(`Files changed so far: ${[...files].join(", ")}`);
   if (errors.length > 0) parts.push(`Recent tool errors:\n${errors.slice(-3).map((e) => `- ${e}`).join("\n")}`);
   return parts.join("\n");
+}
+
+// --- Ingestion-time capping -------------------------------------------------------------------
+//
+// Compaction runs after a reply, on that reply's usage, and BEFORE the tools it asked for have
+// executed. So a turn that starts at 94% and reads a large file lands past 100% with no chance to
+// compact first: the provider answers 400 "context length exceeded" and the run dies. The fix is
+// to size each tool result to the room actually left, at the moment it enters the history.
+
+// Deliberately pessimistic. Prose averages ~4 characters a token; code, JSON and minified text are
+// nearer 3, and an underestimate here is the failure this exists to prevent.
+const CHARS_PER_TOKEN = 3;
+// However full the window is, every result keeps this much, so a nearly-full context degrades to
+// short excerpts instead of blinding the model. Compaction is what makes real room, not this.
+const MIN_RESULT_TOKENS = 1_000;
+// A single result is never worth more than this to the model, full window or not — roughly 15–20k
+// tokens. Applies to ordinary turns too, so one `find` or a dense file cannot dominate the history.
+export const MAX_RESULT_CHARS = 60_000;
+
+// The whole prompt of the request that produced `u`, cached part included. Anthropic reports
+// input_tokens as only the uncached tail, so reading it alone under-counts a warm conversation by
+// nearly all of it.
+export function promptTokens(provider: string, u: Usage): number {
+  const cached = u.cacheReadTokens ?? 0;
+  return inputIncludesCache(provider) ? u.inputTokens : u.inputTokens + cached + (u.cacheWriteTokens ?? 0);
+}
+
+// Characters each of this turn's `calls` tool results may occupy: what is left below `ratio` of the
+// window after the request that just returned and the reply it produced, shared between the calls.
+export function resultBudgetChars(usedTokens: number, context: number, ratio: number, calls: number): number {
+  if (context <= 0) return MAX_RESULT_CHARS;
+  const room = context * ratio - usedTokens;
+  const share = Math.max(MIN_RESULT_TOKENS, room / Math.max(1, calls));
+  return Math.min(MAX_RESULT_CHARS, Math.floor(share * CHARS_PER_TOKEN));
+}
+
+// Keep the start and the end, drop the middle, and say so. The end is kept because it is where a
+// failure summary or a file's final lines live; the note says how to ask for the part that was cut.
+export function truncateMiddle(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const keep = Math.max(0, maxChars);
+  const head = Math.ceil(keep * 0.6);
+  const tail = keep - head;
+  const omitted = text.length - keep;
+  return (
+    `${text.slice(0, head)}\n[… ${omitted} characters omitted from the middle to keep this result inside the context window. ` +
+    `Ask for a narrower slice — read_file offset/limit, grep, or a more specific command — to see them.]\n${tail > 0 ? text.slice(-tail) : ""}`
+  );
 }

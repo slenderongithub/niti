@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { compactTurns } from "./context.ts";
+import { compactTurns, truncateMiddle, resultBudgetChars, promptTokens, MAX_RESULT_CHARS } from "./context.ts";
 import type { Provider, Turn } from "../providers/provider.ts";
 
 test("leaves the array untouched when it's already at or under keepRecent", async () => {
@@ -109,4 +109,32 @@ test("the summarizer is asked for decisions and open work, not a length", async 
   await compactTurns(turns, provider, 2);
   expect(prompt).toContain("Decisions:");
   expect(prompt).toContain("Open:");
+});
+
+test("truncateMiddle keeps both ends, says what was dropped, and leaves short text alone", () => {
+  expect(truncateMiddle("short", 100)).toBe("short");
+  const out = truncateMiddle("A".repeat(500) + "B".repeat(500), 100);
+  expect(out.startsWith("AAAA")).toBe(true);
+  expect(out.endsWith("BBBB")).toBe(true);
+  expect(out).toContain("900 characters omitted");
+  expect(out.length).toBeLessThan(400);
+});
+
+test("a result's budget shrinks with the room left below the compaction line", () => {
+  // Plenty of room: the fixed ceiling applies.
+  expect(resultBudgetChars(10_000, 1_000_000, 0.95, 1)).toBe(MAX_RESULT_CHARS);
+  // 94% full of 1M: 10k tokens left, shared by two calls → 5k tokens each at 3 chars a token.
+  expect(resultBudgetChars(940_000, 1_000_000, 0.95, 2)).toBe(15_000);
+  // Already past the line: a floor, so the model still gets an excerpt rather than nothing.
+  expect(resultBudgetChars(990_000, 1_000_000, 0.95, 1)).toBe(3_000);
+  // Unknown window: no dynamic sizing, only the ceiling.
+  expect(resultBudgetChars(500_000, 0, 0.95, 1)).toBe(MAX_RESULT_CHARS);
+});
+
+test("promptTokens counts the cached part for Anthropic, whose input_tokens excludes it", () => {
+  const u = { inputTokens: 500, outputTokens: 10, cacheReadTokens: 90_000, cacheWriteTokens: 2_000 };
+  expect(promptTokens("anthropic", u)).toBe(92_500);
+  // OpenAI and Gemini already include the cached part in their input count.
+  expect(promptTokens("openai", u)).toBe(500);
+  expect(promptTokens("google", u)).toBe(500);
 });

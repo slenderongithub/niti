@@ -53,6 +53,36 @@ export function childEnv(): Record<string, string> {
   return env;
 }
 
+// Bounded capture that keeps both ends. Keeping only the first N characters (as this used to)
+// drops exactly the part of a build or test log the model needs — the failure summary is at the
+// bottom — while spending the whole budget on the banner and the first passing tests.
+class HeadTail {
+  private head = "";
+  private tail = "";
+  private omitted = 0;
+  private half: number;
+  constructor(max: number) {
+    this.half = Math.floor(max / 2);
+  }
+  add(chunk: string): void {
+    let rest = chunk;
+    if (this.head.length < this.half) {
+      const take = this.half - this.head.length;
+      this.head += rest.slice(0, take);
+      rest = rest.slice(take);
+    }
+    if (!rest) return;
+    this.tail += rest;
+    if (this.tail.length > this.half) {
+      this.omitted += this.tail.length - this.half;
+      this.tail = this.tail.slice(-this.half);
+    }
+  }
+  text(): string {
+    return this.omitted > 0 ? `${this.head}\n[output truncated]\n[${this.omitted} characters omitted from the middle]\n${this.tail}` : this.head + this.tail;
+  }
+}
+
 export function shell(
   root: string,
   command: string,
@@ -82,22 +112,20 @@ export function shell(
       stdio: ["ignore", "pipe", "pipe"],
       env: childEnv(),
     });
-    let stdout = "";
-    let stderr = "";
-    const cap = (buf: string, d: unknown) => (buf.length >= maxOutput ? buf : (buf + d).slice(0, maxOutput));
-    const mark = (buf: string) => (buf.length >= maxOutput ? `${buf}\n[output truncated]` : buf);
-    child.stdout.on("data", (d) => (stdout = cap(stdout, d)));
-    child.stderr.on("data", (d) => (stderr = cap(stderr, d)));
+    const stdout = new HeadTail(maxOutput);
+    const stderr = new HeadTail(maxOutput);
+    child.stdout.on("data", (d) => stdout.add(String(d)));
+    child.stderr.on("data", (d) => stderr.add(String(d)));
     child.on("close", (code, signal) => {
       // node kills a timed-out child with killSignal; nothing else in this process sends SIGKILL.
       const timedOut = signal === "SIGKILL";
       res({
-        stdout: mark(stdout),
-        stderr: mark(stderr) + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : ""),
+        stdout: stdout.text(),
+        stderr: stderr.text() + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : ""),
         code: code ?? -1,
       });
     });
-    child.on("error", (err) => res({ stdout: mark(stdout), stderr: String(err), code: -1 }));
+    child.on("error", (err) => res({ stdout: stdout.text(), stderr: String(err), code: -1 }));
   });
 }
 
@@ -610,6 +638,71 @@ export function toolSpecs(allowed: string[]): ToolSpec[] {
 }
 
 // Provider tool-call → sandbox ToolCall. Throws on unknown tool (caught by the agent loop).
+// POSIX-style word splitting and nothing more: quotes group, backslashes escape, whitespace
+// separates. There is no expansion, globbing, pipe or redirect — the result goes to spawn verbatim,
+// exactly like args[] would. Splitting on bare whitespace turned `git commit -m "fix bug"` into
+// ["git","commit","-m",'"fix','bug"'], a guaranteed failure the model then spent turns diagnosing.
+// On Windows a backslash is a path separator, so it only escapes inside nothing at all.
+export function splitCommand(line: string): string[] {
+  const posix = process.platform !== "win32";
+  const out: string[] = [];
+  let cur = "";
+  let inWord = false;
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      else cur += c;
+    } else if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (posix && c === "\\" && i + 1 < line.length && '"\\$`'.includes(line[i + 1]!)) cur += line[++i]!;
+      else cur += c;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      inWord = true;
+    } else if (posix && c === "\\" && i + 1 < line.length) {
+      cur += line[++i]!;
+      inWord = true;
+    } else if (/\s/.test(c)) {
+      if (inWord) out.push(cur);
+      cur = "";
+      inWord = false;
+    } else {
+      cur += c;
+      inWord = true;
+    }
+  }
+  if (quote) throw new Error(`unterminated ${quote} quote in shell command — put the arguments in args[] instead`);
+  if (inWord) out.push(cur);
+  return out;
+}
+
+// Models routinely encode a whole command line as `{"command":"git status"}`. The args[] array is
+// the documented shape and always wins; tokenizing only fills in when it is absent.
+export function normalizeShellInput(input: Record<string, unknown>): { command: string; args: string[] } {
+  const line = String(input.command ?? "").trim();
+  if (Array.isArray(input.args) && input.args.length) return { command: line.split(/\s+/)[0] ?? "", args: input.args.map(String) };
+  const [command = "", ...args] = splitCommand(line);
+  return { command, args };
+}
+
+// Inputs already rewritten to {command, args}. A command that legitimately contains a space (a path
+// like "/Applications/My App/tool" with no args) would be split a second time otherwise.
+const NORMALIZED = new WeakSet<object>();
+
+// Rewrite a shell call's input to its canonical {command, args} shape, once, before anything
+// looks at it. The permission and danger checks (isDangerousShellCall, leavesProjectRoot,
+// isEgressShellCall) read the raw input, and they judged `{"command":"git push --force"}` by the
+// whole string as a command name — so `base === "git"` never matched, while execution went on to
+// split it and run git anyway. Checks and execution must see the same call.
+export function canonicalizeShellCall(call: { name: string; input: Record<string, unknown> }): void {
+  if (call.name !== "shell" || NORMALIZED.has(call.input)) return;
+  const n = normalizeShellInput(call.input);
+  call.input = { ...call.input, command: n.command, args: n.args };
+  NORMALIZED.add(call.input);
+}
+
 export function toSandboxCall(c: ProviderCall): ToolCall {
   const i = c.input ?? {};
   // Models hand back "12" as often as 12 for a numeric field, and a NaN offset silently became
@@ -645,19 +738,8 @@ export function toSandboxCall(c: ProviderCall): ToolCall {
         replaceAll: i.replaceAll === true,
       };
     case "shell": {
-      // Models routinely encode a whole command line as `{"command":"git status"}`, which spawned
-      // a binary literally named "git status" and failed with a PATH error blaming the user. The
-      // args[] array is the documented shape and always wins; splitting only fills in for the
-      // other guess.
-      // ponytail: whitespace split, no quote handling — `{"command":"echo 'a b'"}` still splits
-      // naively. Anything needing quoting has args[] available and gets it right.
-      const parts = String(i.command ?? "").trim().split(/\s+/);
-      const given = Array.isArray(i.args) && i.args.length ? i.args.map(String) : undefined;
-      return {
-        tool: "shell",
-        command: parts[0] ?? "",
-        args: given ?? parts.slice(1),
-      };
+      const n = NORMALIZED.has(c.input) ? { command: String(i.command ?? ""), args: (i.args as unknown[]).map(String) } : normalizeShellInput(i);
+      return { tool: "shell", command: n.command, args: n.args };
     }
     default:
       throw new Error(`unknown tool: ${c.name}`);

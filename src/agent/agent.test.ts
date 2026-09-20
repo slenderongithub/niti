@@ -14,6 +14,7 @@ import {
   type AgentConfig,
 } from "./agent.ts";
 import { Bus } from "../events/bus.ts";
+import { canonicalizeShellCall } from "../tools/tools.ts";
 import { ApprovalQueue } from "../approval.ts";
 import { LockRegistry } from "../orchestrator/locks.ts";
 import { openDb } from "../store/db.ts";
@@ -1408,4 +1409,111 @@ test("the guard still catches a model that ran the checks itself and gamed them 
   expect(r.error).toContain("check.js");
   // And the checker is left intact rather than in its neutered state.
   expect(readFileSync(join(root, "check.js"), "utf8")).toContain("TODO_BROKEN");
+});
+
+// The tool result the model is shown for call `callId`, from the turns a scripted provider received.
+function resultFor(turns: Turn[], callId: string): string {
+  for (const t of turns) if (t.role === "tool") for (const r of t.results) if (r.id === callId) return r.output;
+  throw new Error(`no result for ${callId}`);
+}
+
+test("a read that would push the window past the compaction line is cut to the room left", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  writeFileSync(join(root, "big.txt"), Array.from({ length: 1400 }, (_, i) => `line ${i} ${"x".repeat(180)}`).join("\n"));
+  let seen: Turn[] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(_sys, turns) {
+      n++;
+      seen = turns;
+      // 94% of anthropic's 1M window: compaction (95%) does not fire, but a whole file would overflow.
+      if (n === 1) return { text: "", toolCalls: [{ id: "r", name: "read_file", input: { path: "big.txt" } }], usage: { inputTokens: 940_000, outputTokens: 10 } };
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, new Bus(), { root });
+  await agent.run("read it");
+  const out = resultFor(seen, "r");
+  expect(out).toContain("characters omitted from the middle");
+  expect(out.length).toBeLessThan(31_000); // ~10k tokens of room × 3 chars, plus the note
+  expect(out.length).toBeGreaterThan(20_000); // …but not needlessly small
+});
+
+test("an ordinary turn still caps one enormous result at the fixed ceiling", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  writeFileSync(join(root, "big.txt"), Array.from({ length: 1400 }, (_, i) => `line ${i} ${"x".repeat(180)}`).join("\n"));
+  let seen: Turn[] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(_sys, turns) {
+      n++;
+      seen = turns;
+      if (n === 1) return { text: "", toolCalls: [{ id: "r", name: "read_file", input: { path: "big.txt" } }], usage: { inputTokens: 5_000, outputTokens: 10 } };
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, new Bus(), { root }).run("read it");
+  expect(resultFor(seen, "r").length).toBeLessThan(61_000);
+});
+
+test("re-reading an unchanged file is answered with a pointer; a changed file is read in full", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const body = Array.from({ length: 60 }, (_, i) => `const v${i} = ${i}; // padding so this clears the dedup floor`).join("\n");
+  writeFileSync(join(root, "a.ts"), body);
+  let seen: Turn[] = [];
+  let n = 0;
+  const calls = [
+    { id: "r1", name: "read_file", input: { path: "a.ts" } },
+    { id: "r2", name: "read_file", input: { path: "a.ts" } },
+    { id: "w", name: "write_file", input: { path: "a.ts", content: body + "\nconst extra = 1;\n" } },
+    { id: "r3", name: "read_file", input: { path: "a.ts" } },
+  ];
+  const stub: Provider = {
+    async send(_sys, turns) {
+      seen = turns;
+      const c = calls[n++];
+      return c ? { text: "", toolCalls: [c] } : { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["read_file", "write_file"], autoApprove: ["write_file"] }, stub, new Bus(), { root }).run("go");
+  expect(resultFor(seen, "r1")).toContain("const v0 = 0");
+  expect(resultFor(seen, "r2")).toStartWith("[unchanged:");
+  expect(resultFor(seen, "r2").length).toBeLessThan(300);
+  expect(resultFor(seen, "r3")).toContain("const extra = 1"); // the file changed, so the pointer would have lied
+});
+
+test("after compaction a repeat read is given in full, because the earlier copy is gone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const body = Array.from({ length: 60 }, (_, i) => `const v${i} = ${i}; // padding so this clears the dedup floor`).join("\n");
+  writeFileSync(join(root, "a.ts"), body);
+  let seen: Turn[] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(sys, turns) {
+      if (sys !== "s") return { text: "summary of the work so far", toolCalls: [] }; // compactTurns' own call
+      seen = turns;
+      n++;
+      if (n === 1) return { text: "", toolCalls: [{ id: "r1", name: "read_file", input: { path: "a.ts" } }] };
+      // Enough rounds that there is something to compact (more than KEEP_RECENT turns).
+      if (n <= 4) return { text: "", toolCalls: [{ id: `w${n}`, name: "write_file", input: { path: `f${n}.txt`, content: "x" } }] };
+      // 96% of the window: this reply triggers compaction before its own tool runs.
+      if (n === 5) return { text: "", toolCalls: [{ id: "r2", name: "read_file", input: { path: "a.ts" } }], usage: { inputTokens: 960_000, outputTokens: 10 } };
+      if (n === 6) return { text: "", toolCalls: [{ id: "r3", name: "read_file", input: { path: "a.ts" } }] };
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["read_file", "write_file"], autoApprove: ["write_file"] }, stub, new Bus(), { root }).run("go");
+  expect(resultFor(seen, "r2")).toContain("const v0 = 0"); // r1 was compacted away, so this is not a pointer to it
+  expect(resultFor(seen, "r3")).toStartWith("[unchanged:"); // …but r2 is now the copy in context
+});
+
+test("a shell command given as one string is judged, and run, as the same call", () => {
+  for (const command of ["git push --force origin main", "rm -rf build", "git reset --hard"]) {
+    const call = { name: "shell", input: { command } as Record<string, unknown> };
+    canonicalizeShellCall(call);
+    expect(isDangerousShellCall("shell", call.input)).toBe(true);
+  }
+  const safe = { name: "shell", input: { command: 'git commit -m "rm -rf is just words"' } as Record<string, unknown> };
+  canonicalizeShellCall(safe);
+  expect(safe.input.args).toEqual(["commit", "-m", "rm -rf is just words"]);
 });
