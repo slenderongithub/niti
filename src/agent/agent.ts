@@ -17,7 +17,7 @@ import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
-import { compactTurns, promptTokens, resultBudgetChars, truncateMiddle, MAX_RESULT_CHARS } from "./context.ts";
+import { compactTurns, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
 import { createHash } from "node:crypto";
 import { runChecks, checkSurface, taskEditsCheckFile, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
@@ -395,6 +395,7 @@ export class Agent {
         this.injectInbox(turns, sessionId);
         this.injectNotes(turns, sessionId);
         this.restateTodos(turns, sessionId);
+        this.maskOldObservations(turns, ctx);
         const tools = this.buildTools(allowed, ctx);
         const reply = await this.provider.send(this.config.systemPrompt, turns, tools, onDelta);
         if (reply.text) {
@@ -591,6 +592,7 @@ export class Agent {
         if (i > 0 && this.shouldStop?.()) break; // same contract as run(): stop between turns
         this.injectInbox(turns, sessionId);
         this.injectNotes(turns, sessionId);
+        this.maskOldObservations(turns, ctx);
         const reply = await this.provider.send(this.config.systemPrompt, turns, this.buildTools(allowed, ctx), onDelta);
         if (reply.text) text = reply.text;
         if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
@@ -868,6 +870,17 @@ export class Agent {
   // working it stayed near zero and neither the 85% warning nor the 95% compaction ever fired.
   private contextFill(u: Usage): number {
     return promptTokens(this.config.provider, u);
+  }
+
+  // Replace stale and old tool output with stubs, in one batch once enough has piled up (see
+  // maskObservations for why not sooner). Only `turns` — what is sent — changes; the session store
+  // keeps the full log of what happened. A masked read can no longer be pointed back to, so the
+  // repeat-read record is dropped with it: the next read of that file comes back in full.
+  private maskOldObservations(turns: Turn[], ctx: LoopCtx): void {
+    const { masked, savedChars } = maskObservations(turns);
+    if (masked === 0) return;
+    ctx.reads?.clear();
+    this.bus.publish({ agentId: this.config.id, type: "thought", payload: `masked ${masked} old tool output(s), ~${Math.round(savedChars / 3)} tokens off every later turn`, time: Date.now() });
   }
 
   // Room for this turn's tool results, from the request that just returned. After a compaction the

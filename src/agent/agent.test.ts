@@ -1643,3 +1643,66 @@ test("a task that forbids touching the config keeps the guard on for it", async 
   const r = await new Agent({ ...cfg, allowedTools: ["write_file"] }, editTsconfig(), new Bus(), { root, verify: [check] }).runDetailed("Fix the failing check. Do not change tsconfig.json.");
   expect(r.text).toBe("told off");
 });
+
+// ── Observation masking, through the loop ────────────────────────────────────────────────────
+
+// 150 numbered lines: about 12k characters as read_file returns them.
+const bigFile = (tag: string) => Array.from({ length: 150 }, (_, i) => `${tag} line ${i} ${"y".repeat(70)}`).join("\n");
+
+function readEachFile(files: string[], root: string): { stub: Provider; snapshots: Turn[][] } {
+  for (const f of files) writeFileSync(join(root, f), bigFile(f));
+  const snapshots: Turn[][] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(_sys, turns) {
+      snapshots.push(turns.map((t) => ({ ...t })) as Turn[]); // the turns as this call sees them
+      const f = files[n];
+      return f ? { text: "", toolCalls: [{ id: `r${n++}`, name: "read_file", input: { path: f } }] } : { text: "done", toolCalls: [] };
+    },
+  };
+  return { stub, snapshots };
+}
+const seenOutput = (turns: Turn[], id: string): string | undefined => {
+  for (const t of turns) if (t.role === "tool") for (const r of t.results) if (r.id === id) return r.output;
+  return undefined;
+};
+
+test("old tool output is masked to save tokens while the recent turns stay fully intact", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const files = Array.from({ length: 13 }, (_, i) => `f${i}.txt`);
+  const { stub, snapshots } = readEachFile(files, root);
+  await new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, new Bus(), { root }).run("read everything");
+
+  // Call 13 (12 tool turns so far): two results are past the recent window, ~25k characters — under
+  // the mark, so nothing is touched. Masking waits until a pass is worth the cache miss it causes.
+  expect(seenOutput(snapshots[12]!, "r0")).toContain("f0.txt line 0");
+  // Call 14 (13 tool turns): three results are past the window, ~38k characters — the pass runs.
+  const last = snapshots[13]!;
+  for (const id of ["r0", "r1", "r2"]) expect(seenOutput(last, id)).toStartWith("[Previous output masked for brevity");
+  expect(seenOutput(last, "r0")).toContain("read_file f0.txt");
+  // The ten most recent tool turns are exactly what the model saw when they happened.
+  for (let i = 3; i < 13; i++) expect(seenOutput(last, `r${i}`)).toContain(`f${i}.txt line 0`);
+  // And it is a real saving: the call added one ~12k result, yet the request got ~17k smaller.
+  const size = (turns: Turn[]) => JSON.stringify(turns).length;
+  expect(size(snapshots[12]!) - size(last)).toBeGreaterThan(17_000);
+});
+
+test("a file whose earlier read was masked comes back in full when it is read again, not as a pointer to nothing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const others = Array.from({ length: 12 }, (_, i) => `g${i}.txt`);
+  for (const f of ["a.txt", ...others]) writeFileSync(join(root, f), bigFile(f));
+  const script = ["a.txt", ...others, "a.txt"]; // read a.txt, then twelve others, then a.txt again
+  const seen: Turn[][] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(_sys, turns) {
+      seen.push(turns.map((t) => ({ ...t })) as Turn[]);
+      const f = script[n];
+      return f ? { text: "", toolCalls: [{ id: `r${n++}`, name: "read_file", input: { path: f } }] } : { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, new Bus(), { root }).run("read, then read the first again");
+  const finalTurns = seen[seen.length - 1]!;
+  expect(seenOutput(finalTurns, "r0")).toStartWith("[Previous output masked"); // a.txt's first read was masked…
+  expect(seenOutput(finalTurns, "r13")).toContain("a.txt line 0"); // …so the re-read is the whole file, not "[unchanged: …]"
+});

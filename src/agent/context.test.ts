@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { compactTurns, truncateMiddle, resultBudgetChars, promptTokens, MAX_RESULT_CHARS } from "./context.ts";
+import { compactTurns, truncateMiddle, resultBudgetChars, promptTokens, maskObservations, MASKED_PREFIX, MAX_RESULT_CHARS } from "./context.ts";
 import type { Provider, Turn } from "../providers/provider.ts";
 
 test("leaves the array untouched when it's already at or under keepRecent", async () => {
@@ -137,4 +137,114 @@ test("promptTokens counts the cached part for Anthropic, whose input_tokens excl
   // OpenAI and Gemini already include the cached part in their input count.
   expect(promptTokens("openai", u)).toBe(500);
   expect(promptTokens("google", u)).toBe(500);
+});
+
+// ── Observation masking ──────────────────────────────────────────────────────────────────────
+
+const big = (tag: string, n = 2_000) => `${tag}:` + "x".repeat(n);
+// One model step: an assistant turn calling a tool, then the tool's result.
+function step(id: string, name: string, input: Record<string, unknown>, output: string): Turn[] {
+  return [
+    { role: "assistant", text: `thinking about ${id}`, toolCalls: [{ id, name, input }] },
+    { role: "tool", results: [{ id, name, output }] },
+  ];
+}
+const outputOf = (turns: Turn[], id: string): string => {
+  for (const t of turns) if (t.role === "tool") for (const r of t.results) if (r.id === id) return r.output;
+  throw new Error(id);
+};
+const OPTS = { keepRecent: 3, highWater: 1_000 };
+
+test("masking leaves a short task completely alone", () => {
+  const turns: Turn[] = [{ role: "user", text: "go" }, ...step("a", "read_file", { path: "a.ts" }, big("a")), ...step("b", "shell", { command: "ls" }, big("b"))];
+  const before = JSON.stringify(turns);
+  expect(maskObservations(turns)).toEqual({ masked: 0, savedChars: 0 }); // default thresholds: nothing near them
+  expect(JSON.stringify(turns)).toBe(before);
+});
+
+test("old observations are masked with a stub that says how to get them back; recent ones and every call stay whole", () => {
+  const turns: Turn[] = [{ role: "user", text: "go" }];
+  for (const [i, path] of ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"].entries()) turns.push(...step(`r${i}`, "read_file", { path }, big(path)));
+  const calls = JSON.stringify(turns.filter((t) => t.role === "assistant"));
+
+  const { masked, savedChars } = maskObservations(turns, OPTS);
+
+  expect(masked).toBe(2); // r0 and r1: everything but the last 3 tool turns
+  expect(outputOf(turns, "r0")).toStartWith(MASKED_PREFIX);
+  expect(outputOf(turns, "r0")).toContain("read_file a.ts");
+  expect(outputOf(turns, "r0")).toContain("2005 characters"); // what it was, so the model can weigh re-reading
+  expect(outputOf(turns, "r2")).toStartWith("c.ts:");
+  expect(outputOf(turns, "r3")).toStartWith("d.ts:");
+  expect(outputOf(turns, "r4")).toStartWith("e.ts:");
+  expect(JSON.stringify(turns.filter((t) => t.role === "assistant"))).toBe(calls); // the model's own words and calls, untouched
+  expect(savedChars).toBeGreaterThan(3_500);
+  // A second pass has nothing left to do.
+  expect(maskObservations(turns, OPTS).masked).toBe(0);
+});
+
+test("masking waits for enough to be worth the cache miss it causes", () => {
+  const turns: Turn[] = [{ role: "user", text: "go" }];
+  for (let i = 0; i < 5; i++) turns.push(...step(`r${i}`, "read_file", { path: `f${i}.ts` }, big(`f${i}`, 600)));
+  // Two eligible results of ~600 chars: 1.2k, under a 5k mark → no pass at all.
+  expect(maskObservations(turns, { keepRecent: 3, highWater: 5_000 }).masked).toBe(0);
+});
+
+test("a superseded checklist is masked whatever its age; the latest one never is", () => {
+  const turns: Turn[] = [
+    { role: "user", text: "go" },
+    ...step("t1", "todo", { items: ["a"] }, big("[ ] a")),
+    ...step("t2", "todo", { items: ["a"] }, big("[x] a")),
+    ...step("r", "shell", { command: "ls" }, big("ls")),
+  ];
+  maskObservations(turns, { keepRecent: 10, highWater: 1 });
+  expect(outputOf(turns, "t1")).toStartWith(MASKED_PREFIX);
+  expect(outputOf(turns, "t2")).toStartWith("[x] a"); // the current state
+  expect(outputOf(turns, "r")).toStartWith("ls"); // recent, not superseded
+});
+
+test("a read is masked once a newer read of it, or a write to it, has replaced it", () => {
+  const turns: Turn[] = [
+    { role: "user", text: "go" },
+    ...step("read1", "read_file", { path: "a.ts" }, big("first look")),
+    ...step("read2", "read_file", { path: "a.ts" }, big("second look")), // same window, newer
+    ...step("read3", "read_file", { path: "b.ts" }, big("b before edit")),
+    ...step("edit", "edit", { path: "b.ts" }, "edited b.ts"),
+    ...step("read4", "read_file", { path: "c.ts" }, big("untouched")),
+  ];
+  maskObservations(turns, { keepRecent: 10, highWater: 1 });
+  expect(outputOf(turns, "read1")).toStartWith(MASKED_PREFIX);
+  expect(outputOf(turns, "read2")).toStartWith("second look");
+  expect(outputOf(turns, "read3")).toStartWith(MASKED_PREFIX); // b.ts changed since: this is stale text
+  expect(outputOf(turns, "read4")).toStartWith("untouched");
+});
+
+test("an 'unchanged' pointer does not count as replacing the read it points to", () => {
+  const turns: Turn[] = [
+    { role: "user", text: "go" },
+    ...step("full", "read_file", { path: "a.ts" }, big("the content")),
+    ...step("again", "read_file", { path: "a.ts" }, "[unchanged: a.ts is identical to your earlier read of it (same range), which is still in this conversation above.]"),
+  ];
+  maskObservations(turns, { keepRecent: 10, highWater: 1 });
+  expect(outputOf(turns, "full")).toStartWith("the content"); // the pointer's target must stay readable
+});
+
+test("only bulk observation tools are masked: forks, messages, edits and small results are left alone", () => {
+  const turns: Turn[] = [
+    { role: "user", text: "go" },
+    ...step("fork", "spawn_fork", { goal: "look" }, big("the fork's findings")),
+    ...step("mcp", "some_mcp_tool", {}, big("mcp result")),
+    ...step("w", "write_file", { path: "x.ts" }, "wrote 3 bytes"),
+    ...step("tiny", "shell", { command: "true" }, "ok"),
+    ...step("last", "shell", { command: "ls" }, big("recent")),
+  ];
+  expect(maskObservations(turns, { keepRecent: 1, highWater: 1 }).masked).toBe(0);
+});
+
+test("masking builds new turns rather than editing the ones the store and provider already hold", () => {
+  const turns: Turn[] = [{ role: "user", text: "go" }];
+  for (let i = 0; i < 4; i++) turns.push(...step(`r${i}`, "shell", { command: "ls" }, big(`o${i}`)));
+  const original = turns[2]!; // r0's tool turn
+  maskObservations(turns, OPTS);
+  expect(turns[2]).not.toBe(original);
+  expect((original as { results: { output: string }[] }).results[0]!.output).toStartWith("o0"); // the old object is intact
 });

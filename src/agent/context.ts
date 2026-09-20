@@ -1,4 +1,4 @@
-import type { Provider, Turn, Usage } from "../providers/provider.ts";
+import type { Provider, ToolCall, Turn, Usage } from "../providers/provider.ts";
 import { inputIncludesCache } from "../providers/pricing.ts";
 
 // A task's turn array grows with every tool round-trip; past a point the model starts ignoring
@@ -128,4 +128,131 @@ export function truncateMiddle(text: string, maxChars: number): string {
     `${text.slice(0, head)}\n[… ${omitted} characters omitted from the middle to keep this result inside the context window. ` +
     `Ask for a narrower slice — read_file offset/limit, grep, or a more specific command — to see them.]\n${tail > 0 ? text.slice(-tail) : ""}`
   );
+}
+
+// --- Observation masking ----------------------------------------------------------------------
+//
+// A tool result is sent again on every later turn, so a 12k-character file read at turn 3 is paid
+// for on each of the next 27. The model needs the outcome of an old observation far less than the
+// action it took and what it concluded: masking old outputs to a one-line stub, keeping every tool
+// call and every word the model wrote, matched LLM summarisation on solve rate at about half the
+// cost in the published SWE-agent comparison (Lindenbauer et al., "The Complexity Trap", 2025) —
+// and summarising costs an extra model call, where masking costs none.
+//
+// Two rules keep it from doing harm:
+//
+//  * It runs in one batch, and only once enough is eligible. Editing an old turn changes every byte
+//    after it, so each pass costs the provider's cached prefix from that point on. Masking a little
+//    every turn would pay that price every turn; masking a lot every so often pays it rarely. A
+//    short task never reaches the threshold and is never touched at all.
+//  * The last few tool turns are always left whole, because they are what the model is working from.
+//    Older results are masked by age; results that a newer one has replaced (a checklist, or a file
+//    read again or written since) are masked whatever their age — a stale copy is not just wasted
+//    tokens, it is text the model may edit against and get wrong.
+
+const KEEP_RECENT_TOOL_TURNS = 10;
+const MASK_HIGH_WATER_CHARS = 30_000; // ~10k tokens of eligible output before a pass is worth its cache miss
+const MASK_MIN_CHARS = 500; // a stub is ~150 chars; below this the saving is not worth the edit
+const OBSERVATION_TOOLS = new Set(["read_file", "shell", "grep", "glob", "list_dir"]);
+export const MASKED_PREFIX = "[Previous output masked for brevity";
+
+// What the model needs to re-issue the call if it turns out to matter.
+function describeCall(call: ToolCall | undefined, name: string): string {
+  const i = call?.input ?? {};
+  const clip = (v: unknown) => String(v ?? "").slice(0, 80);
+  switch (name) {
+    case "read_file":
+      return `read_file ${clip(i.path)}${i.offset || i.limit ? ` (offset ${i.offset ?? 1}, limit ${i.limit ?? "default"})` : ""}`;
+    case "shell":
+      return `shell ${clip([i.command, ...(Array.isArray(i.args) ? i.args : [])].join(" "))}`;
+    case "grep":
+      return `grep ${clip(i.pattern)}`;
+    case "glob":
+      return `glob ${clip(i.pattern)}`;
+    case "list_dir":
+      return `list_dir ${clip(i.path)}`;
+    case "todo":
+      return "an earlier version of your checklist, superseded by a later one";
+    default:
+      return name;
+  }
+}
+
+const norm = (p: unknown) => String(p ?? "").replace(/^\.\//, "");
+
+export function maskObservations(
+  turns: Turn[],
+  opts: { keepRecent?: number; highWater?: number; minChars?: number } = {},
+): { masked: number; savedChars: number } {
+  const keepRecent = opts.keepRecent ?? KEEP_RECENT_TOOL_TURNS;
+  const highWater = opts.highWater ?? MASK_HIGH_WATER_CHARS;
+  const minChars = opts.minChars ?? MASK_MIN_CHARS;
+
+  const calls = new Map<string, ToolCall>();
+  const toolTurns: number[] = [];
+  turns.forEach((t, i) => {
+    if (t.role === "assistant") for (const c of t.toolCalls) calls.set(c.id, c);
+    else if (t.role === "tool") toolTurns.push(i);
+  });
+  const protectedTurns = new Set(toolTurns.slice(-keepRecent));
+
+  // Forward pass: what has a later result replaced? Keyed "turn:index" of the replaced result.
+  const superseded = new Set<string>();
+  const ref = (i: number, k: number) => `${i}:${k}`;
+  const lastFullRead = new Map<string, string>(); // path|window → its latest full read
+  const readsOfPath = new Map<string, string[]>();
+  let lastTodo: string | undefined;
+  for (const i of toolTurns) {
+    const t = turns[i]!;
+    if (t.role !== "tool") continue;
+    t.results.forEach((r, k) => {
+      const call = calls.get(r.id);
+      const path = norm(call?.input.path);
+      if (r.name === "todo") {
+        if (lastTodo) superseded.add(lastTodo);
+        lastTodo = ref(i, k);
+      } else if (r.name === "read_file" && !r.output.startsWith("error:") && !r.output.startsWith("[unchanged:")) {
+        // A pointer ("[unchanged: …]") depends on the read it points to, so it replaces nothing.
+        const key = `${path}|${call?.input.offset ?? ""}|${call?.input.limit ?? ""}`;
+        const prev = lastFullRead.get(key);
+        if (prev) superseded.add(prev);
+        lastFullRead.set(key, ref(i, k));
+        readsOfPath.set(path, [...(readsOfPath.get(path) ?? []), ref(i, k)]);
+      } else if ((r.name === "write_file" || r.name === "edit") && !r.output.startsWith("error:")) {
+        // The file changed on disk after these reads, so they no longer describe it.
+        for (const stale of readsOfPath.get(path) ?? []) superseded.add(stale);
+        readsOfPath.delete(path);
+      }
+    });
+  }
+
+  type Target = { i: number; k: number; stub: string; size: number };
+  const targets: Target[] = [];
+  let eligible = 0;
+  for (const i of toolTurns) {
+    const t = turns[i]!;
+    if (t.role !== "tool") continue;
+    t.results.forEach((r, k) => {
+      if (r.output.length < minChars || r.output.startsWith(MASKED_PREFIX)) return;
+      const replaced = superseded.has(ref(i, k));
+      const old = !protectedTurns.has(i);
+      const masks = r.name === "todo" ? replaced : OBSERVATION_TOOLS.has(r.name) && (replaced || old);
+      if (!masks) return;
+      const stub = `${MASKED_PREFIX}: ${describeCall(calls.get(r.id), r.name)}, ${r.output.length} characters. Run it again if you need it.]`;
+      targets.push({ i, k, stub, size: r.output.length });
+      eligible += r.output.length;
+    });
+  }
+  if (eligible < highWater) return { masked: 0, savedChars: 0 };
+
+  let saved = 0;
+  for (const { i, k, stub, size } of targets) {
+    const t = turns[i];
+    if (t?.role !== "tool") continue;
+    // A new turn and result, not an edit in place: the object was handed to the session store and
+    // to the provider's own message cache, and neither should see it change underneath them.
+    turns[i] = { role: "tool", results: t.results.map((r, idx) => (idx === k ? { ...r, output: stub } : r)) };
+    saved += size - stub.length;
+  }
+  return { masked: targets.length, savedChars: saved };
 }
