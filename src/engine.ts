@@ -18,7 +18,7 @@ import { costOf } from "./providers/pricing.ts";
 import { watchProject, type ProjectWatcher } from "./watch.ts";
 import { TOOL_GUIDANCE } from "./tools/tools.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
-import { isGitRepo, createWorktree, diffStat, commitPending, mergeBack, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
+import { isGitRepo, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
 
 export interface EngineOptions {
   configs: AgentConfig[];
@@ -296,6 +296,15 @@ export class Engine {
     return { path: this.worktreeHandle.path, branch: this.worktreeHandle.branch, diffStat: await diffStat(this.worktreeHandle) };
   }
 
+  // GET /worktree/hunks?path=<file> — zero-context per-file diff for the IDE's per-hunk review.
+  // Computed on demand for one file at a time rather than folded into worktreeStatus (which the
+  // dashboard polls repeatedly): most polls don't need hunk-level detail, only opening a specific
+  // file's review does.
+  async worktreeFileHunks(path: string): Promise<string | undefined> {
+    if (!this.worktreeHandle) return undefined;
+    return diffPatchZeroContext(this.worktreeHandle, path);
+  }
+
   // POST /worktree/merge — explicit user action, never automatic. Cleans up the worktree only on a
   // successful merge; a conflict leaves it in place so the user can resolve it themselves (via the
   // branch directly) and retry.
@@ -316,6 +325,21 @@ export class Engine {
       ok: false,
       message: `${result.message}\n\nYour working tree was restored. Resolve it on branch ${this.worktreeHandle.branch}, or POST /worktree/discard to throw the run away.`,
     };
+  }
+
+  // POST /worktree/merge with a `files` list — bring in only those files, then throw away the
+  // worktree. A reviewer who has already picked which files they want has implicitly decided
+  // against the rest; leaving the worktree/branch around "in case" just accumulates abandoned
+  // branches (same reasoning as discardWorktree below).
+  async mergeWorktreeFiles(files: string[]): Promise<{ ok: boolean; message: string }> {
+    if (!this.worktreeHandle) return { ok: false, message: "no active worktree" };
+    await commitPending(this.worktreeHandle);
+    const result = await mergeFiles(this.root, this.worktreeHandle.branch, files);
+    if (result.ok) {
+      await removeWorktree(this.root, this.worktreeHandle.path);
+      this.worktreeHandle = undefined;
+    }
+    return result;
   }
 
   // /auto and /manual, and the team picker's setup question. Toggling approval mode for a live
@@ -443,6 +467,18 @@ export class Engine {
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }
+  }
+
+  // User-triggered task reassignment (drives POST /reassign). Only pending tasks are eligible — see
+  // Orchestrator.reassign. Publishes on hub, same broadcast path runProject's onOrchestration uses,
+  // so every connected client (TUI, web, desktop) picks up the move, not just the caller.
+  reassignTask(taskId: string, agentId: string): string | undefined {
+    if (!this.byId.get(agentId)) return `no such agent: ${agentId}`;
+    const err = this.orch.reassign(taskId, agentId);
+    if (err) return err;
+    const event = { type: "reassign" as const, taskId, role: agentId, time: Date.now() };
+    this.hub.publish({ kind: "orchestration", event, time: event.time });
+    return undefined;
   }
 
   // Release the long-lived subprocess/OS resources (file watcher, language servers). The agents,

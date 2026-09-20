@@ -109,4 +109,8 @@ export type OnDelta = (text: string) => void;
 export interface Provider {
   // When onDelta is given, the provider streams text chunks to it and still returns the full reply.
   send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply>;
+  // Optional: not every provider has an embeddings API (Anthropic doesn't at all). Callers that
+  // want semantic search (see niti IDE's codebase index) must check for this before calling it,
+  // and fall back to a non-semantic strategy when it's absent — never assume every provider has it.
+  embed?(texts: string[]): Promise<number[][]>;
 }

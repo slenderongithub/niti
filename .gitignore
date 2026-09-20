@@ -4,6 +4,7 @@ node_modules/
 /niti
 /niti-core
 /npm/
+desktop/dist/
 *.tgz
 *.log
 .DS_Store

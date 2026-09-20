@@ -24,8 +24,8 @@ This file is the single merged source of project history/architecture context, r
 ## Architecture (as built)
 
 ```
-                    Go + Bubbletea TUI (niti)         Web dashboard (optional, --web)
-                     team picker · panes · comm-graph   localhost force-graph
+       Go + Bubbletea TUI (niti)   Web dashboard (--web)   Electron desktop app (desktop/)
+        team picker · panes · graph   localhost force-graph   embedded panels, file:// renderer
                               └──────────── HTTP + SSE (src/server) ────────────┘
                                                   ▼
                                     Engine (src/engine.ts)
@@ -258,6 +258,7 @@ and a live server smoke test:
 | Local HTTP + SSE server (constant-time token auth, replay, routes, static dashboard) | `src/server/*` |
 | Go + Bubbletea TUI: every-launch team picker, live session view, model carousel, command menu | `tui/internal/*` |
 | Web dashboard (self-contained SSE force-graph, tasks, messages, usage) | `web/*` |
+| Electron desktop app (M1: native shell + Session panel — agent list, task board, Block-rendered live feed, approvals, model swap, prompt bar — over the same HTTP+SSE API, CORS-enabled since it's cross-origin unlike the TUI/browser dashboard) | `desktop/*` |
 
 The headline end-to-end path — orchestrator plans a DAG, a frontend agent **asks the backend agent
 directly**, the answer flows back without clobbering the frontend's task output, and every message
@@ -297,7 +298,7 @@ streams over SSE — is asserted in `src/engine.test.ts` and `src/server/server.
   busy) agent — avoids concurrency races; upgrade if cross-agent failover is needed.
 - Credential validation is deferred to first use (no live provider ping on `auth` save).
 - Re-planning after integrate is not implemented (the orchestrator reviews + summarizes only).
-- The web dashboard is a read-only viewer (no prompt submission from the browser).
+- ~~The web dashboard is a read-only viewer (no prompt submission from the browser).~~ Corrected: `web/app.js` already submits prompts, switches models, answers approvals, and sends mid-task agent messages via `POST /prompt`/`/model`/`/approval`/`/agents/:id/message` — it has not been read-only for some time; this line was stale.
 - One global shell lock (`*shell*`) rather than per-path — real path extraction from an arbitrary
   shell command is a guessing game; upgrade only if shell contention shows up in practice.
 - File watching has no debounce or full `.gitignore` parsing, just an inline ignore list.
@@ -312,7 +313,7 @@ streams over SSE — is asserted in `src/engine.test.ts` and `src/server/server.
 | Surface | Decision | Reason |
 |---|---|---|
 | ACP (Zed/VS Code embedding) | Out of scope | niti is a standalone CLI/TUI, no IDE host to embed into |
-| Desktop app (SolidJS) | Out of scope | Terminal + optional web dashboard is the UI surface |
+| Desktop app (SolidJS) | Superseded 2026-09-15 — see `desktop/*` | Electron GUI added additively, alongside (not replacing) the TUI/web dashboard, as a native panel-based front end; SolidJS was never built, Electron was chosen instead |
 | 20+ TUI themes | Deferred | Pure polish, addable to `tui/internal/theme/theme.go` any time |
 | Frecency-based autocomplete | Deferred | UX polish on top of the command registry, not parity-critical |
 | tree-sitter | Descoped, subprocess LSP instead | No syntax-highlighting UI surface to justify it |

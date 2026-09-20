@@ -67,6 +67,17 @@ test("tokensMatch: equal tokens match, unequal/absent/wrong-length don't", () =>
   expect(tokensMatch("", "abc123")).toBe(false);
 });
 
+test("CORS: preflight succeeds and every response carries an allow-origin header — the desktop app's renderer is cross-origin (file://) unlike the TUI or same-origin browser dashboard", async () => {
+  const { h } = setup();
+  track(h);
+  const pre = await fetch(`${h.url}/prompt`, { method: "OPTIONS" });
+  expect(pre.status).toBe(204);
+  expect(pre.headers.get("access-control-allow-origin")).toBe("*");
+  expect(pre.headers.get("access-control-allow-headers")).toContain("authorization");
+  const health = await fetch(`${h.url}/health`);
+  expect(health.headers.get("access-control-allow-origin")).toBe("*");
+});
+
 test("health is public; data routes require the token", async () => {
   const { h } = setup();
   track(h);
@@ -75,6 +86,121 @@ test("health is public; data routes require the token", async () => {
   const ok = await fetch(`${h.url}/session`, { method: "POST", headers: { authorization: `Bearer ${h.token}` } });
   expect(ok.status).toBe(200);
   expect((await ok.json()).agents.length).toBe(3);
+});
+
+test("POST /complete calls a provider directly, bypassing the orchestration engine entirely", async () => {
+  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false });
+  const h = track(
+    startServer(engine, {
+      makeProvider: (cfg) => {
+        expect(cfg.provider).toBe("anthropic");
+        expect(cfg.model).toBe("x");
+        return fake;
+      },
+    }),
+  );
+  const auth = { authorization: `Bearer ${h.token}` };
+
+  expect((await fetch(`${h.url}/complete`, { method: "POST", headers: auth })).status).toBe(400); // missing body
+
+  const res = await fetch(`${h.url}/complete`, {
+    method: "POST",
+    headers: { ...auth, "content-type": "application/json" },
+    body: JSON.stringify({ provider: "anthropic", model: "x", prompt: "hello" }),
+  });
+  expect(res.status).toBe(200);
+  expect((await res.json()).text).toBe("done working on it");
+  expect(engine.running).toBe(false); // never touched the engine/orchestrator
+});
+
+test("POST /complete redacts an obvious secret out of the prompt before it reaches the provider", async () => {
+  let receivedPrompt = "";
+  const capturing: Provider = {
+    async send(_sys, turns) {
+      receivedPrompt = (turns[0] as { text: string }).text;
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  const h = track(startServer(new Engine({ configs, makeProvider: () => fake, interactive: false }), { makeProvider: () => capturing }));
+  await fetch(`${h.url}/complete`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${h.token}`, "content-type": "application/json" },
+    body: JSON.stringify({ provider: "anthropic", model: "x", prompt: "here's my key: sk-abcdefghijklmnopqrstuvwx1234567890" }),
+  });
+  expect(receivedPrompt).toContain("[redacted]");
+  expect(receivedPrompt).not.toContain("sk-abcdefghijklmnopqrstuvwx1234567890");
+});
+
+test("POST /complete requires the token, and surfaces a bad provider as a 400 not a 500", async () => {
+  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false });
+  const h = track(startServer(engine));
+  expect((await fetch(`${h.url}/complete`, { method: "POST" })).status).toBe(401);
+
+  const res = await fetch(`${h.url}/complete`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${h.token}`, "content-type": "application/json" },
+    body: JSON.stringify({ provider: "not-a-real-provider", model: "x", prompt: "hi" }),
+  });
+  expect(res.status).toBe(400);
+  expect((await res.json()).error).toContain("unknown provider");
+});
+
+test("POST /embed calls the provider's embed() and bypasses the engine, same as /complete", async () => {
+  const embeddingProvider: Provider = {
+    async send() {
+      throw new Error("should not be called");
+    },
+    async embed(texts: string[]) {
+      return texts.map((t) => [t.length, 0, 0]); // a fake but checkable "embedding"
+    },
+  };
+  const h = track(startServer(new Engine({ configs, makeProvider: () => fake, interactive: false }), { makeProvider: () => embeddingProvider }));
+  const auth = { authorization: `Bearer ${h.token}`, "content-type": "application/json" };
+
+  expect((await fetch(`${h.url}/embed`, { method: "POST", headers: auth, body: "{}" })).status).toBe(400); // missing texts
+
+  const res = await fetch(`${h.url}/embed`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({ provider: "google", texts: ["ab", "abcd"] }),
+  });
+  expect(res.status).toBe(200);
+  expect((await res.json()).embeddings).toEqual([
+    [2, 0, 0],
+    [4, 0, 0],
+  ]);
+});
+
+test("POST /embed redacts an obvious secret out of the text before it reaches the provider", async () => {
+  let receivedTexts: string[] = [];
+  const capturing: Provider = {
+    async send() {
+      throw new Error("should not be called");
+    },
+    async embed(texts) {
+      receivedTexts = texts;
+      return texts.map(() => [0]);
+    },
+  };
+  const h = track(startServer(new Engine({ configs, makeProvider: () => fake, interactive: false }), { makeProvider: () => capturing }));
+  await fetch(`${h.url}/embed`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${h.token}`, "content-type": "application/json" },
+    body: JSON.stringify({ provider: "google", texts: ["a GitHub token ghp_abcdefghijklmnopqrstuvwxyz012345 is in this file"] }),
+  });
+  expect(receivedTexts[0]).toContain("[redacted]");
+  expect(receivedTexts[0]).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz012345");
+});
+
+test("POST /embed is a clean 400 for a provider with no embed() support, not a 500", async () => {
+  const h = track(startServer(new Engine({ configs, makeProvider: () => fake, interactive: false }), { makeProvider: () => fake }));
+  const res = await fetch(`${h.url}/embed`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${h.token}`, "content-type": "application/json" },
+    body: JSON.stringify({ provider: "anthropic", texts: ["hi"] }),
+  });
+  expect(res.status).toBe(400);
+  expect((await res.json()).error).toContain("does not support embeddings");
 });
 
 test("static dashboard assets carry a Content-Security-Policy header", async () => {
@@ -109,12 +235,55 @@ test("sessions are listable once a store is wired (empty without one)", async ()
   expect(await (await fetch(`${h.url}/sessions?token=${h.token}`)).json()).toEqual({ sessions: [] });
 });
 
+test("checkpoints are listable once a store is wired (empty without one)", async () => {
+  const { h } = setup();
+  track(h);
+  expect(await (await fetch(`${h.url}/checkpoints?token=${h.token}`)).json()).toEqual({ checkpoints: [] });
+});
+
 test("worktree routes are gated by the token and report idle when no run is isolated", async () => {
   const { h } = setup();
   track(h);
   expect((await fetch(`${h.url}/worktree`)).status).toBe(401);
   expect(await (await fetch(`${h.url}/worktree?token=${h.token}`)).json()).toEqual({ active: false });
   expect(await (await fetch(`${h.url}/worktree/merge?token=${h.token}`, { method: "POST" })).json()).toEqual({ ok: false, message: "no active worktree" });
+});
+
+test("GET /worktree/hunks requires ?path= and reports empty for an idle engine, gated by the token", async () => {
+  const { h } = setup();
+  track(h);
+  expect((await fetch(`${h.url}/worktree/hunks?path=a.ts`)).status).toBe(401);
+  expect((await fetch(`${h.url}/worktree/hunks?token=${h.token}`)).status).toBe(400); // missing path
+  expect(await (await fetch(`${h.url}/worktree/hunks?path=a.ts&token=${h.token}`)).json()).toEqual({ patch: "" });
+});
+
+test("POST /worktree/merge with a `files` body routes to the selective merge, not the whole-run one", async () => {
+  const { engine, h } = setup();
+  let wholeRunCalled = false;
+  let filesReceived: string[] | undefined;
+  (engine as any).mergeWorktree = async () => {
+    wholeRunCalled = true;
+    return { ok: false, message: "no active worktree" };
+  };
+  (engine as any).mergeWorktreeFiles = async (files: string[]) => {
+    filesReceived = files;
+    return { ok: true, message: `merged ${files.length}` };
+  };
+  track(h);
+
+  const res = await fetch(`${h.url}/worktree/merge?token=${h.token}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ files: ["src/a.ts", "src/b.ts"] }),
+  });
+  expect(await res.json()).toEqual({ ok: true, message: "merged 2" });
+  expect(filesReceived).toEqual(["src/a.ts", "src/b.ts"]);
+  expect(wholeRunCalled).toBe(false);
+
+  // No body / no `files` key still goes to the original whole-run merge — unchanged behavior.
+  wholeRunCalled = false;
+  await fetch(`${h.url}/worktree/merge?token=${h.token}`, { method: "POST" });
+  expect(wholeRunCalled).toBe(true);
 });
 
 test("providers and models routes serve the catalog", async () => {

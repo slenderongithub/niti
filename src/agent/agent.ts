@@ -798,6 +798,9 @@ export class Agent {
       }
     }
     this.audit?.append({ agentId: id, kind: "tool_call", detail: { tool: call.name, input: call.input } });
+    // Hoisted out of the else-branch below so the file_edit event published after this whole
+    // if/else chain (see the bus.publish call further down) can attach it as a real `path` field.
+    let writeRel: string | undefined;
     try {
       let output: string;
       if (isMcp) {
@@ -810,7 +813,7 @@ export class Agent {
         // one file, and keying on raw model output gave each its own lock — i.e. no mutual
         // exclusion at all, in exactly the case the registry exists for. safePath also makes the
         // key worktree-aware, since setRoot repoints the root mid-session.
-        const writeRel = WRITE_TOOLS.has(sandboxCall.tool) && "path" in sandboxCall ? sandboxCall.path : undefined;
+        writeRel = WRITE_TOOLS.has(sandboxCall.tool) && "path" in sandboxCall ? sandboxCall.path : undefined;
         const lockPath =
           writeRel !== undefined ? safePath(this.root, writeRel) : sandboxCall.tool === "shell" ? SHELL_LOCK : undefined;
         if (lockPath && this.locks) await this.locks.acquire(lockPath, id);
@@ -851,7 +854,13 @@ export class Agent {
       // made the dashboard's edit feed and the TUI's activity line report reads as modifications —
       // and /undo's affordance appear for calls that wrote nothing.
       const kind = WRITE_TOOLS.has(call.name) ? "file_edit" : "tool_call";
-      this.bus.publish({ agentId: id, type: kind, payload: `${call.name} → ${output.slice(0, 120).replace(/\n/g, " ")}`, time: Date.now() });
+      this.bus.publish({
+        agentId: id,
+        type: kind,
+        payload: `${call.name} → ${output.slice(0, 120).replace(/\n/g, " ")}`,
+        time: Date.now(),
+        path: writeRel,
+      });
       return output;
     } catch (err) {
       const output = `error: ${err}`;

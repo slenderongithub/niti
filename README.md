@@ -1,16 +1,22 @@
-<img src="assets/logo.png" alt="niti logo" width="80"><br>
+<div align="center">
 
-# niti
-
-**A terminal CLI that runs multiple AI coding agents — from different LLM providers — concurrently on one project.**
-
-Assign models to custom roles (Gemini = Frontend, Claude = Backend, GPT = Reviewer...), pick one as the **orchestrator** to plan the work into a task DAG, and watch the team build together, **talking to each other directly** to stay aligned — live in your terminal, or in an optional web dashboard.
-
+# <img src="assets/logo.png" alt="niti logo" width="90" valign="middle"> niti
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](#license)
 [![Bun](https://img.shields.io/badge/core-Bun%20%2F%20TypeScript-f9f1e1)](#two-front-ends-one-core)
 [![Go](https://img.shields.io/badge/TUI-Go%20%2F%20Bubbletea-00add8)](#two-front-ends-one-core)
 
+**A terminal CLI that runs multiple AI coding agents — from different LLM providers — concurrently on one project.**
+
+Assign models to custom roles, pick an **orchestrator** to plan the work into a task DAG, and watch the team build together. They talk to each other directly to stay aligned — live in your terminal, or in an optional web dashboard.
+
+
+<br>
+
 <img src="readme_images/CLI.png" alt="niti's terminal UI — team of 4 agents, live context/token sidebar" width="100%">
+
+</div>
+
+---
 
 ## Quickstart
 
@@ -157,4 +163,3 @@ cd tui && go build ./... && go vet ./... && go test ./...    # Go TUI: build, ve
 MIT.
 
 <img src="assets/logo.png" alt="niti logo" width="40">
-

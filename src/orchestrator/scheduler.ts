@@ -15,6 +15,7 @@ export type OrchestrationEvent =
   | { type: "handoff"; taskId: string; from: string; to: string[]; time: number }
   | { type: "replan"; taskId: string; role: string; action: "retry" | "redirect" | "inject" | "accept"; reason?: string; time: number }
   | { type: "review"; taskId: string; reviewer: string; phase: "requested" | "approved" | "changes_requested"; time: number }
+  | { type: "reassign"; taskId: string; role: string; time: number }
   | { type: "integrate"; summary: string; time: number }
   | { type: "complete"; completed: number; total: number; cancelled?: boolean; time: number };
 

@@ -107,4 +107,12 @@ export class GeminiProvider implements Provider {
     }
     return { text, toolCalls, raw: rawParts, usage };
   }
+
+  // A fixed embedding model, independent of `this.model` (the chat model this instance was built
+  // for isn't an embedding model, and the two are never the same id) — this is the current
+  // generally-available Gemini embedding model, not something a caller should be picking per agent.
+  async embed(texts: string[]): Promise<number[][]> {
+    const res = await this.client.models.embedContent({ model: "gemini-embedding-001", contents: texts });
+    return (res.embeddings ?? []).map((e) => e.values ?? []);
+  }
 }
