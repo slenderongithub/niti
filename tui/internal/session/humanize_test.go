@@ -34,3 +34,13 @@ func TestHumanizeVerification(t *testing.T) {
 		}
 	}
 }
+
+func TestHumanizePlan(t *testing.T) {
+	if got := humanize("thought", "plan: [x] find it · [~] fix it"); got != "▸ plan: [x] find it · [~] fix it" {
+		t.Errorf("plan line = %q", got)
+	}
+	// The call itself reads as an action, not as raw JSON.
+	if got := humanize("tool_call", `todo {"items":[{"text":"a"}]}`); got != "⏺ Plan" {
+		t.Errorf("todo call = %q", got)
+	}
+}

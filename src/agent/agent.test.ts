@@ -1114,3 +1114,75 @@ test("a check the model cannot satisfy stops instead of looping on it", async ()
   await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).run("write it");
   expect(writes).toBeLessThanOrEqual(3); // the initial write plus at most MAX_VERIFY_ROUNDS retries
 });
+
+// ── The working checklist: written by the agent, kept in front of it ─────────────────────────
+
+test("the checklist is re-stated to the model, and one current copy replaces the last", async () => {
+  // The drift this prevents: the original instruction scrolls up, and by turn eight the agent is
+  // still polishing step one. Keeping the list recent is the whole mechanism.
+  const seen: string[][] = [];
+  let call = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      seen.push(turns.filter((t) => t.role === "user").map((t) => (t as { text: string }).text));
+      call++;
+      if (call === 1) {
+        return { text: "", toolCalls: [{ id: "1", name: "todo", input: { items: [{ text: "find it", status: "doing" }, { text: "fix it", status: "pending" }] } }] };
+      }
+      if (call === 2) {
+        return { text: "", toolCalls: [{ id: "2", name: "todo", input: { items: [{ text: "find it", status: "done" }, { text: "fix it", status: "doing" }] } }] };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), {}).run("do the thing");
+
+  const third = seen[2] ?? [];
+  const boards = third.filter((t) => t.startsWith("Your working checklist"));
+  expect(boards).toHaveLength(1); // replaced, not accumulated
+  expect(boards[0]).toContain("[x] find it"); // the current state, not the first version
+  expect(boards[0]).toContain("[~] fix it");
+});
+
+test("the todo tool needs no permission and touches nothing", async () => {
+  // It runs no command and writes no file, so gating it would cost an approval dialog per plan.
+  let asked = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (turns.some((t) => t.role === "tool")) return { text: "ok", toolCalls: [] };
+      return { text: "", toolCalls: [{ id: "1", name: "todo", input: { items: ["a", "b", "c"] } }] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), {
+    approve: async () => {
+      asked++;
+      return true;
+    },
+  });
+  expect(await agent.run("plan it")).toBe("done");
+  expect(asked).toBe(0);
+});
+
+test("a checklist does not leak from one task into the next", async () => {
+  const seen: string[] = [];
+  let task = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      for (const t of turns) if (t.role === "user" && t.text.startsWith("Your working checklist")) seen.push(t.text);
+      if (turns.some((t) => t.role === "tool")) return { text: "ok", toolCalls: [] };
+      return task === 1
+        ? { text: "", toolCalls: [{ id: "1", name: "todo", input: { items: ["first task step"] } }] }
+        : { text: "second task done", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), {});
+  task = 1;
+  await agent.run("task one");
+  task = 2;
+  await agent.run("task two");
+  expect(seen.some((s) => s.includes("first task step"))).toBe(true);
+  expect(seen.filter((s) => s.includes("first task step")).length).toBeGreaterThan(0);
+  // The second run must never have been shown the first run's plan.
+  const duringSecond = seen.slice(seen.findIndex((s) => s.includes("first task step")) + 1);
+  expect(duringSecond.filter((s) => s.includes("first task step"))).toHaveLength(0);
+});

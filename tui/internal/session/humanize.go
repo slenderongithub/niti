@@ -25,7 +25,7 @@ var (
 var toolVerbs = map[string]string{
 	"read_file": "Read", "write_file": "Write", "edit": "Edit", "list_dir": "List", "list_files": "List",
 	"glob": "Find", "grep": "Search", "search": "Search", "shell": "Run", "bash": "Run",
-	"remember": "Remember", "recall": "Recall", "hover": "Inspect", "diagnostics": "Check",
+	"remember": "Remember", "recall": "Recall", "todo": "Plan", "hover": "Inspect", "diagnostics": "Check",
 }
 
 // humanize returns the transcript line for an event, or "" to drop it.
@@ -52,6 +52,11 @@ func humanize(kind, payload string) string {
 		// The verification pass is the one thing in a transcript a user actively waits on, so it
 		// reads as a step of the work rather than as one more stray thought.
 		if strings.HasPrefix(payload, "verifying:") || strings.HasPrefix(payload, "verification ") {
+			return "▸ " + payload
+		}
+		// The agent's own checklist. It reads as a step of the work, not a stray thought — it is
+		// the one line that says what is left.
+		if strings.HasPrefix(payload, "plan:") {
 			return "▸ " + payload
 		}
 		if m := reTask.FindStringSubmatch(payload); m != nil {

@@ -99,6 +99,8 @@ This file is the single merged source of project history/architecture context, r
 | `src/agent/agent.ts` | Multi-turn tool loop (read-only calls in a turn run concurrently), `send_message`/`ask_agent`/`spawn_fork`, approval + quota checks, checkpoint-before-write, `maxTurns` override, verification pass before a changed task may report done |
 | `src/agent/verify.ts` | `detectChecks()` (package.json typecheck/build script, `go build`, `cargo check`) + `runChecks()`; overridden by `verify:` in agents.yaml |
 | `src/agent/context.ts` | `compactTurns()` — structured summary (Goal/Done/Decisions/Open) near the context ceiling, plus a ledger of changed files and recent errors recovered from the dropped turns without a model call |
+| `src/agent/todo.ts` | The `todo` tool's list parsing/rendering — tolerant of the shapes models actually emit; whole-list replace, bounded at 20 items |
+| `src/agent/steering.ts` | Per-model-family prompt addendum (`familyOf` keys off the model id, not the provider — many providers serve other vendors' weights); mechanical steering only, never shared conventions |
 | `src/agent/repomap.ts` | PageRank over the import graph → a ranked project outline for the system prompt; uses `git ls-files` so a vendored tree inside the repo can't crowd out the project's own source |
 | `src/orchestrator/planner.ts`, `scheduler.ts`, `runner.ts`, `orchestrator.ts`, `locks.ts`, `task.ts` | Goal→DAG planning, concurrent topological execution, the shared task queue, the lock registry |
 | `src/messaging/message-bus.ts` | Cross-provider agent↔agent channel: `post`/`announce`/`authorize`/`drain`, per-pair rate cap |

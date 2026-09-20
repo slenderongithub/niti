@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, Reasoning } from "./provider.ts";
+import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, Reasoning, Usage } from "./provider.ts";
 
 export class GeminiProvider implements Provider {
   private client: GoogleGenAI;
@@ -71,10 +71,25 @@ export class GeminiProvider implements Provider {
     let text = "";
     const toolCalls: ToolCall[] = [];
     const rawParts: Record<string, unknown>[] = []; // native parts, verbatim — carries thoughtSignature
-    let usage: { inputTokens: number; outputTokens: number } | undefined;
+    let usage: Usage | undefined;
     let n = 0;
-    const grabUsage = (meta?: { promptTokenCount?: number; candidatesTokenCount?: number }) => {
-      if (meta) usage = { inputTokens: meta.promptTokenCount ?? 0, outputTokens: meta.candidatesTokenCount ?? 0 };
+    // Gemini caches long prompt prefixes implicitly — no request parameter, nothing to opt into —
+    // but it only *reports* the hit in cachedContentTokenCount, which nothing here was reading. The
+    // effect was cosmetic but consistently wrong in one direction: /cost and /usage billed every
+    // cached token at the full input rate, so the longer a session ran (and the better the cache
+    // did), the more they overstated what it had actually cost.
+    //
+    // promptTokenCount already includes the cached tokens, so this is a breakdown of inputTokens,
+    // not an addition to it — same shape Anthropic and OpenAI report.
+    const grabUsage = (meta?: { promptTokenCount?: number; candidatesTokenCount?: number; cachedContentTokenCount?: number }) => {
+      if (!meta) return;
+      usage = {
+        inputTokens: meta.promptTokenCount ?? 0,
+        outputTokens: meta.candidatesTokenCount ?? 0,
+        // Left undefined rather than 0 when absent: 0 asserts "the cache was checked and missed",
+        // which is a different claim from "this response said nothing about caching".
+        cacheReadTokens: meta.cachedContentTokenCount ?? undefined,
+      };
     };
     // ponytail: Gemini gives no call id → synthesize name+index. Parallel calls to the SAME tool
     // can't be disambiguated on the response side; rare in practice.

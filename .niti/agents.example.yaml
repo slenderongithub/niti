@@ -22,6 +22,9 @@ agents:
     # reasoning: auto  # off | low | medium | high | auto — Gemini thinkingBudget / OpenAI
                        # reasoning_effort. Unset sends nothing; Flash and Flash-Lite think only
                        # when this is set.
+    #
+    # Every agent also gets: a `todo` checklist tool for multi-step tasks, and a short prompt
+    # addendum for its model family (src/agent/steering.ts). Neither is configured here.
     reviewer: qa # qa must answer "VERDICT: approve" before this agent's tasks are accepted
 
   - id: qa

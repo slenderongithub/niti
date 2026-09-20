@@ -89,6 +89,13 @@ Both pages retheme live with whatever theme (`ctrl+t` / `/theme`) the TUI has ac
 - **Project map + ranked context** — a generated outline of the repo (directory shape plus the
   files most of the project imports, PageRank over the import graph) rides in the system prompt, so
   an agent starts oriented instead of guessing. `repoMap: false` turns it off.
+- **Working checklist** — agents write a `todo` list for multi-step tasks, re-stated to the model
+  whenever it changes so the plan stays recent context instead of something to reconstruct from a
+  transcript. Scoped to one task; never carried into the next.
+- **Per-model steering** — each agent's prompt carries a short addendum for its model family
+  (`src/agent/steering.ts`). Mechanical only — verbosity, tool-call shape, when to stop. Anything
+  two agents must agree on stays in the shared guidance, since they message each other across
+  providers.
 - **Reasoning effort** — `reasoning: off|low|medium|high|auto` per agent maps to Gemini's
   `thinkingBudget` and OpenAI's `reasoning_effort`. Unset sends nothing; note that Flash and
   Flash-Lite do not think at all unless you set it.

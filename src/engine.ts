@@ -2,6 +2,7 @@ import { relative } from "node:path";
 import { Agent, type AgentConfig } from "./agent/agent.ts";
 import { detectChecks, parseChecks } from "./agent/verify.ts";
 import { repoMapSection } from "./agent/repomap.ts";
+import { steeringFor } from "./agent/steering.ts";
 import { Bus } from "./events/bus.ts";
 import { MessageBus, USER, type Messenger } from "./messaging/message-bus.ts";
 import { Orchestrator } from "./orchestrator/orchestrator.ts";
@@ -152,7 +153,9 @@ export class Engine {
 
     for (const c of opts.configs) {
       this.declaredPrompts.set(c.id, c.systemPrompt);
-      const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + mapSection + TOOL_GUIDANCE };
+      // Per agent, because two agents on the same team routinely run different model families.
+      // Appended last so it qualifies the shared guidance rather than being buried above it.
+      const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + mapSection + TOOL_GUIDANCE + steeringFor(c.provider, c.model) };
       // A missing key (revoked, keychain wiped, never set) must not take the whole server down —
       // that would crash boot before the handshake line prints, leaving the TUI staring at an EOF
       // with no way back in short of editing agents.yaml by hand. Defer the failure to first use,

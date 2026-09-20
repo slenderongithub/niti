@@ -23,6 +23,7 @@ import { UsageTracker } from "../../src/usage.ts";
 import { makeProvider } from "../../src/providers/factory.ts";
 import { detectChecks } from "../../src/agent/verify.ts";
 import { TOOL_GUIDANCE } from "../../src/tools/tools.ts";
+import { steeringFor } from "../../src/agent/steering.ts";
 import { costOf } from "../../src/providers/pricing.ts";
 import { TASKS, type Task } from "./tasks.ts";
 
@@ -82,7 +83,10 @@ async function runOne(task: Task): Promise<Attempt> {
     provider,
     model,
     role: "Engineer",
-    systemPrompt: SYSTEM_PROMPT + TOOL_GUIDANCE,
+    // Same prompt the Engine assembles, minus the project map (these fixtures are far below the
+    // size where one is generated). Leaving the per-model steering out would measure a harness
+    // nobody runs.
+    systemPrompt: SYSTEM_PROMPT + TOOL_GUIDANCE + steeringFor(provider, model),
     allowedTools: ["read_file", "write_file", "edit", "shell"],
   };
   const bus = new Bus();

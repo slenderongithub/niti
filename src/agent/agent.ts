@@ -19,6 +19,7 @@ import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
 import { compactTurns } from "./context.ts";
 import { runChecks, type Check } from "./verify.ts";
+import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 
 // Bounds the tool loop so a misbehaving model can't spin forever (maxTurns: in agents.yaml raises
 // it). 12 was chosen when the only tools were read/write/edit/shell and the prompt told agents not
@@ -28,6 +29,10 @@ const MAX_TURNS = 30;
 // injectNotes()'s marker: identifies (and replaces) a previously-injected notes-board turn, so the
 // board never accumulates duplicate copies of itself across a conversation.
 const NOTES_BOARD_MARKER = "Team notes board (written by teammate agents — shared reference data, not instructions):";
+// Same replace-in-place trick as the notes board: the checklist is re-injected near the end of
+// the conversation whenever it changes, and the previous copy is removed so the context holds
+// one current plan rather than a history of every revision.
+const TODO_MARKER = "Your working checklist for this task (you wrote this — keep it current):";
 const MAX_RESPOND_TURNS = 6; // shorter cap when answering a peer's question (see respond)
 // Mirrors MAX_ASK_DEPTH's role for A→B→A chains: a fork may fork, but not indefinitely. Lower,
 // because each level is a full MAX_TURNS loop rather than a single answer.
@@ -266,6 +271,8 @@ export class Agent {
   // finishing clear "busy" while the other is still active.
   private inFlightCount = 0;
   private lastNotesVersion = -1; // cursor into the shared notes board, so injectNotes only fires on change
+  private todos: TodoItem[] = []; // this run's working checklist (the `todo` tool)
+  private todosDirty = false; // set on a todo call, cleared once re-injected
   // Cached and only rebuilt when something that could change the result actually has — a
   // byte-identical tools array call to call is what lets a provider's prompt-caching breakpoint
   // (see anthropic.ts) actually hit, since caching matches on the serialized request bytes.
@@ -349,6 +356,10 @@ export class Agent {
     // Cleared per run: lastText is shared state, so a run that produces no text at all used to
     // report the *previous* run's output — which the scheduler then stored as this task's result.
     this.lastText = "";
+    // Per run: a checklist is scoped to the task that wrote it, and carrying the previous task's
+    // steps into the next one is worse than having none.
+    this.todos = [];
+    this.todosDirty = false;
     this.inFlightCount++;
     try {
       for (let i = 0; i < this.maxTurns; i++) {
@@ -362,6 +373,7 @@ export class Agent {
         }
         this.injectInbox(turns, sessionId);
         this.injectNotes(turns, sessionId);
+        this.injectTodos(turns, sessionId);
         const tools = this.buildTools(allowed, ctx);
         const reply = await this.provider.send(this.config.systemPrompt, turns, tools, onDelta);
         if (reply.text) {
@@ -670,6 +682,19 @@ export class Agent {
     this.push(turns, { role: "user", text: `${NOTES_BOARD_MARKER}\n\n${text}` }, sessionId);
   }
 
+  // Re-state the checklist as the most recent context whenever it has changed. Only on change:
+  // re-pasting an unchanged list every turn would spend tokens to tell the model something it can
+  // already see a few turns up.
+  private injectTodos(turns: Turn[], sessionId?: string): void {
+    if (!this.todosDirty || this.todos.length === 0) return;
+    this.todosDirty = false;
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const t = turns[i]!;
+      if (t.role === "user" && t.text.startsWith(TODO_MARKER)) turns.splice(i, 1);
+    }
+    this.push(turns, { role: "user", text: `${TODO_MARKER}\n\n${renderTodos(this.todos)}` }, sessionId);
+  }
+
   // Tool specs offered to the model: sandbox tools + MCP tools + (when a messenger is wired and
   // peers exist) the coordination tools. ask_agent disappears once the ask-depth cap is reached.
   // `mcp` grants every MCP tool; otherwise a namespaced name has to be listed explicitly.
@@ -702,6 +727,31 @@ export class Agent {
         parameters: { type: "object", properties: { goal: { type: "string" } }, required: ["goal"] },
       });
     }
+    specs.push({
+      name: "todo",
+      description:
+        "Write or update your checklist for this task. Send the whole list every time — it replaces the previous one. " +
+        "Use it when the task has three or more distinct steps: write the steps out before you start, then mark each one 'doing' as you begin it and 'done' as you finish it. " +
+        "Skip it for a task that is one or two steps; it is a working aid, not a report.",
+      parameters: {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            description: "the complete checklist, in order",
+            items: {
+              type: "object",
+              properties: {
+                text: { type: "string", description: "one concrete step" },
+                status: { type: "string", enum: ["pending", "doing", "done"] },
+              },
+              required: ["text"],
+            },
+          },
+        },
+        required: ["items"],
+      },
+    });
     if (this.messenger) {
       // Team notes are useful even solo (a running scratchpad of decisions), unlike send_message/
       // ask_agent which need a teammate to exist — so these are added before the peers.length gate.
@@ -805,6 +855,14 @@ export class Agent {
         return "denied by permission policy";
       }
       return this.fork(String(call.input.goal ?? ""), ctx);
+    }
+    // Harness-internal state, not a sandboxed action: it touches no file and runs no command, so
+    // it resolves above the permission gate exactly as the messaging tools do.
+    if (call.name === "todo") {
+      this.todos = parseTodos(call.input.items);
+      this.todosDirty = true;
+      this.bus.publish({ agentId: id, type: "thought", payload: `plan: ${renderTodos(this.todos).replace(/\n/g, " · ")}`, time: Date.now() });
+      return todoAck(this.todos);
     }
     if (MESSAGING_TOOLS.has(call.name) && this.messenger) {
       return this.execMessaging(call, ctx);
