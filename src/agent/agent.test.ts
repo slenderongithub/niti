@@ -1517,3 +1517,61 @@ test("a shell command given as one string is judged, and run, as the same call",
   canonicalizeShellCall(safe);
   expect(safe.input.args).toEqual(["commit", "-m", "rm -rf is just words"]);
 });
+
+// Anthropic reports input_tokens as only the uncached tail: with the prompt cache working, a window
+// that is 96% full shows up as a few hundred "input" tokens and 960k of cache reads.
+function cachedWindowStub(cacheRead: number, inputTokens: number): { stub: Provider; seenLengths: number[] } {
+  const seenLengths: number[] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(sys, turns) {
+      if (sys !== "s") return { text: "summary of the work so far", toolCalls: [] }; // compactTurns' own call
+      n++;
+      seenLengths.push(turns.length);
+      if (n < 5) return { text: "", toolCalls: [{ id: String(n), name: "write_file", input: { path: `f${n}.txt`, content: "x" } }] };
+      if (n === 5) {
+        return {
+          text: "",
+          toolCalls: [{ id: "5", name: "write_file", input: { path: "f5.txt", content: "x" } }],
+          usage: { inputTokens, outputTokens: 10, cacheReadTokens: cacheRead },
+        };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  return { stub, seenLengths };
+}
+
+test("auto-compaction fires at 95% on Anthropic even when the window is almost all cache reads", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const bus = new Bus();
+  const warnings: string[] = [];
+  bus.subscribe((e) => e.type === "warning" && warnings.push(e.payload));
+  const { stub, seenLengths } = cachedWindowStub(959_500, 500); // 960k of a 1M window, 500 of it "input"
+  const agent = new Agent({ ...cfg, provider: "anthropic", allowedTools: ["write_file"] }, stub, bus, { root });
+  expect(await agent.run("build something long")).toBe("done");
+  expect(seenLengths[4]).toBe(9);
+  expect(seenLengths[5]).toBeLessThan(9); // the array shrank after call 5
+  expect(warnings.some((w) => w.includes("context compacted automatically"))).toBe(true);
+});
+
+test("a mostly-cached Anthropic window below 95% is left alone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const bus = new Bus();
+  const warnings: string[] = [];
+  bus.subscribe((e) => e.type === "warning" && warnings.push(e.payload));
+  const { stub, seenLengths } = cachedWindowStub(500_000, 500);
+  await new Agent({ ...cfg, provider: "anthropic", allowedTools: ["write_file"] }, stub, bus, { root }).run("go");
+  expect(seenLengths[5]).toBe(11); // nothing compacted: 1 + 5 rounds × 2 turns
+  expect(warnings.some((w) => w.includes("compacted"))).toBe(false);
+});
+
+test("the 85% warning counts cache reads too, and reports the real fill", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const bus = new Bus();
+  const warnings: string[] = [];
+  bus.subscribe((e) => e.type === "warning" && warnings.push(e.payload));
+  const { stub } = cachedWindowStub(859_500, 500); // 86%
+  await new Agent({ ...cfg, provider: "anthropic", allowedTools: ["write_file"] }, stub, bus, { root }).run("go");
+  expect(warnings.some((w) => /context ~86% full \(860000\/1000000 tokens\)/.test(w))).toBe(true);
+});

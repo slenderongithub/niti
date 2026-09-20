@@ -43,3 +43,11 @@ test("parseRateLimit reads the right headers per provider", () => {
 
   expect(parseRateLimit(new Headers(), "openai")).toEqual({ remainingTokens: undefined, remainingRequests: undefined, resetAt: undefined });
 });
+
+test("lastInput is the whole prompt when the caller supplies it, so a cached window still reads as full", () => {
+  const t = new UsageTracker();
+  t.record("a", 500, 10, 959_500, 0, 960_000);
+  expect(t.snapshot()[0]!.usage.lastInput).toBe(960_000);
+  t.record("a", 700, 10); // no context given: falls back to the input count, as before
+  expect(t.snapshot()[0]!.usage.lastInput).toBe(700);
+});

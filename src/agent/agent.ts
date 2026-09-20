@@ -401,14 +401,15 @@ export class Agent {
           this.lastText = reply.text;
           this.bus.publish({ agentId: id, type: "message", payload: reply.text, time: Date.now() });
         }
-        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens);
+        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
         if (reply.rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, reply.rateLimit);
 
         // Pre-emptive heads-up: fire once when the conversation nears the context window.
-        if (!warned && reply.usage && overContextThreshold(reply.usage.inputTokens, context)) {
+        if (!warned && reply.usage && overContextThreshold(this.contextFill(reply.usage), context)) {
           warned = true;
-          const pct = Math.round((reply.usage.inputTokens / context) * 100);
-          this.bus.publish({ agentId: id, type: "warning", payload: `context ~${pct}% full (${reply.usage.inputTokens}/${context} tokens)`, time: Date.now() });
+          const fill = this.contextFill(reply.usage);
+          const pct = Math.round((fill / context) * 100);
+          this.bus.publish({ agentId: id, type: "warning", payload: `context ~${pct}% full (${fill}/${context} tokens)`, time: Date.now() });
         }
         // Account-quota heads-up: fire once when requests-remaining is about to hit zero.
         const rr = reply.rateLimit?.remainingRequests;
@@ -420,7 +421,7 @@ export class Agent {
         // but only if there *is* a next call. With no tool calls this turn ends the loop, so
         // compacting here paid for a whole extra billed summarization whose result nothing read.
         let compacted = false;
-        if (reply.toolCalls.length > 0 && reply.usage && overContextThreshold(reply.usage.inputTokens, context, COMPACT_RATIO)) {
+        if (reply.toolCalls.length > 0 && reply.usage && overContextThreshold(this.contextFill(reply.usage), context, COMPACT_RATIO)) {
           const before = turns.length;
           turns.splice(
             0,
@@ -590,12 +591,12 @@ export class Agent {
         this.injectNotes(turns, sessionId);
         const reply = await this.provider.send(this.config.systemPrompt, turns, this.buildTools(allowed, ctx), onDelta);
         if (reply.text) text = reply.text;
-        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens);
+        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
         // run() warns at 85% and compacts at 95%; this loop had neither, so a fork doing real work
         // (a 12-turn loop with full file contents in its tool results) hit a hard provider error on
         // overflow instead of shrinking — and the parent only saw "fork failed".
         let compacted = false;
-        if (reply.toolCalls.length > 0 && reply.usage && overContextThreshold(reply.usage.inputTokens, context, COMPACT_RATIO)) {
+        if (reply.toolCalls.length > 0 && reply.usage && overContextThreshold(this.contextFill(reply.usage), context, COMPACT_RATIO)) {
           const before = turns.length;
           turns.splice(
             0,
@@ -640,7 +641,7 @@ export class Agent {
     // planning, replanning, integrate and /debate turns were spent off the books — /usage, /cost,
     // the TUI sidebar and the dashboard all under-reported the run by the orchestrator's whole
     // share, which on a mixed team is usually the most expensive model on it.
-    if (reply.usage) this.usageTracker?.record(this.config.id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens);
+    if (reply.usage) this.usageTracker?.record(this.config.id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
     if (reply.rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, reply.rateLimit);
     return reply.text;
   }
@@ -858,11 +859,18 @@ export class Agent {
     return specs;
   }
 
+  // How full the window was for the request that produced `u` — the number every threshold below
+  // is measured against. Anthropic's input_tokens alone is only the uncached tail, so with caching
+  // working it stayed near zero and neither the 85% warning nor the 95% compaction ever fired.
+  private contextFill(u: Usage): number {
+    return promptTokens(this.config.provider, u);
+  }
+
   // Room for this turn's tool results, from the request that just returned. After a compaction the
   // usage figure describes a history that no longer exists, so only the fixed ceiling applies.
   private resultBudgetFor(reply: { usage?: Usage; toolCalls: ToolCall[] }, context: number, compacted: boolean): number | undefined {
     if (compacted || !reply.usage) return undefined;
-    return resultBudgetChars(promptTokens(this.config.provider, reply.usage) + reply.usage.outputTokens, context, COMPACT_RATIO, reply.toolCalls.length);
+    return resultBudgetChars(this.contextFill(reply.usage) + reply.usage.outputTokens, context, COMPACT_RATIO, reply.toolCalls.length);
   }
 
   // Bound one tool result before it enters the history (where it is re-sent on every later turn),

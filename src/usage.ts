@@ -18,12 +18,14 @@ export class UsageTracker {
   private byAgent = new Map<string, AgentUsage>();
   private rateLimits = new Map<string, RateLimitSnapshot>();
 
-  record(agentId: string, input: number, output: number, cacheRead = 0, cacheWrite = 0): void {
+  // `context` is the whole prompt of this call, cached part included. Anthropic's input_tokens is only
+  // the uncached tail, so without it lastInput — the context depth the panel shows — reads near zero.
+  record(agentId: string, input: number, output: number, cacheRead = 0, cacheWrite = 0, context?: number): void {
     const u = this.byAgent.get(agentId) ?? { inputTokens: 0, outputTokens: 0, calls: 0, lastInput: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
     u.inputTokens += input;
     u.outputTokens += output;
     u.calls += 1;
-    u.lastInput = input;
+    u.lastInput = context ?? input;
     u.cacheReadTokens += cacheRead;
     u.cacheWriteTokens += cacheWrite;
     this.byAgent.set(agentId, u);
