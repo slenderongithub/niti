@@ -1,6 +1,12 @@
 import type { Bus } from "../events/bus.ts";
+import { SHELL_TIMEOUT_MS } from "../tools/tools.ts";
 
-const STALE_MS = 60_000; // an agent that dies without releasing loses its lock after this long
+// An agent that dies without releasing loses its lock after this long. Tied to the longest a
+// locked operation can legitimately run — shell holds SHELL_LOCK for up to SHELL_TIMEOUT_MS — plus
+// headroom for the process to be killed and the release to land. A fixed 60s sat inside a 120s
+// command's window, so any caller without a liveness check (see isAlive) could hand the worktree to
+// a second writer while the first was still running a legitimate build.
+const STALE_MS = SHELL_TIMEOUT_MS + 10_000;
 const POLL_MS = 50;
 
 interface LockEntry {
@@ -18,8 +24,9 @@ export class LockRegistry {
   constructor(
     private bus?: Bus,
     private staleMs = STALE_MS,
-    // Liveness of a holder id. The Engine passes one backed by Agent.busy; without it a stale
-    // lock is never reclaimed at all, which is the safe default for a bare registry.
+    // Liveness of a holder id. The Engine passes one backed by Agent.busy, so a live agent keeps its
+    // lock however long it runs. Without one, every holder counts as gone and a lock older than
+    // staleMs is reclaimed — which is why staleMs must outlast the longest locked operation.
     private isAlive?: (holder: string) => boolean,
   ) {}
 
@@ -67,7 +74,9 @@ export class LockRegistry {
   byHolder(): Map<string, string[]> {
     const m = new Map<string, string[]>();
     for (const [path, entry] of this.locks) {
-      if (Date.now() - entry.acquiredAt > this.staleMs) continue;
+      // A lock past staleMs is only abandoned if its holder is gone; a live agent on a long build
+      // still holds it, and the status line should say so.
+      if (Date.now() - entry.acquiredAt > this.staleMs && !(this.isAlive?.(entry.holder) ?? false)) continue;
       m.set(entry.holder, [...(m.get(entry.holder) ?? []), path]);
     }
     return m;
