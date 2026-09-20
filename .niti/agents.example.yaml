@@ -36,7 +36,9 @@ permissions:
 
 # theme: niti          # TUI palette at launch (ctrl+t opens the picker)
 # auto: false          # approve anything not explicitly denied — same as --auto
-# maxTurns: 12         # tool-loop cap per agent turn
+# maxTurns: 30         # tool-loop cap per agent turn
+# verify: [bun run typecheck, bun test]   # checks a changed task must pass before it reports done
+#                                         # omitted: detected from the project · false: never verify
 # maxAgents: 6         # ceiling on team size
 # worktree: false      # isolate each run's writes in a throwaway git worktree
 # instructions: [AGENTS.md]   # files appended to every agent's system prompt

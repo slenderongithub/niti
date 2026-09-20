@@ -53,6 +53,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
     // unless agents.yaml explicitly says otherwise.
     watch: options.watch ?? true,
     maxTurns: options.maxTurns,
+    verify: options.verify,
     worktree: opts.worktree || options.worktree,
   });
   engine.orch.load(loadTasks()); // show any prior tasks on connect

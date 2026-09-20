@@ -81,8 +81,14 @@ Both pages retheme live with whatever theme (`ctrl+t` / `/theme`) the TUI has ac
   hand-offs), not a flat queue; independent tasks run concurrently and the lead reviews at the end.
 - **Agent-to-agent messaging** — any teammate can `ask_agent`/`send_message` another mid-task (e.g.
   frontend asking backend about an API shape), rate-capped per pair as the loop guard.
-- **Sandboxed tools** — `read_file` / `write_file` / `edit` / `shell`, gated per-agent by
-  `allowedTools` and a wildcard permission policy; every path is jailed to the project root.
+- **Sandboxed tools** — `read_file` / `write_file` / `edit` / `shell` plus read-only navigation
+  (`grep` / `glob` / `list_dir`), gated per-agent by `allowedTools` and a wildcard permission
+  policy; every path is jailed to the project root. Reads are line-numbered and paged, so `grep`'s
+  `path:line:` output and a read share one coordinate system; independent reads in a turn run
+  together rather than one round-trip at a time.
+- **Verification before "done"** — an agent that changed files must pass the project's own checks
+  (a `typecheck`/`build` script, `go build`, `cargo check`, or whatever `verify:` names) before it
+  may report a task complete; failures go back to it as the real compiler output, twice at most.
 - **Approval gates** — agents pause for `[y] approve · [n] deny · [a] always` before risky actions,
   answered from the TUI or the web dashboard; dangerous shell patterns always prompt.
 - **Persistence** — every turn checkpoints to SQLite (`.niti/niti.db`); `niti-core resume` picks up

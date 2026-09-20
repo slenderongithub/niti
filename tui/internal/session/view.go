@@ -463,7 +463,7 @@ func (m Model) agentBlock(st *agentState, w, per int) string {
 	gutter := txt(st.color, bg).Render("│ ")
 	rows := max(per-2, 1) // -2: the header, plus a blank row separating this block from the next
 	for i := max(len(body)-rows, 0); i < len(body); i++ {
-		style := txt(theme.Fg, bg)
+		style := lineStyle(body[i], bg)
 		if st.pending != "" && i == len(body)-1 {
 			style = txt(theme.Muted, bg) // dimmed: this line hasn't finished arriving
 		}
@@ -584,4 +584,20 @@ func (m Model) footer(w int) string {
 	}
 	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).
 		Render(txt(theme.Muted, bg).Render(truncate(line, w)))
+}
+
+// Line kind by leading glyph (set in humanize): actions and outcomes recede so the agent's own
+// prose stands out, failures are red, task boundaries carry the accent.
+func lineStyle(line string, bg lipgloss.Color) lipgloss.Style {
+	switch {
+	case strings.HasPrefix(line, "✖"):
+		return txt(theme.Red, bg)
+	case strings.HasPrefix(line, "⚠"):
+		return txt(theme.Amber, bg)
+	case strings.HasPrefix(line, "▸"):
+		return txt(theme.Accent, bg).Bold(true)
+	case strings.HasPrefix(line, "⏺"), strings.HasPrefix(line, "  ⎿"), strings.HasPrefix(line, "·"):
+		return txt(theme.Muted, bg)
+	}
+	return txt(theme.Fg, bg)
 }

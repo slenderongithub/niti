@@ -96,12 +96,14 @@ This file is the single merged source of project history/architecture context, r
 | `src/config/config.ts` | Parses/validates `.niti/agents.yaml`: agents, `permissions:`, `lsp:`, `mcpServers:`, top-level options (`loadOptions`/`loadInstructions`), `saveAgents()` (replaces only the `agents:` key so hand-written config survives a picker relaunch) |
 | `src/permissions.ts` | Wildcard pattern resolver (`resolve()`), `Bun.Glob`-based, layered session→agent→project→default-ask |
 | `src/engine.ts` | Wires agents + orchestrator + messaging + approvals + usage + locks + store + watcher into one `EventHub`; `submit()`/`resume()`/`undo()`/`switchModel()` |
-| `src/agent/agent.ts` | Multi-turn tool loop, `send_message`/`ask_agent`/`spawn_fork`, approval + quota checks, checkpoint-before-write, `maxTurns` override |
+| `src/agent/agent.ts` | Multi-turn tool loop (read-only calls in a turn run concurrently), `send_message`/`ask_agent`/`spawn_fork`, approval + quota checks, checkpoint-before-write, `maxTurns` override, verification pass before a changed task may report done |
+| `src/agent/verify.ts` | `detectChecks()` (package.json typecheck/build script, `go build`, `cargo check`) + `runChecks()`; overridden by `verify:` in agents.yaml |
 | `src/agent/context.ts` | `compactTurns()` — summarizes older turns near the context ceiling |
 | `src/orchestrator/planner.ts`, `scheduler.ts`, `runner.ts`, `orchestrator.ts`, `locks.ts`, `task.ts` | Goal→DAG planning, concurrent topological execution, the shared task queue, the lock registry |
 | `src/messaging/message-bus.ts` | Cross-provider agent↔agent channel: `post`/`announce`/`authorize`/`drain`, per-pair rate cap |
 | `src/providers/*` | `Provider` interface; `anthropic.ts`/`gemini.ts`/`openai.ts`/`copilot.ts` clients; `catalog.ts` (+ generated) provider metadata; `pricing.ts` cost table; `factory.ts` instantiation |
-| `src/tools/tools.ts` | Sandboxed `read_file`/`write_file`/`edit`/`shell`, `safePath()` jail; `edit` requires a unique `oldString` match |
+| `src/tools/tools.ts` | Sandboxed `read_file`/`write_file`/`edit`/`shell` + read-only `grep`/`glob`/`list_dir`, `safePath()` jail; line-numbered paged reads; `edit` requires a unique match but recovers from pasted line numbers and indentation drift (`resolveEdit`) |
+| `scripts/eval/` | Harness benchmark: 6 fixture tasks (navigate/edit/verify/restraint) scored on what lands on disk — run before and after any loop or tool change |
 | `src/tools/lsp-tools.ts`, `src/lsp/client.ts`, `src/lsp/registry.ts` | `diagnostics`/`hover` tools over hand-rolled LSP JSON-RPC |
 | `src/mcp/mcp.ts` | MCP subprocess manager, `mcp__<server>__<tool>` namespacing |
 | `src/store/db.ts`, `src/store/session-store.ts` | SQLite (WAL) open/migrate; `SessionStore` — sessions/messages/parts, checkpoint/undo, `listSessions`, `recordMessage` |

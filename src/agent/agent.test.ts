@@ -54,7 +54,11 @@ test("agent runs the full tool loop: request → sandboxed execute → feed back
 
   const bus = new Bus();
   const events: string[] = [];
-  bus.subscribe((e) => events.push(e.type));
+  let fileEditPath: string | undefined;
+  bus.subscribe((e) => {
+    events.push(e.type);
+    if (e.type === "file_edit") fileEditPath = e.path;
+  });
 
   const agent = new Agent(cfg, stub, bus, { root });
   const ok = await agent.run("make a file");
@@ -63,6 +67,10 @@ test("agent runs the full tool loop: request → sandboxed execute → feed back
   expect(n).toBe(2); // looped: executed the tool, then finished
   expect(readFileSync(join(root, "out.txt"), "utf8")).toBe("hi"); // the sandbox actually wrote it
   expect(events).toEqual(expect.arrayContaining(["message", "tool_call", "file_edit", "done"]));
+  // A structured path on the event, not just baked into the human-readable payload string — this
+  // is what lets a consumer (e.g. the IDE's file-tree decorations) know which file changed without
+  // parsing "write_file → wrote 2 bytes".
+  expect(fileEditPath).toBe("out.txt");
 });
 
 test("streams text deltas to the bus, then a final message", async () => {
@@ -999,4 +1007,110 @@ test("injectNotes replaces the previous board turn instead of accumulating a new
   expect(boardTurns).toHaveLength(1); // not 3 — each change replaced the last, not appended to it
   expect((boardTurns[0] as { text: string }).text).toContain("v3"); // and it's the latest content
   expect((boardTurns[0] as { text: string }).text).not.toContain("v1");
+});
+
+// ── One turn's tool calls: read-only together, anything that changes the world in order ──────
+
+test("independent reads in one turn run together, not one round-trip at a time", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-par-"));
+  for (const n of ["a", "b", "c"]) writeFileSync(join(root, `${n}.txt`), n);
+  let inFlight = 0;
+  let peak = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (turns.some((t) => t.role === "tool")) return { text: "done", toolCalls: [] };
+      return {
+        text: "",
+        toolCalls: ["a", "b", "c"].map((n, i) => ({ id: String(i), name: "read_file", input: { path: `${n}.txt` } })),
+      };
+    },
+  };
+  const bus = new Bus();
+  bus.subscribe((e) => {
+    if (e.type !== "tool_call") return;
+    // "read_file {…}" is published on entry; "read_file → …" on completion.
+    if (e.payload.includes("→")) inFlight--;
+    else peak = Math.max(peak, ++inFlight);
+  });
+  await new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, bus, { root }).run("read them");
+  expect(peak).toBe(3);
+});
+
+test("a write is never overlapped with the calls around it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-seq-"));
+  writeFileSync(join(root, "a.txt"), "a");
+  const order: string[] = [];
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (turns.some((t) => t.role === "tool")) return { text: "done", toolCalls: [] };
+      return {
+        text: "",
+        toolCalls: [
+          { id: "0", name: "read_file", input: { path: "a.txt" } },
+          { id: "1", name: "write_file", input: { path: "b.txt", content: "b" } },
+          { id: "2", name: "read_file", input: { path: "b.txt" } },
+        ],
+      };
+    },
+  };
+  const bus = new Bus();
+  bus.subscribe((e) => {
+    if (e.type === "tool_call" || e.type === "file_edit") order.push(e.payload.slice(0, 24));
+  });
+  await new Agent({ ...cfg, allowedTools: ["read_file", "write_file"] }, stub, bus, { root }).run("read, write, read");
+  // The final read sees the file the write just created — which is only true if they were ordered.
+  const last = order[order.length - 1] ?? "";
+  expect(last).toContain("read_file →");
+});
+
+// ── Verification: "done" has to survive the project's own checks ─────────────────────────────
+
+test("a run that changed files must pass the checks before it reports done", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-verify-"));
+  let calls = 0;
+  let fixed = false;
+  const stub: Provider = {
+    async send(_s, turns) {
+      // Writes v1, claims to be done, is handed the failing check, then writes v2 and stops.
+      if (calls++ === 0) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "x.txt", content: "v1" } }] };
+      if (!fixed && turns.some((t) => t.role === "user" && t.text.includes("do not pass"))) {
+        fixed = true;
+        return { text: "", toolCalls: [{ id: "2", name: "write_file", input: { path: "x.txt", content: "v2" } }] };
+      }
+      return { text: "finished", toolCalls: [] };
+    },
+  };
+  // Fails while the file says v1, passes once it says v2 — a check with a real, changeable verdict.
+  const check = { name: "grep v2", command: "grep", args: ["-q", "v2", "x.txt"] };
+  const agent = new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] });
+  const r = await agent.runDetailed("write it");
+  expect(r.outcome).toBe("done");
+  expect(readFileSync(join(root, "x.txt"), "utf8")).toBe("v2");
+});
+
+test("a run that wrote nothing is not sent off to a build it cannot have broken", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-noverify-"));
+  let ran = false;
+  const stub: Provider = { async send() { return { text: "nothing to do here", toolCalls: [] }; } };
+  const check = { name: "touch ran", command: "touch", args: ["ran"] };
+  await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).run("look only");
+  ran = existsSync(join(root, "ran"));
+  expect(ran).toBe(false);
+});
+
+test("a check the model cannot satisfy stops instead of looping on it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-verify-loop-"));
+  let writes = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (!turns.some((t) => t.role === "tool") || turns[turns.length - 1]?.role === "user") {
+        writes++;
+        return { text: "", toolCalls: [{ id: String(writes), name: "write_file", input: { path: "x.txt", content: "nope" } }] };
+      }
+      return { text: "done I promise", toolCalls: [] };
+    },
+  };
+  const check = { name: "always fails", command: "false", args: [] };
+  await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, verify: [check] }).run("write it");
+  expect(writes).toBeLessThanOrEqual(3); // the initial write plus at most MAX_VERIFY_ROUNDS retries
 });

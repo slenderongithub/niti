@@ -1,5 +1,6 @@
 import { relative } from "node:path";
 import { Agent, type AgentConfig } from "./agent/agent.ts";
+import { detectChecks, parseChecks } from "./agent/verify.ts";
 import { Bus } from "./events/bus.ts";
 import { MessageBus, USER, type Messenger } from "./messaging/message-bus.ts";
 import { Orchestrator } from "./orchestrator/orchestrator.ts";
@@ -35,6 +36,10 @@ export interface EngineOptions {
   watch?: boolean; // true → emit external_change events for edits made outside niti
   maxTurns?: number; // `maxTurns:` from agents.yaml — tool-loop cap per agent turn
   worktree?: boolean; // isolate each run's file writes in a fresh git worktree instead of the real root
+  // `verify:` from agents.yaml. Command lines an agent's changes must pass before it may report
+  // done; omitted → detected from the project (a typecheck/build script, go build, cargo check);
+  // `verify: false` → nothing is run.
+  verify?: string[] | false;
 }
 
 // The Engine wires the whole multi-agent runtime: agents (with a live messenger so they can talk to
@@ -129,6 +134,13 @@ export class Engine {
     const permissionLayers = [...(opts.permissions ? [opts.permissions] : []), ...(opts.auto ? [AUTO_RULES] : [])];
     this.permissionLayers = permissionLayers;
 
+    // Resolved once, at wiring time: detection reads package.json/go.mod off disk, and doing that
+    // per task would re-read it on every one of them for an answer that cannot change mid-run.
+    const checks = opts.verify === false ? [] : opts.verify ? parseChecks(opts.verify) : detectChecks(this.root);
+    if (checks.length > 0) {
+      this.bus.publish({ agentId: "orchestrator", type: "thought", payload: `verifying changes with: ${checks.map((c) => c.name).join(", ")}`, time: Date.now() });
+    }
+
     for (const c of opts.configs) {
       this.declaredPrompts.set(c.id, c.systemPrompt);
       const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + TOOL_GUIDANCE };
@@ -170,6 +182,7 @@ export class Engine {
         lsp: opts.lsp,
         onWrite: (path) => this.watcher?.markSelfWrite(path),
         maxTurns: opts.maxTurns,
+        verify: checks,
         shouldStop: () => this.cancelled,
       });
       this.agents.push(agent);

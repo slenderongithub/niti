@@ -58,6 +58,9 @@ export interface NitiOptions {
   maxTurns?: number; // tool-loop cap per agent turn; the built-in default is 12
   maxAgents?: number; // ceiling on team size, enforced when agents.yaml is loaded
   worktree?: boolean; // isolate each run's file writes in a fresh git worktree (same as --worktree)
+  // Commands an agent's changes must pass before it may report a task done, e.g.
+  // ["bun run typecheck", "bun test"]. Omitted → detected from the project; `false` → never verify.
+  verify?: string[] | false;
 }
 
 export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
@@ -72,6 +75,8 @@ export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
     maxTurns: num(raw.maxTurns),
     maxAgents: num(raw.maxAgents),
     worktree: raw.worktree === true,
+    // `false` is meaningful here (turn detection off), so it can't collapse into undefined.
+    verify: raw.verify === false ? false : Array.isArray(raw.verify) ? raw.verify.filter((v): v is string => typeof v === "string") : undefined,
   };
 }
 
