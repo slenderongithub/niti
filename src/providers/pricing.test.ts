@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { priceFor, costOf } from "./pricing.ts";
+import { priceFor, costOf, inputIncludesCache } from "./pricing.ts";
 import { CATALOG } from "./catalog.ts";
 import { GENERATED_PRICES } from "./catalog.generated.ts";
 
@@ -57,4 +57,31 @@ test("models.dev prices are used for generated providers", () => {
   expect(pair).toBeDefined();
   const [provider, ...rest] = pair!.split("/");
   expect(priceFor(provider!, rest.join("/"))).toEqual(GENERATED_PRICES[pair!]!);
+});
+
+test("OpenAI and Gemini report cached tokens inside the input count, so they are billed at 0.1x, not 1.1x", () => {
+  // 1M prompt tokens, of which 800k were served from cache: 200k full price + 800k at 0.1x.
+  for (const [provider, model, input] of [
+    ["openai", "gpt-4o", 2.5],
+    ["google", "gemini-flash-lite-latest", 0.1],
+  ] as const) {
+    const cached = costOf(provider, model, 1_000_000, 0, 800_000);
+    expect(cached.usd).toBeCloseTo(0.2 * input + 0.8 * input * 0.1, 6);
+    // The old formula charged input + 0.1x cache on top: 1.08x of the uncached price, i.e. more
+    // than a run with no cache at all.
+    expect(cached.usd).toBeLessThan(costOf(provider, model, 1_000_000, 0).usd);
+  }
+});
+
+test("Anthropic reports cache beside the input count, so it is still added, not subtracted", () => {
+  expect(inputIncludesCache("anthropic")).toBe(false);
+  expect(inputIncludesCache("openai")).toBe(true);
+  expect(inputIncludesCache("google")).toBe(true);
+  expect(inputIncludesCache("github-copilot")).toBe(true);
+  // 1M uncached + 1M read: both billed, nothing subtracted.
+  expect(costOf("anthropic", "claude-sonnet-5", 1_000_000, 0, 1_000_000).usd).toBeCloseTo(3 + 0.3, 6);
+});
+
+test("cache reads larger than the reported input never produce a negative bill", () => {
+  expect(costOf("openai", "gpt-4o", 100, 0, 500).usd).toBeGreaterThanOrEqual(0);
 });

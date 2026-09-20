@@ -6,6 +6,7 @@
 // per-model `cost` block; teach scripts/gen-catalog.ts to emit it and read from there instead.
 
 import { GENERATED_PRICES } from "./catalog.generated.ts";
+import { CATALOG } from "./catalog.ts";
 
 export interface Price {
   input: number; // USD per 1M input tokens
@@ -82,6 +83,16 @@ export function priceFor(provider: string, model: string): Price | undefined {
 const CACHE_WRITE_MULTIPLIER = 1.25;
 const CACHE_READ_MULTIPLIER = 0.1;
 
+// Whether a provider's reported input count already contains its cache reads. Anthropic's
+// `input_tokens` is only the uncached tail, with reads and writes reported beside it. OpenAI
+// (`prompt_tokens`), Gemini (`promptTokenCount`) and Copilot (which wraps the OpenAI client) report
+// the whole prompt and the cached part as a breakdown of it. Adding the cache term on top of those
+// billed every cached token at 1.1x instead of 0.1x.
+export function inputIncludesCache(provider: string): boolean {
+  const entry = Object.hasOwn(CATALOG, provider) ? CATALOG[provider] : undefined;
+  return entry !== undefined && entry.client !== "anthropic";
+}
+
 // USD for one agent's cumulative usage. 0 for an unpriced model, so a mixed team still reports the
 // cost of the models it does know — `priced` tells the caller whether the total is complete.
 export function costOf(
@@ -94,8 +105,9 @@ export function costOf(
 ): { usd: number; priced: boolean } {
   const p = priceFor(provider, model);
   if (!p) return { usd: 0, priced: false };
+  const uncachedInput = inputIncludesCache(provider) ? Math.max(0, inputTokens - cacheReadTokens) : inputTokens;
   const usd =
-    (inputTokens * p.input +
+    (uncachedInput * p.input +
       outputTokens * p.output +
       cacheReadTokens * p.input * CACHE_READ_MULTIPLIER +
       cacheWriteTokens * p.input * CACHE_WRITE_MULTIPLIER) /

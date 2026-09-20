@@ -24,7 +24,7 @@ import { makeProvider } from "../../src/providers/factory.ts";
 import { detectChecks } from "../../src/agent/verify.ts";
 import { TOOL_GUIDANCE } from "../../src/tools/tools.ts";
 import { steeringFor } from "../../src/agent/steering.ts";
-import { costOf } from "../../src/providers/pricing.ts";
+import { costOf, inputIncludesCache } from "../../src/providers/pricing.ts";
 import { TASKS, type Task } from "./tasks.ts";
 
 const args = process.argv.slice(2);
@@ -39,6 +39,7 @@ const repeat = Math.max(1, Number(flag("repeat", "1")));
 const only = flag("only", "");
 const keep = args.includes("--keep");
 const verbose = args.includes("--verbose");
+const trace = args.includes("--trace"); // per-call table under every run: where the tokens go, turn by turn
 
 const SYSTEM_PROMPT =
   "You are a senior software engineer working in an existing project. " +
@@ -54,6 +55,56 @@ function setup(task: Task): string {
   return dir;
 }
 
+// One row per model call. `tool` is what that call asked for (filled in when the next call lands, or
+// at the end of the run); `ms` is the wall time since the previous call returned, so it covers the
+// previous step's tool execution as well as this call's model latency. Cached vs uncached is split
+// the way the provider reports it: Anthropic's input excludes cache, everyone else's includes it.
+interface CallRow {
+  turn: number;
+  tool: string;
+  uncached: number;
+  cached: number;
+  cacheWrite: number;
+  output: number;
+  ms: number;
+}
+
+class TracingUsage extends UsageTracker {
+  rows: CallRow[] = [];
+  private pending: string[] = [];
+  private mark = Date.now();
+  noteTool(name: string): void {
+    this.pending.push(name);
+  }
+  override record(agentId: string, input: number, output: number, cacheRead = 0, cacheWrite = 0): void {
+    super.record(agentId, input, output, cacheRead, cacheWrite);
+    this.flushTools();
+    const now = Date.now();
+    this.rows.push({
+      turn: this.rows.length + 1,
+      tool: "",
+      uncached: inputIncludesCache(provider) ? Math.max(0, input - cacheRead) : input,
+      cached: cacheRead,
+      cacheWrite,
+      output,
+      ms: now - this.mark,
+    });
+    this.mark = now;
+  }
+  flushTools(): void {
+    const last = this.rows[this.rows.length - 1];
+    if (last) last.tool = [...new Set(this.pending)].join("+") || "-";
+    this.pending = [];
+  }
+}
+
+function printTrace(rows: CallRow[]): void {
+  console.log(`    ${"turn".padStart(4)}  ${"tool".padEnd(24)} ${"uncached".padStart(9)} ${"cached".padStart(8)} ${"cwrite".padStart(7)} ${"output".padStart(7)} ${"ms".padStart(7)}`);
+  for (const r of rows) {
+    console.log(`    ${String(r.turn).padStart(4)}  ${r.tool.slice(0, 24).padEnd(24)} ${String(r.uncached).padStart(9)} ${String(r.cached).padStart(8)} ${String(r.cacheWrite).padStart(7)} ${String(r.output).padStart(7)} ${String(r.ms).padStart(7)}`);
+  }
+}
+
 interface Attempt {
   ok: boolean;
   errored: boolean; // the provider never answered — not a verdict on the harness
@@ -63,6 +114,7 @@ interface Attempt {
   tokens: number;
   cost: number;
   seconds: number;
+  rows: CallRow[];
 }
 
 // A rate limit is not a failing grade. Free-tier quotas trip constantly on a suite like this, and
@@ -77,7 +129,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function runOne(task: Task): Promise<Attempt> {
   const dir = setup(task);
-  const usage = new UsageTracker();
+  const usage = new TracingUsage();
   const cfg: AgentConfig = {
     id: "eval",
     provider,
@@ -90,6 +142,10 @@ async function runOne(task: Task): Promise<Attempt> {
     allowedTools: ["read_file", "write_file", "edit", "shell"],
   };
   const bus = new Bus();
+  // Tool names for the trace. file_edit is what a write tool publishes instead of tool_call.
+  bus.subscribe((e) => {
+    if (e.type === "tool_call" || e.type === "file_edit") usage.noteTool(e.payload.split(" ")[0]!);
+  });
   if (verbose) {
     bus.subscribe((e) => {
       // Warnings carry the verification verdict and the check-gaming guard — the two things most
@@ -111,6 +167,7 @@ async function runOne(task: Task): Promise<Attempt> {
   } catch (err) {
     outcome = `error: ${(err as Error).message}`;
   }
+  usage.flushTools();
   const seconds = (Date.now() - started) / 1000;
   const read = (p: string): string | undefined => (existsSync(join(dir, p)) ? readFileSync(join(dir, p), "utf8") : undefined);
   const reason = task.check(read) ?? "";
@@ -127,6 +184,7 @@ async function runOne(task: Task): Promise<Attempt> {
     tokens: totals.inputTokens + totals.outputTokens,
     cost: costOf(provider, model, totals.inputTokens, totals.outputTokens, totals.cacheReadTokens, totals.cacheWriteTokens).usd,
     seconds,
+    rows: usage.rows,
   };
 }
 
@@ -143,6 +201,8 @@ let scored = 0;
 let errors = 0;
 let cost = 0;
 let tokens = 0;
+let allUncached = 0;
+let allCached = 0;
 const byKind = new Map<string, { pass: number; total: number }>();
 const gap = Number(flag("delay", "4")) * 1000; // free-tier quotas are per-minute; pace for them
 
@@ -172,12 +232,20 @@ for (const task of selected) {
       byKind.set(task.tests, kind);
       console.log(`  ${a.ok ? "PASS" : "FAIL"}  ${label} ${stats}${a.ok ? "" : `\n          ${a.reason || a.outcome}`}`);
     }
+    if (trace && a.rows.length) printTrace(a.rows);
+    for (const r of a.rows) {
+      allUncached += r.uncached;
+      allCached += r.cached;
+    }
     if (gap > 0) await sleep(gap);
   }
 }
 
 const pct = scored > 0 ? Math.round((passed / scored) * 100) : 0;
 console.log(`\n  ${passed}/${scored} passed (${pct}%)  ·  ${tokens.toLocaleString()} tokens  ·  $${cost.toFixed(4)}`);
+if (allUncached + allCached > 0) {
+  console.log(`  cache: ${allCached.toLocaleString()} of ${(allUncached + allCached).toLocaleString()} input tokens served from cache (${Math.round((allCached / (allUncached + allCached)) * 100)}%)`);
+}
 if (errors > 0) console.log(`  ${errors} run(s) never reached the model and were not scored`);
 // Measured, not guessed: one fixture run five times on an unchanged harness scored 4/5. A single
 // pass of this suite therefore carries a noise floor of about one task, and two runs differing by
