@@ -17,7 +17,7 @@ import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
-import { StallGuard, stallNudge } from "./stall.ts";
+import { StallGuard, stallNudge, recurringNudge } from "./stall.ts";
 import { compactTurns, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
 import { createHash } from "node:crypto";
 import { runChecks, checkSurface, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
@@ -519,14 +519,17 @@ export class Agent {
         this.push(turns, { role: "tool", results }, sessionId);
         const verdict = stall.observe(reply.toolCalls, results);
         if (verdict === "stop") {
-          this.lastError = `stalled: ${stall.rounds} rounds of reads and failing commands with no file change, even after being told to act`;
+          this.lastError = stall.kind === "recurring"
+            ? `stalled: the same failure returned after ${stall.recurCount} separate fixes — ${stall.detail}`
+            : `stalled: ${stall.rounds} rounds of reads and failing commands with no file change, even after being told to act`;
           if (sessionId) this.store?.setStatus(sessionId, "exhausted");
           this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
           return { outcome: "exhausted", text: finalText, error: this.lastError };
         }
         if (verdict === "nudge") {
-          this.bus.publish({ agentId: id, type: "warning", payload: `${stall.rounds} rounds without changing a file — telling the agent to act`, time: Date.now() });
-          this.push(turns, { role: "user", text: stallNudge(stall.rounds) }, sessionId);
+          const recurring = stall.kind === "recurring";
+          this.bus.publish({ agentId: id, type: "warning", payload: recurring ? `the same failure keeps coming back after edits — telling the agent to change approach` : `${stall.rounds} rounds without changing a file — telling the agent to act`, time: Date.now() });
+          this.push(turns, { role: "user", text: recurring ? recurringNudge(stall.detail, stall.recurCount) : stallNudge(stall.rounds) }, sessionId);
         }
       }
       // Falling out of the maxTurns loop means the agent never finished. Reporting "done" here

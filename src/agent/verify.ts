@@ -243,7 +243,7 @@ export function taskEditsCheckFile(task: string, rel: string): boolean {
 
 // The first line of a check's output that points somewhere — `file:line` or an explicit error — so
 // the message can name it. A failing report is often forty lines; the model needs the one to start on.
-function firstError(report: string): string | undefined {
+export function firstError(report: string): string | undefined {
   return report.split("\n").map((l) => l.trim()).find((l) => !l.startsWith("$ ") && !/^exit \d+$/.test(l) && (/\S+:\d+/.test(l) || /\berror\b/i.test(l)));
 }
 

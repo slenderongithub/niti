@@ -1,4 +1,5 @@
 import { READ_ONLY_TOOLS, WRITE_TOOLS } from "../tools/tools.ts";
+import { firstError } from "./verify.ts";
 import type { ToolCall, ToolResult } from "../providers/provider.ts";
 
 // The turn cap bounds a run that never finishes, but it bounds it at the price of every turn: an
@@ -19,11 +20,23 @@ import type { ToolCall, ToolResult } from "../providers/provider.ts";
 // A long streak of *distinct, succeeding* reads earns the nudge and nothing more: that is a deep
 // dive, not a loop. Any call that is not a read or a failure — an edit, a passing command, a
 // teammate — is progress and resets everything.
+//
+// The other way to burn a turn budget is not to stop acting but to act without effect: edit, run the
+// check, get the same error, edit again. Observed on `fix-what-it-broke`: five edits to two files,
+// the same "TODO_BROKEN is not defined" after each, a check edited green and failing again. Every
+// round there is progress by the rule above, so a second signal watches the *result*: a failing
+// check is fingerprinted by its first error line, and a recurrence counts only if a write happened
+// since it was last seen (re-running an unchanged check is the stall above, not this). A green run
+// in between does not reset it — a check that was edited green and then fails again is the same
+// failure, not a new one. The run is told at RECUR_NUDGE, and ended at RECUR_STOP.
+export const RECUR_NUDGE = 3;
+export const RECUR_STOP = 5;
 // ponytail: fixed thresholds. Tune from eval traces; a per-task budget is the upgrade if these bite.
 export const NUDGE_AFTER = 8;
 export const STOP_AFTER = 6;
 
 export type StallVerdict = "ok" | "nudge" | "stop";
+export type StallKind = "idle" | "recurring";
 
 const spins = (call: ToolCall, r: ToolResult): boolean =>
   READ_ONLY_TOOLS.has(call.name) || r.output.startsWith("error:") || (call.name === "shell" && /^exit (?!0\b)/.test(r.output));
@@ -35,9 +48,50 @@ export class StallGuard {
   private sinceNudge = 0;
   private failing = false; // something in this streak failed or repeated
   private seen = new Set<string>();
+  private epoch = 0; // successful writes so far
+  private errors = new Map<string, { count: number; epoch: number }>(); // failing-check fingerprint → recurrences
+  private nudgedErrors = new Set<string>();
+  kind: StallKind = "idle"; // what the last nudge/stop was about
+  detail = ""; // the recurring error, when kind is "recurring"
 
   // One round: the calls the model made and what came back, in the same order.
   observe(calls: ToolCall[], results: ToolResult[]): StallVerdict {
+    const recur = this.observeRecurrence(calls, results);
+    const idle = this.observeIdle(calls, results); // always: it owns the reset on progress
+    if (recur !== "ok") return recur;
+    if (idle !== "ok") this.kind = "idle";
+    return idle;
+  }
+
+  private observeRecurrence(calls: ToolCall[], results: ToolResult[]): StallVerdict {
+    if (calls.some((c, i) => WRITE_TOOLS.has(c.name) && !results[i]?.output.startsWith("error:"))) this.epoch++;
+    let verdict: StallVerdict = "ok";
+    calls.forEach((c, i) => {
+      const out = results[i]?.output ?? "";
+      if (c.name !== "shell" || !/^exit (?!0\b)/.test(out)) return;
+      const fp = firstError(out)?.slice(0, 200);
+      if (!fp) return;
+      const e = this.errors.get(fp);
+      if (!e) return void this.errors.set(fp, { count: 1, epoch: this.epoch });
+      if (this.epoch === e.epoch) return; // same tree, same answer: not a new attempt
+      e.count++;
+      e.epoch = this.epoch;
+      if (e.count >= RECUR_STOP) verdict = "stop";
+      else if (e.count >= RECUR_NUDGE && !this.nudgedErrors.has(fp) && verdict !== "stop") {
+        this.nudgedErrors.add(fp);
+        verdict = "nudge";
+      }
+      if (verdict !== "ok") {
+        this.kind = "recurring";
+        this.detail = fp;
+        this.recurCount = e.count;
+      }
+    });
+    return verdict;
+  }
+  recurCount = 0;
+
+  private observeIdle(calls: ToolCall[], results: ToolResult[]): StallVerdict {
     const wrote = calls.some((c, i) => WRITE_TOOLS.has(c.name) && !results[i]?.output.startsWith("error:"));
     const stagnant = !wrote && calls.length > 0 && calls.every((c, i) => results[i] !== undefined && spins(c, results[i]!));
     if (wrote) this.armed = true;
@@ -69,6 +123,15 @@ export class StallGuard {
   get rounds(): number {
     return this.streak;
   }
+}
+
+export function recurringNudge(error: string, times: number): string {
+  return (
+    `The same failure has now come back after ${times} separate attempts to fix it:\n\n${error}\n\n` +
+    `Variations of the same fix are not working, so stop varying it. Read that message literally: what does it say is wrong, and which line is it about? ` +
+    `Fix that cause in the code the check is examining. Do not edit the check, its script or its configuration to make it stop complaining — ` +
+    `that only hides the failure. If you cannot fix it, stop and report what is blocking you.`
+  );
 }
 
 export function stallNudge(rounds: number): string {
