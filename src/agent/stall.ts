@@ -28,9 +28,10 @@ import type { ToolCall, ToolResult } from "../providers/provider.ts";
 // check is fingerprinted by its first error line, and a recurrence counts only if a write happened
 // since it was last seen (re-running an unchanged check is the stall above, not this). A green run
 // in between does not reset it — a check that was edited green and then fails again is the same
-// failure, not a new one. The run is told at RECUR_NUDGE, and ended at RECUR_STOP.
+// failure, not a new one. The run is told at RECUR_NUDGE, and ended at RECUR_STOP — the very next attempt. Measured at 5 it ended at
+// call 26 of 30, saving almost nothing; the two-call cost of each attempt is why the count is low.
 export const RECUR_NUDGE = 3;
-export const RECUR_STOP = 5;
+export const RECUR_STOP = 4; // one attempt after the nudge: a run that ignores it has shown it will not change course
 // ponytail: fixed thresholds. Tune from eval traces; a per-task budget is the upgrade if these bite.
 export const NUDGE_AFTER = 8;
 export const STOP_AFTER = 6;
