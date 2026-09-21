@@ -428,6 +428,18 @@ function step() {
       }
     }
     a.vx *= 0.85; a.vy *= 0.85;
+  }
+  // The pull toward the lead isn't reciprocal, so the forces don't cancel and the whole team slides
+  // to one side until it hits the wall. Spring the group's centroid back to the middle instead.
+  let cx = 0, cy = 0;
+  for (const a of arr) { cx += a.x; cy += a.y; }
+  cx = 0.5 - cx / arr.length; cy = 0.5 - cy / arr.length;
+  for (const a of arr) if (!a.pinned) { a.vx += cx * 0.2; a.vy += cy * 0.2; }
+  // Integrate only after every force is computed. Moving each node inside the loop above made the
+  // later nodes see the earlier ones' new positions, an asymmetry that added up to a steady drift
+  // toward the bottom-right corner.
+  for (const a of arr) {
+    if (a.pinned) continue;
     a.x = Math.max(0.08, Math.min(0.92, a.x + a.vx));
     a.y = Math.max(0.1, Math.min(0.9, a.y + a.vy));
   }
