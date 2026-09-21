@@ -21,6 +21,7 @@ import { Agent, type AgentConfig } from "../../src/agent/agent.ts";
 import { Bus } from "../../src/events/bus.ts";
 import { UsageTracker } from "../../src/usage.ts";
 import { makeProvider } from "../../src/providers/factory.ts";
+import type { Provider } from "../../src/providers/provider.ts";
 import { detectChecks } from "../../src/agent/verify.ts";
 import { TOOL_GUIDANCE } from "../../src/tools/tools.ts";
 import { steeringFor } from "../../src/agent/steering.ts";
@@ -127,6 +128,27 @@ function isInfraError(outcome: string, calls: number): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// --delay spaces whole runs apart, but one run makes ~30 calls in ~20 seconds, so a 15-requests-a-
+// minute free tier is exceeded inside a single run whatever the delay between runs is. This spaces
+// the calls themselves. Defaults to 4.2s for Google (15 RPM) and off elsewhere; `--call-gap 0` disables.
+const callGap = Number(flag("call-gap", provider === "google" ? "4.2" : "0")) * 1000;
+function paced(inner: Provider): Provider {
+  if (callGap <= 0) return inner;
+  let last = 0;
+  return {
+    ...inner,
+    async send(...a: Parameters<Provider["send"]>) {
+      const wait = last + callGap - Date.now();
+      if (wait > 0) await sleep(wait);
+      try {
+        return await inner.send(...a);
+      } finally {
+        last = Date.now();
+      }
+    },
+  };
+}
+
 async function runOne(task: Task): Promise<Attempt> {
   const dir = setup(task);
   const usage = new TracingUsage();
@@ -162,8 +184,11 @@ async function runOne(task: Task): Promise<Attempt> {
     // No `approve`: headless, and every tool is pre-granted — the eval measures capability, not
     // the approval UI. Verification is detected from the fixture exactly as it would be in a
     // real project, so a task whose fixture has no check simply runs without one.
-    const agent = new Agent(cfg, makeProvider(cfg), bus, { root: dir, usageTracker: usage, verify: detectChecks(dir) });
-    outcome = await agent.run(task.prompt);
+    const agent = new Agent(cfg, paced(makeProvider(cfg)), bus, { root: dir, usageTracker: usage, verify: detectChecks(dir) });
+    const r = await agent.runDetailed(task.prompt);
+    // The bare outcome is just "failed": a 429 that ended the run midway was indistinguishable from
+    // the model giving up, and scored as its failure. The error text is what says which it was.
+    outcome = r.outcome === "done" ? r.outcome : `${r.outcome}: ${r.error}`;
   } catch (err) {
     outcome = `error: ${(err as Error).message}`;
   }
