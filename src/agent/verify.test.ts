@@ -73,3 +73,23 @@ test("a task that only mentions the check, or forbids touching the config, exemp
   // Only the file it names: a request for one config says nothing about another.
   expect(taskEditsCheckFile("Update tsconfig to ESNext", "eslint.config.js")).toBe(false);
 });
+
+test("terse orchestrator shorthand exempts the config it targets", () => {
+  expect(taskEditsCheckFile("target esnext in tsconfig", "tsconfig.json")).toBe(true);
+  expect(taskEditsCheckFile("deps: bump typescript to 5.5", "package.json")).toBe(true);
+  expect(taskEditsCheckFile("configure eslint rules", "eslint.config.js")).toBe(true);
+  expect(taskEditsCheckFile("eslint: no-console off", "eslint.config.js")).toBe(true);
+  expect(taskEditsCheckFile("python 3.12 in mypy", "mypy.ini")).toBe(true);
+  // Shorthand still names one file only, and a bare tool without a target is still just the check.
+  expect(taskEditsCheckFile("target esnext in tsconfig", "eslint.config.js")).toBe(false);
+  expect(taskEditsCheckFile("make eslint pass", "eslint.config.js")).toBe(false);
+  expect(taskEditsCheckFile("fix types in src/a.ts", "tsconfig.json")).toBe(false);
+});
+
+test("negated directives keep the guard on, shorthand or not", () => {
+  expect(taskEditsCheckFile("do not touch tsconfig", "tsconfig.json")).toBe(false);
+  expect(taskEditsCheckFile("never modify eslint config", "eslint.config.js")).toBe(false);
+  expect(taskEditsCheckFile("tsconfig: leave unchanged", "tsconfig.json")).toBe(false);
+  expect(taskEditsCheckFile("keep tsconfig as is", "tsconfig.json")).toBe(false);
+  expect(taskEditsCheckFile("deps: don't bump typescript", "package.json")).toBe(false);
+});

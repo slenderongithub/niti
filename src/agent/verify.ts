@@ -204,23 +204,39 @@ export function checkSurface(checks: Check[], root = process.cwd()): (path: stri
 // ponytail: prose heuristic, English only. Upgrade path: the planner emits explicit file targets.
 
 const EDIT_VERB = /\b(update|change|edit|modify|add|enable|disable|set|configure|bump|switch|migrate|upgrade|tighten|loosen|relax|raise|lower|remove|turn (on|off))\b/i;
-const NEGATION = /\b(do not|don't|dont|never|without|avoid|leave|shouldn't|must not|not)\b/i;
+const NEGATION = /\b(do not|don't|dont|never|without|avoid|leave|shouldn't|must not|not|keep|preserve|unchanged|untouched|as[- ]is|read-only)\b/i;
+// Orchestrator subtasks are terse: "target esnext in tsconfig", "deps: bump typescript to 5.5". No
+// edit verb, no full sentence — but a short clause aimed at one config is still a request for it.
+const TERSE_MAX_WORDS = 10;
 
-const CONFIG_PHRASES: [file: RegExp, phrase: RegExp][] = [
-  [/^[jt]sconfig\.json$/, /\b[jt]sconfig\b|\b(typescript|ts) (config|compiler)|\bcompiler options?\b/i],
-  [/eslint/, /\b(eslint|lint(er)?) (config|configuration|rules?|settings?)\b|\beslintrc\b/i],
-  [/^(jest|vitest)\.config/, /\b(jest|vitest) (config|configuration|settings?)\b/i],
-  [/^(mypy\.ini|\.flake8|ruff\.toml|pytest\.ini|tox\.ini|setup\.cfg)$/, /\b(ruff|mypy|flake8|pytest|tox) (config|configuration|settings?|options?|rules?)\b/i],
-  [/golangci|clippy/, /\b(golangci(-lint)?|clippy) (config|configuration|rules?)\b/i],
+// [file, phrase for its configuration, the bare tool name — only trusted in terse shorthand]
+const CONFIG_PHRASES: [file: RegExp, phrase: RegExp, tool: string][] = [
+  [/^[jt]sconfig\.json$/, /\b[jt]sconfig\b|\b(typescript|ts) (config|compiler)|\bcompiler options?\b/i, "[jt]sconfig|typescript"],
+  [/eslint/, /\b(eslint|lint(er)?) (config|configuration|rules?|settings?)\b|\beslintrc\b/i, "eslint"],
+  [/^(jest|vitest)\.config/, /\b(jest|vitest) (config|configuration|settings?)\b/i, "jest|vitest"],
+  [/^(mypy\.ini|\.flake8|ruff\.toml|pytest\.ini|tox\.ini|setup\.cfg)$/, /\b(ruff|mypy|flake8|pytest|tox) (config|configuration|settings?|options?|rules?)\b/i, "ruff|mypy|flake8|pytest|tox"],
+  [/golangci|clippy/, /\b(golangci(-lint)?|clippy) (config|configuration|rules?)\b/i, "golangci(?:-lint)?|clippy"],
+  [/^package\.json$/, /^\s*(deps?|dependencies|devdeps|scripts?)\s*:/i, "deps?"],
 ];
 
 export function taskEditsCheckFile(task: string, rel: string): boolean {
   const base = rel.split("/").pop() ?? rel;
   const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const refs = [new RegExp(`(^|[\\s"'\`(/])${escaped}(?![\\w.-])`, "i")];
-  for (const [file, phrase] of CONFIG_PHRASES) if (file.test(base)) refs.push(phrase);
+  // Terse shorthand also accepts the bare tool, but only as a target ("in tsconfig", "eslint: ...") —
+  // "make eslint pass" is short too, and it names the check, not its config.
+  const names = [escaped];
+  for (const [file, phrase, tool] of CONFIG_PHRASES) {
+    if (!file.test(base)) continue;
+    refs.push(phrase);
+    names.push(tool);
+  }
+  const target = new RegExp(`\\b(?:in|to|for|of)\\s+(?:${names.join("|")})(?![\\w.-])|^\\s*(?:${names.join("|")})\\s*:`, "i");
   // Split on sentence ends followed by whitespace, so "tsconfig.json" is not cut at its dot.
-  return task
-    .split(/(?<=[.!?;])\s+|\n+/)
-    .some((sentence) => EDIT_VERB.test(sentence) && !NEGATION.test(sentence) && refs.some((re) => re.test(sentence)));
+  return task.split(/(?<=[.!?;])\s+|\n+/).some((sentence) => {
+    if (NEGATION.test(sentence)) return false; // a prohibition always wins, verb or no verb
+    if (EDIT_VERB.test(sentence) && refs.some((re) => re.test(sentence))) return true;
+    const terse = sentence.trim().split(/\s+/).length <= TERSE_MAX_WORDS;
+    return terse && target.test(sentence);
+  });
 }
