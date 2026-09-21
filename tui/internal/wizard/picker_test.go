@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/ui"
 )
@@ -401,5 +402,48 @@ func TestPickerWithAFullRosterFitsAShortTerminal(t *testing.T) {
 		if got := lipgloss.Height(m.View()); got > h {
 			t.Errorf("full roster at height %d renders %d rows", h, got)
 		}
+	}
+}
+
+// The saved-team row used to carry the whole roster as its description and was cut off at the
+// card's right edge. Now the row is short, the roster is wrapped into a details block under the
+// list, and that block is capped so a big team cannot stretch the card.
+func TestSavedTeamShowsAWrappedBoundedDetailsBlock(t *testing.T) {
+	client, _, _ := fakeCore(t)
+	var existing []api.AgentConfig
+	for i := 0; i < 12; i++ {
+		existing = append(existing, api.AgentConfig{ID: fmt.Sprint(i), Role: fmt.Sprintf("Role%d", i), Provider: "google", Model: "gemini-flash-latest"})
+	}
+	next, _ := NewPicker(client, existing).Update(providersMsg{
+		creds:     []api.Credential{{Provider: "google", Type: "api"}},
+		providers: []api.ProviderInfo{{ID: "google", Label: "Google", Category: "byok"}},
+	})
+	m := next.(Picker)
+	m.width, m.height = 90, 30
+	view := m.View()
+	plain := ansi.Strip(view)
+
+	if !strings.Contains(plain, "Continue with this team (12 agents)") {
+		t.Fatalf("row should be short and count the agents:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Role0 (google/gemini-flash-latest)") || !strings.Contains(plain, "…") {
+		t.Fatalf("details should show the roster and end in an ellipsis when cut:\n%s", plain)
+	}
+	if got := lipgloss.Height(view); got > 30 {
+		t.Fatalf("card is %d rows tall in a 30-row terminal", got)
+	}
+	// 2 list rows + at most 3 detail rows: a 12-agent team must not be any taller than a 40-agent one.
+	before := cardRows(view)
+	for i := 12; i < 40; i++ {
+		existing = append(existing, api.AgentConfig{ID: fmt.Sprint(i), Role: "Extra", Provider: "google", Model: "m"})
+	}
+	next, _ = NewPicker(client, existing).Update(providersMsg{
+		creds:     []api.Credential{{Provider: "google", Type: "api"}},
+		providers: []api.ProviderInfo{{ID: "google", Label: "Google", Category: "byok"}},
+	})
+	big := next.(Picker)
+	big.width, big.height = 90, 30
+	if after := cardRows(big.View()); after != before {
+		t.Fatalf("a bigger team changed the card height: %d -> %d", before, after)
 	}
 }

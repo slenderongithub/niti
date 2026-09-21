@@ -361,8 +361,14 @@ func (m *Picker) toTeam() {
 	for _, a := range m.existing {
 		summary = append(summary, a.Role+" ("+a.Provider+"/"+a.Model+")")
 	}
+	noun := "agents"
+	if len(m.existing) == 1 {
+		noun = "agent"
+	}
+	// The row stays short; the full roster goes in Detail and is shown, wrapped and bounded, under
+	// the list. Putting it in Desc truncated it at the card's right edge.
 	m.list.Set([]ui.Item{
-		{Label: "Continue with this team", Value: "keep", Desc: strings.Join(summary, " · ")},
+		{Label: fmt.Sprintf("Continue with this team (%d %s)", len(m.existing), noun), Value: "keep", Detail: strings.Join(summary, " · ")},
 		{Label: "Pick a new team", Value: "new", Desc: "replaces the agents: block in .niti/agents.yaml"},
 	})
 	m.input.Placeholder = "enter continues with the saved team"
@@ -573,6 +579,10 @@ func renderRoles(roles []api.AgentConfig) string {
 	return strings.Join(parts, "\n")
 }
 
+// maxDetailLines caps the highlighted row's wrapped Detail block, so a big team can never grow the
+// card by more than this.
+const maxDetailLines = 3
+
 func errText(err error) string {
 	if err == nil {
 		return "empty catalog"
@@ -619,6 +629,18 @@ func (m Picker) View() string {
 	if roles != "" {
 		other += strings.Count(roles, "\n") + 2
 	}
+	// The details block is a fixed-height reservation (see List.DetailRows): it takes rows from the
+	// list, not from the terminal, so a huge team can't stretch the card.
+	var details []string
+	if m.listStage() && fixed == "" {
+		if n := m.list.DetailRows(inner-2, maxDetailLines); n > 0 {
+			details = ui.Wrap(m.list.SelectedDetail(), inner-2, n)
+			for len(details) < n {
+				details = append(details, "")
+			}
+			other += n + 1
+		}
+	}
 	listRows := m.list.Rows(clamp(m.height-other, 3, 14))
 	body := head
 	switch {
@@ -626,6 +648,13 @@ func (m Picker) View() string {
 		body += "\n  " + fixed
 	case m.listStage():
 		body += "\n" + m.list.Render(inner, listRows, theme.BgPane)
+		if len(details) > 0 {
+			muted := lipgloss.NewStyle().Foreground(theme.Muted).Background(theme.BgPane)
+			body += "\n"
+			for _, l := range details {
+				body += "\n" + muted.Render("  "+l)
+			}
+		}
 	}
 	if roles != "" {
 		body = roles + "\n\n" + body
