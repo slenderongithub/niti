@@ -607,7 +607,19 @@ func (m Picker) View() string {
 	cardW := fit(m.width, widest(head, hint, fixed, roles, m.input.Placeholder)+2, m.list.NaturalWidth())
 	inner := cardW - 2
 
-	listRows := m.list.Rows(clamp(m.height-14, 3, 14))
+	if m.status != "" {
+		hint = m.status + "\n" + hint
+	}
+	// The list gets whatever height the card's other lines leave, not a fixed 14: a long saved team
+	// adds its own roster block above the list, and a fixed budget pushed the card past the bottom
+	// of a normal terminal. List.Render already scrolls its window with the cursor, so a smaller
+	// budget just means a shorter window. Non-list lines: head, roles block (+ blank), hint (+ blank),
+	// prompt (+ blank), then the card border (2) and the two header rows.
+	other := 1 + strings.Count(hint, "\n") + 1 + 2 + 1 + 2 + 2
+	if roles != "" {
+		other += strings.Count(roles, "\n") + 2
+	}
+	listRows := m.list.Rows(clamp(m.height-other, 3, 14))
 	body := head
 	switch {
 	case fixed != "":
@@ -617,9 +629,6 @@ func (m Picker) View() string {
 	}
 	if roles != "" {
 		body = roles + "\n\n" + body
-	}
-	if m.status != "" {
-		hint = m.status + "\n" + hint
 	}
 	// The prompt is the last line of the card, so it gets the card's width and no more — a textinput
 	// sized to the terminal is what used to blow the card out to full width before anything was typed.

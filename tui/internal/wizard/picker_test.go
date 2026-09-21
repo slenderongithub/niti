@@ -2,6 +2,7 @@ package wizard
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/ui"
 )
 
 // MaxAgents must match the web dashboard's pixel-avatar palette (web/avatar.js's AVATAR_COLORS) —
@@ -377,5 +379,27 @@ func TestWantsExit(t *testing.T) {
 	}
 	if !free.wantsExit("/exit") || free.wantsExit("exit") {
 		t.Error("free-text stage: only the slash form should exit")
+	}
+}
+
+// A saved roster of six long entries used to stack above a list sized for a tall terminal, pushing
+// the card off the bottom. The list now takes only the rows the rest of the card leaves.
+func TestPickerWithAFullRosterFitsAShortTerminal(t *testing.T) {
+	client, _, _ := fakeCore(t)
+	m := loaded(t, client)
+	for i := 0; i < MaxAgents; i++ {
+		m.roles = append(m.roles, api.AgentConfig{ID: "a", Role: "Teammate", Provider: "anthropic", Model: "claude-opus-4-8"})
+	}
+	m.stage = "provider"
+	items := make([]ui.Item, 60)
+	for i := range items {
+		items[i] = ui.Item{Label: fmt.Sprintf("provider-%d", i), Value: "x"}
+	}
+	m.list.Set(items)
+	for _, h := range []int{24, 30} {
+		m.width, m.height = 90, h
+		if got := lipgloss.Height(m.View()); got > h {
+			t.Errorf("full roster at height %d renders %d rows", h, got)
+		}
 	}
 }

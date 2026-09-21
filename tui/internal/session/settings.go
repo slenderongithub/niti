@@ -389,7 +389,7 @@ func (m Model) avatarRow(w int) string {
 // in amber so numbers catch the eye.
 func kv(w int, label, val string) string {
 	bg := theme.BgDeep
-	l := txt(theme.Accent, bg).Render(pad(label, 16))
+	l := txt(theme.Accent, bg).Render(pad(label, 20)) // widest label ("Settings sources", 16) + a 4-cell gutter
 	return truncate(l+txt(theme.Amber, bg).Render(val), w)
 }
 
