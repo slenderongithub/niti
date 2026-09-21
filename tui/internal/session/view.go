@@ -461,7 +461,7 @@ func (m Model) agentBlock(st *agentState, w, per int) string {
 		body = append(append([]string{}, body...), st.pending) // the line still being streamed
 	}
 	if st.running != "" {
-		body = append(append([]string{}, body...), spinner()+" "+st.running+"…")
+		body = append(append([]string{}, body...), spinner(m.prefs["reduceMotion"])+" "+st.running+"…")
 	}
 	if len(body) == 0 {
 		body = []string{"—"}

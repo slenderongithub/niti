@@ -205,7 +205,7 @@ func (m Model) settConfig(w int) []string {
 			mark, label = "▸ ", txt(theme.Accent, bg).Bold(true)
 		}
 		val := txt(theme.Amber, bg).Render(it.Value)
-		lines = append(lines, truncate(mark+label.Render(pad(it.Label+":", 22))+val+txt(theme.Muted, bg).Render("   "+it.Hint), w))
+		lines = append(lines, truncate(mark+label.Render(pad(it.Label+":", 30))+val+txt(theme.Muted, bg).Render("   "+it.Hint), w))
 	}
 	lines = append(lines, "", txt(theme.Accent, bg).Bold(true).Render("Agents"))
 	for _, id := range m.order {

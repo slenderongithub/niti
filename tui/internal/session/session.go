@@ -50,6 +50,8 @@ type agentState struct {
 	ctxLimit int // the model's context window, from /session
 	log      []string
 	verbose  bool       // mirrors Model.verbose: no merging of same-tool runs
+	showDur  bool       // mirrors the showTurnDuration pref: finished tool lines carry how long they took
+	runStart time.Time  // when the in-flight tool call began
 	running  string     // tool call in flight, e.g. "Run npm test"; see toolfeed.go
 	group    *toolGroup // the collapsed line at the tail of log, if any
 	pending  string // partial line being streamed by `delta` events, shown live under the log
@@ -99,7 +101,8 @@ func (s *agentState) feedDelta(chunk string) {
 
 type Model struct {
 	sid       string // this TUI launch's id, shown on the Status tab
-	lightMode                 bool // mirrors theme.IsLight(); persisted by the core as `lightMode:`
+	prefs                     map[string]bool // Config-tab flags, mirrored from the core (see prefRows)
+	autoApprove               bool            // default permission mode; POST /auto flips it live
 	autoCompact, thinkingMode bool // mirrors the core's live settings; toggled from the Config tab
 	verbose   bool   // list every tool call separately instead of collapsing runs
 	ticking   bool // a spinner tick is scheduled
@@ -173,17 +176,31 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	m := Model{
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected",
-		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), lightMode: sess.LightMode,
+		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), prefs: map[string]bool{"projectInstructions": true}, autoApprove: sess.Auto,
 		autoCompact: true, thinkingMode: true, // the core's defaults, kept when an older core sends none
 	}
 	if sess.Settings != nil {
 		m.autoCompact, m.thinkingMode = sess.Settings.AutoCompact, sess.Settings.ThinkingMode
 	}
+	for k, v := range sess.Prefs {
+		m.prefs[k] = v
+	}
 	for i, c := range sess.Agents {
 		m.order = append(m.order, c.ID)
 		m.agents[c.ID] = &agentState{
 			cfg: c, status: "idle", color: theme.AgentColor(i), avatar: theme.Avatar(i),
-			ctxLimit: sess.ContextLimits[c.ID],
+			ctxLimit: sess.ContextLimits[c.ID], showDur: m.prefs["showTurnDuration"],
+		}
+	}
+	// "Open agents view by default": start on the lead's tab (or the first agent) rather than the
+	// stacked overview. Same field ctrl+g / alt+1..9 set, so esc still returns to the overview.
+	if m.prefs["openAgentsView"] && len(m.order) > 1 {
+		m.focus = m.order[0]
+		for _, id := range m.order {
+			if m.agents[id].cfg.Lead {
+				m.focus = id
+				break
+			}
 		}
 	}
 	// Seeded with the local-only commands so "/" suggests something even before the server registry
@@ -351,13 +368,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, e := range msg {
 			m.apply(e)
 		}
-		if !m.ticking && m.anyRunning() {
+		if !m.ticking && m.anyRunning() && !m.prefs["reduceMotion"] {
 			m.ticking = true
 			return m, tea.Batch(waitFor(m.events), tick())
 		}
 		return m, waitFor(m.events) // one View for the whole batch
 	case tickMsg:
-		if m.ticking = m.anyRunning(); m.ticking {
+		if m.ticking = m.anyRunning() && !m.prefs["reduceMotion"]; m.ticking {
 			return m, tick()
 		}
 		return m, nil

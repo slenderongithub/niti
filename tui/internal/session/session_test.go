@@ -523,3 +523,41 @@ func TestShiftEnterIsRecognisedFromTheTerminalReport(t *testing.T) {
 		t.Fatalf("shift+enter should insert a newline, got %q (cmd=%v)", next.(Model).input.Value(), cmd)
 	}
 }
+
+func TestOpenAgentsViewFocusesTheLeadAndReduceMotionStopsTheTick(t *testing.T) {
+	agents := []api.AgentConfig{{ID: "a", Role: "A"}, {ID: "b", Role: "B", Lead: true}}
+	m := New(nil, api.SessionInfo{Agents: agents}, nil, func() {})
+	if m.focus != "" {
+		t.Fatalf("overview is the default, got focus %q", m.focus)
+	}
+	m = New(nil, api.SessionInfo{Agents: agents, Prefs: map[string]bool{"openAgentsView": true}}, nil, func() {})
+	if m.focus != "b" {
+		t.Fatalf("should open on the lead's tab, got %q", m.focus)
+	}
+	if spinner(true) != spinner(true) || !isSpinning(spinner(true)) {
+		t.Fatal("reduced-motion spinner must be a fixed spinFrames glyph")
+	}
+
+	// With reduce motion on, a running agent must not schedule the animation tick.
+	m = New(nil, api.SessionInfo{Agents: agents, Prefs: map[string]bool{"reduceMotion": true}}, nil, func() {})
+	m.agents["a"].running = "Run ls"
+	next, _ := m.Update(tickMsg{})
+	if next.(Model).ticking {
+		t.Fatal("tick kept running under reduce motion")
+	}
+	m.prefs["reduceMotion"] = false
+	if next, _ = m.Update(tickMsg{}); !next.(Model).ticking {
+		t.Fatal("tick should run while an agent is working and motion is on")
+	}
+}
+
+func TestProjectInstructionsDefaultsOnAndAutoApproveComesFromTheCore(t *testing.T) {
+	m := New(nil, api.SessionInfo{}, nil, func() {})
+	if !m.prefs["projectInstructions"] || m.autoApprove {
+		t.Fatalf("defaults wrong: prefs=%v auto=%v", m.prefs, m.autoApprove)
+	}
+	m = New(nil, api.SessionInfo{Auto: true, Prefs: map[string]bool{"projectInstructions": false}}, nil, func() {})
+	if m.prefs["projectInstructions"] || !m.autoApprove {
+		t.Fatalf("core values ignored: prefs=%v auto=%v", m.prefs, m.autoApprove)
+	}
+}

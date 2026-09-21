@@ -396,7 +396,7 @@ func applyTheme(sess api.SessionInfo) {
 	if sess.Theme != "" && !theme.Use(sess.Theme) {
 		fmt.Fprintf(os.Stderr, "niti: unknown theme %q — using %s\n", sess.Theme, theme.Current())
 	}
-	theme.SetLight(sess.LightMode)
+	theme.SetLight(sess.Prefs["lightMode"])
 }
 
 func main() {
