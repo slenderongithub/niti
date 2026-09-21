@@ -17,9 +17,10 @@ import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
+import { StallGuard, stallNudge } from "./stall.ts";
 import { compactTurns, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
 import { createHash } from "node:crypto";
-import { runChecks, checkSurface, taskEditsCheckFile, type Check, type CheckRole } from "./verify.ts";
+import { runChecks, checkSurface, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 
 // Bounds the tool loop so a misbehaving model can't spin forever (maxTurns: in agents.yaml raises
@@ -373,6 +374,7 @@ export class Agent {
     let warned = false;
     let quotaWarned = false;
     let verifyRounds = 0;
+    const stall = new StallGuard();
     // Cleared per run: lastText is shared state, so a run that produces no text at all used to
     // report the *previous* run's output — which the scheduler then stored as this task's result.
     this.lastText = "";
@@ -515,6 +517,17 @@ export class Agent {
         // attaching the approval-time diff) — persisting first would silently drop that from history.
         this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
         this.push(turns, { role: "tool", results }, sessionId);
+        const verdict = stall.observe(reply.toolCalls, results);
+        if (verdict === "stop") {
+          this.lastError = `stalled: ${stall.rounds} rounds of reads and failing commands with no file change, even after being told to act`;
+          if (sessionId) this.store?.setStatus(sessionId, "exhausted");
+          this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
+          return { outcome: "exhausted", text: finalText, error: this.lastError };
+        }
+        if (verdict === "nudge") {
+          this.bus.publish({ agentId: id, type: "warning", payload: `${stall.rounds} rounds without changing a file — telling the agent to act`, time: Date.now() });
+          this.push(turns, { role: "user", text: stallNudge(stall.rounds) }, sessionId);
+        }
       }
       // Falling out of the maxTurns loop means the agent never finished. Reporting "done" here
       // marked the task complete, released its dependents, and fed the review gate whatever text
@@ -1231,15 +1244,6 @@ export class Agent {
     if (ctx.askDepth + 1 > MAX_ASK_DEPTH) return "ask-depth limit reached — answer from what you already know.";
     return m.ask(this.config.id, to, String(call.input.question ?? ""), ctx.askDepth + 1, ctx.sessionId);
   }
-}
-
-// What the agent is told when its work fails the project's checks. The last clause matters: it is
-// the difference between "make this green" and "make this correct".
-function failureMessage(report: string): string {
-  return (
-    `Your changes do not pass this project's checks. This is the real output, not a review:\n\n${report}\n\n` +
-    `Fix the cause, not the symptom. Do not disable, delete or weaken a check to make it pass.`
-  );
 }
 
 // What it is told when the checks went green only because it edited the checks. Deliberately

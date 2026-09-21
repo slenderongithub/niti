@@ -240,3 +240,25 @@ export function taskEditsCheckFile(task: string, rel: string): boolean {
     return terse && target.test(sentence);
   });
 }
+
+// The first line of a check's output that points somewhere — `file:line` or an explicit error — so
+// the message can name it. A failing report is often forty lines; the model needs the one to start on.
+function firstError(report: string): string | undefined {
+  return report.split("\n").map((l) => l.trim()).find((l) => !l.startsWith("$ ") && !/^exit \d+$/.test(l) && (/\S+:\d+/.test(l) || /\berror\b/i.test(l)));
+}
+
+// What the agent is told when its work fails the project's checks. Two things matter. The last
+// clause is the difference between "make this green" and "make this correct". And the instruction
+// to edit is not decoration: shown a failure it did not know how to act on, a weak model reads
+// files and re-runs the check until the turn cap — the check returns the same text until the code
+// changes, so the only useful next call is an edit.
+export function failureMessage(report: string): string {
+  const first = firstError(report);
+  return (
+    `Your changes do not pass this project's checks. This is the real output, not a review:\n\n${report}\n\n` +
+    (first ? `Start with: ${first}\n` : "") +
+    `Your next call should be edit or write_file on the file that error names, not another read or another run of the check: ` +
+    `re-running it returns this same output until the code changes. If the error is a placeholder or stub you left in (a TODO, a dummy return value), replace it with a real implementation.\n\n` +
+    `Fix the cause, not the symptom. Do not disable, delete or weaken a check to make it pass.`
+  );
+}
