@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { runTool } from "../tools/tools.ts";
 import { buildRepoMap, exportedSymbols, repoMapSection } from "./repomap.ts";
 
 function fixture(files: Record<string, string>): string {
@@ -84,4 +85,14 @@ test("in a git repo, gitignored files stay out and new files appear on the next 
 
   writeFileSync(join(root, "src/fresh.ts"), "export const fresh = 1;\n");
   expect(buildRepoMap(root, { maxFiles: 100 })).toContain("src/fresh.ts");
+});
+
+test("the repo_map tool returns the map, zooms by path, and explains an empty one", async () => {
+  const files = hubAndSpokes();
+  for (let i = 0; i < 3; i++) files[`lib/thing${i}.ts`] = "export const t = 1;\n";
+  const root = fixture(files);
+  expect(await runTool({ tool: "repo_map" }, ["repo_map"], root)).toContain("src/core.ts");
+  expect(await runTool({ tool: "repo_map", path: "lib" }, ["repo_map"], root)).toContain("Under lib/");
+  expect(await runTool({ tool: "repo_map" }, ["repo_map"], fixture({ "a.ts": "export const a = 1;\n" }))).toContain("too few source files");
+  await expect(runTool({ tool: "repo_map" }, ["read_file"], root)).rejects.toThrow("not allowed");
 });

@@ -171,7 +171,7 @@ export function truncateMiddle(text: string, maxChars: number): string {
 const KEEP_RECENT_TOOL_TURNS = 10;
 const MASK_HIGH_WATER_CHARS = 30_000; // ~10k tokens of eligible output before a pass is worth its cache miss
 const MASK_MIN_CHARS = 500; // a stub is ~150 chars; below this the saving is not worth the edit
-const OBSERVATION_TOOLS = new Set(["read_file", "shell", "grep", "glob", "list_dir"]);
+const OBSERVATION_TOOLS = new Set(["read_file", "shell", "grep", "glob", "list_dir", "repo_map"]);
 export const MASKED_PREFIX = "[Previous output masked for brevity";
 export const BOARD_STUB = "[Team notes board superseded by newer version]";
 
@@ -190,6 +190,8 @@ function describeCall(call: ToolCall | undefined, name: string): string {
       return `glob ${clip(i.pattern)}`;
     case "list_dir":
       return `list_dir ${clip(i.path)}`;
+    case "repo_map":
+      return `repo_map ${clip(i.path)}`.trim();
     case "todo":
       return "an earlier version of your checklist, superseded by a later one";
     default:
