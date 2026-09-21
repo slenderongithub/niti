@@ -58,7 +58,7 @@ func (s *agentState) toolEnd(keepGroup bool) {
 	if s.running != "" {
 		verb, target, _ := strings.Cut(s.running, " ")
 		s.running = ""
-		if verb == "Write" || verb == "Edit" { // edits stay individual: each has its own diff below
+		if verb == "Write" || verb == "Edit" || s.verbose { // edits stay individual (each has its own diff); verbose lists every call
 			s.group = nil
 			s.push("✔ " + pastVerb[verb] + " " + target)
 		} else if g := s.group; g != nil && g.verb == verb && len(s.log) > 0 && s.log[len(s.log)-1] == collapsedLine(*g) {

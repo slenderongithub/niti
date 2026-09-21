@@ -440,6 +440,9 @@ func main() {
 	go streamWithReconnect(ctx, c.client, events, c.exited)
 
 	m := session.New(c.client, sess, events, cancel)
+	if len(os.Args) > 1 {
+		m = m.OpenSettings(os.Args[1]) // niti status | config | settings | usage | stats
+	}
 	if _, err := tea.NewProgram(m, screenOpts()...).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}

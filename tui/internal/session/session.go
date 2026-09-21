@@ -49,6 +49,7 @@ type agentState struct {
 	ctxUsed  int // most recent call's input tokens = current context depth
 	ctxLimit int // the model's context window, from /session
 	log      []string
+	verbose  bool       // mirrors Model.verbose: no merging of same-tool runs
 	running  string     // tool call in flight, e.g. "Run npm test"; see toolfeed.go
 	group    *toolGroup // the collapsed line at the tail of log, if any
 	pending  string // partial line being streamed by `delta` events, shown live under the log
@@ -97,6 +98,8 @@ func (s *agentState) feedDelta(chunk string) {
 }
 
 type Model struct {
+	sid       string // this TUI launch's id, shown on the Status tab
+	verbose   bool   // list every tool call separately instead of collapsing runs
 	ticking   bool // a spinner tick is scheduled
 	client    *api.Client
 	events    <-chan api.Event
@@ -168,7 +171,7 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	m := Model{
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected",
-		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true,
+		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(),
 	}
 	for i, c := range sess.Agents {
 		m.order = append(m.order, c.ID)
@@ -183,7 +186,22 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return tea.Batch(waitFor(m.events), fetchCommands(m.client)) }
+func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{waitFor(m.events), fetchCommands(m.client)}
+	if m.sett.open { // launched as `niti status` / `niti config`: the panels need their data
+		cmds = append(cmds, fetchStats(m.client), fetchCreds(m.client))
+	}
+	return tea.Batch(cmds...)
+}
+
+// OpenSettings starts the session with the tabbed overlay already open on the tab a `niti <name>`
+// subcommand names. Unknown names leave the session untouched.
+func (m Model) OpenSettings(name string) Model {
+	if tab, ok := settingsTabFor(name); ok {
+		m.sett = settings{open: true, tab: tab}
+	}
+	return m
+}
 
 // The command list lives on the server (src/commands/registry.ts) so the TUI and the web dashboard
 // share one implementation. A failure here is not fatal: /quit still works, and the next fetch —
@@ -288,6 +306,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.sett.stats, m.sett.statsErr = msg.stats, ""
 		}
+		return m, nil
+
+	case credsMsg:
+		m.sett.creds, m.sett.credsLoaded = msg.creds, true
 		return m, nil
 
 	case commandResultMsg:
@@ -600,7 +622,7 @@ func (m *Model) submit(text string) tea.Cmd {
 	if name, args, _ := strings.Cut(strings.TrimPrefix(text, "/"), " "); strings.HasPrefix(text, "/") {
 		if tab, ok := settingsTabFor(name); ok {
 			m.sett = settings{open: true, tab: tab}
-			return fetchStats(m.client) // load the all-time history the Stats/Usage panels draw
+			return tea.Batch(fetchStats(m.client), fetchCreds(m.client)) // load the all-time history the Stats/Usage panels draw
 		}
 		switch name {
 		case "help":
