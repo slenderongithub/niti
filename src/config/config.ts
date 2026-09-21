@@ -64,6 +64,7 @@ export interface NitiOptions {
   verify?: string[] | false;
   autoCompact?: boolean; // false → never compact the context (default true); toggled live via POST /settings
   thinkingMode?: boolean; // false → send no thinking/reasoning parameters (default true)
+  lightMode?: boolean; // TUI light palette; toggled from the Config tab via POST /settings
   repoMap?: boolean; // false → don't put a generated project map in the system prompt
 }
 
@@ -83,6 +84,7 @@ export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
     verify: raw.verify === false ? false : Array.isArray(raw.verify) ? raw.verify.filter((v): v is string => typeof v === "string") : undefined,
     autoCompact: raw.autoCompact === false ? false : undefined,
     thinkingMode: raw.thinkingMode === false ? false : undefined,
+    lightMode: raw.lightMode === true ? true : undefined,
     repoMap: raw.repoMap === false ? false : undefined,
   };
 }

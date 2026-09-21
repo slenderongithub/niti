@@ -74,3 +74,22 @@ func TestPalettesJSONIsTheExpectedFiveDistinctThemes(t *testing.T) {
 		}
 	}
 }
+
+// Light mode keeps the theme but puts every surface on a light background and darkens the accents,
+// and turning it off restores the dark palette exactly.
+func TestLightModeSwapsSurfacesAndRestores(t *testing.T) {
+	Use("neon graveyard")
+	dark, darkGreen := BgDeep, Green
+	SetLight(true)
+	defer SetLight(false)
+	if Current() != "neon graveyard" || !IsLight() {
+		t.Fatalf("light mode must keep the theme, got %q light=%v", Current(), IsLight())
+	}
+	if BgDeep == dark || Fg != lightFg || Green == darkGreen {
+		t.Errorf("light palette not applied: bg=%v fg=%v green=%v", BgDeep, Fg, Green)
+	}
+	SetLight(false)
+	if BgDeep != dark || Green != darkGreen {
+		t.Errorf("dark palette not restored: bg=%v green=%v", BgDeep, Green)
+	}
+}

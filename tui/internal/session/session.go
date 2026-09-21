@@ -99,6 +99,7 @@ func (s *agentState) feedDelta(chunk string) {
 
 type Model struct {
 	sid       string // this TUI launch's id, shown on the Status tab
+	lightMode                 bool // mirrors theme.IsLight(); persisted by the core as `lightMode:`
 	autoCompact, thinkingMode bool // mirrors the core's live settings; toggled from the Config tab
 	verbose   bool   // list every tool call separately instead of collapsing runs
 	ticking   bool // a spinner tick is scheduled
@@ -172,7 +173,7 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	m := Model{
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected",
-		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(),
+		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), lightMode: sess.LightMode,
 		autoCompact: true, thinkingMode: true, // the core's defaults, kept when an older core sends none
 	}
 	if sess.Settings != nil {

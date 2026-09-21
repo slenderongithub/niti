@@ -55,6 +55,7 @@ export function startServer(
     webDir?: string;
     commands?: CommandRegistry;
     theme?: string;
+    lightMode?: boolean;
     makeProvider?: typeof makeProvider;
   } = {},
 ): ServerHandle {
@@ -67,6 +68,9 @@ export function startServer(
   // Mutable, unlike the rest of `opts` — POST /theme updates this in place so /session reflects a
   // theme changed mid-session (by the TUI carousel or the web dropdown) without a server restart.
   let currentTheme = opts.theme ?? "";
+  // TUI-only palette flag, not an engine setting: nothing in the core reads it, it just has to
+  // survive a restart and reach the next TUI launch via /session.
+  let lightMode = opts.lightMode ?? false;
 
   const json = (data: unknown, status = 200) =>
     new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -246,6 +250,7 @@ export function startServer(
           mcp: engine.mcp?.servers?.() ?? [],
           contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider)])),
           settings: engine.settings, // live toggles; change with POST /settings
+          lightMode,
           theme: currentTheme, // `theme:` from agents.yaml, or whatever POST /theme last set
         });
       }
@@ -427,16 +432,17 @@ export function startServer(
       if (p === "/settings" && (method === "GET" || method === "POST")) {
         if (method === "POST") {
           const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-          const keys = ["autoCompact", "thinkingMode"] as const;
+          const keys = ["autoCompact", "thinkingMode", "lightMode"] as const;
           const bad = keys.some((k) => k in body && typeof body[k] !== "boolean");
           const given = keys.filter((k) => typeof body[k] === "boolean");
-          if (bad || given.length === 0) return json({ error: "expected { autoCompact?: boolean, thinkingMode?: boolean }" }, 400);
+          if (bad || given.length === 0) return json({ error: "expected { autoCompact?: boolean, thinkingMode?: boolean, lightMode?: boolean }" }, 400);
           for (const k of given) {
-            engine.settings[k] = body[k] as boolean;
+            if (k === "lightMode") lightMode = body[k] as boolean;
+            else engine.settings[k] = body[k] as boolean;
             setOption(k, body[k] as boolean);
           }
         }
-        return json(engine.settings);
+        return json({ ...engine.settings, lightMode });
       }
 
       if (p === "/providers" && method === "GET") {

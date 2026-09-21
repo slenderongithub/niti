@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
 )
 
 func TestStatusRowsCoverTheSpec(t *testing.T) {
@@ -121,7 +123,35 @@ func TestToggleSendsCoreSettings(t *testing.T) {
 	if m.autoCompact || m.thinkingMode || got["autoCompact"] != false || got["thinkingMode"] != false {
 		t.Fatalf("model=%v/%v sent=%v", m.autoCompact, m.thinkingMode, got)
 	}
-	if items := m.configItems(); items[3].Value != "false" || items[4].Value != "false" {
+	if items := m.configItems(); items[4].Value != "false" || items[5].Value != "false" {
 		t.Fatalf("rows should read false: %v", items)
+	}
+}
+
+func TestLightModeToggleSwitchesPaletteAndPersists(t *testing.T) {
+	got := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/settings" && r.Method == "POST" {
+			json.NewDecoder(r.Body).Decode(&got)
+		}
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	defer theme.SetLight(false)
+	m := &Model{client: api.New(srv.URL, "")}
+	if res := m.toggle("Light mode")().(actionResultMsg); res.err != nil {
+		t.Fatal(res.err)
+	}
+	if !m.lightMode || !theme.IsLight() || got["lightMode"] != true {
+		t.Fatalf("model=%v theme=%v sent=%v", m.lightMode, theme.IsLight(), got)
+	}
+}
+
+// The Status rows once ran the value straight into the widest key ("Settings sources" filled its
+// whole 16-cell column), so the red key and yellow value read as one word.
+func TestKVLeavesAGapAfterTheLongestKey(t *testing.T) {
+	plain := ansi.Strip(kv(80, "Settings sources", "global x"))
+	if !strings.Contains(plain, "Settings sources    global x") {
+		t.Fatalf("key and value collide: %q", plain)
 	}
 }

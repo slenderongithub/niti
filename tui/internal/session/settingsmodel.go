@@ -100,6 +100,7 @@ func (m Model) configItems() []cfgItem {
 	return []cfgItem{
 		{"Mode", m.mode, "build ⇄ plan"},
 		{"Theme", theme.Current(), "cycles the installed themes"},
+		{"Light mode", fmt.Sprint(m.lightMode), "swap the palette for a light background"},
 		{"Collapse tool calls", fmt.Sprint(!m.verbose), "false lists every call separately"},
 		{"Auto-compact", fmt.Sprint(m.autoCompact), "summarize old turns at 95% of the context window"},
 		{"Thinking mode", fmt.Sprint(m.thinkingMode), "send reasoning parameters to models that support them"},
@@ -129,6 +130,11 @@ func (m *Model) toggle(label string) tea.Cmd {
 	case "Theme":
 		name, client := theme.Next(), m.client
 		return func() tea.Msg { return actionResultMsg{action: "theme", err: client.SetTheme(name)} }
+	case "Light mode":
+		m.lightMode = !m.lightMode
+		theme.SetLight(m.lightMode)
+		on, client := m.lightMode, m.client
+		return func() tea.Msg { return actionResultMsg{action: "lightMode", err: client.SetSetting("lightMode", on)} }
 	case "Auto-compact", "Thinking mode":
 		key, field := "autoCompact", &m.autoCompact
 		if label == "Thinking mode" {

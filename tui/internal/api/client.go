@@ -60,6 +60,7 @@ type SessionInfo struct {
 	Mcp           []McpInfo      `json:"mcp"`
 	ContextLimits map[string]int `json:"contextLimits"` // agent id → its model's context window
 	Theme         string         `json:"theme"`         // `theme:` from agents.yaml, applied at launch
+	LightMode     bool           `json:"lightMode"`     // `lightMode:` from agents.yaml, applied at launch
 	Settings      *Settings      `json:"settings"`      // live toggles; nil from an older core
 }
 
