@@ -426,3 +426,10 @@ test("POST /settings persists the Config-tab prefs and /session reports them", a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("/session prefs contains only the boolean flags, even when handed the whole options object", async () => {
+  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false });
+  const h = track(startServer(engine, { prefs: { theme: "x", auto: true, reduceMotion: true, lightMode: undefined } as any }));
+  const res = await fetch(`${h.url}/session`, { method: "POST", headers: { authorization: `Bearer ${h.token}` } });
+  expect((await res.json()).prefs).toEqual({ lightMode: false, reduceMotion: true, showTurnDuration: false, openAgentsView: false, projectInstructions: true });
+});

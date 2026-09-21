@@ -70,7 +70,13 @@ export function startServer(
   let currentTheme = opts.theme ?? "";
   // TUI-facing flags, not engine settings: the core doesn't read them, they just have to survive a
   // restart and reach the next TUI launch via /session (projectInstructions is read at boot).
-  const prefs: Record<PrefKey, boolean> = { ...PREF_DEFAULTS, ...opts.prefs };
+  // Only the known keys, and only real booleans: callers hand over the whole parsed agents.yaml
+  // options object, whose other fields (theme, auto, …) must never leak into this map.
+  const prefs: Record<PrefKey, boolean> = { ...PREF_DEFAULTS };
+  for (const k of Object.keys(PREF_DEFAULTS) as PrefKey[]) {
+    const v = (opts.prefs as Record<string, unknown> | undefined)?.[k];
+    if (typeof v === "boolean") prefs[k] = v;
+  }
 
   const json = (data: unknown, status = 200) =>
     new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
