@@ -130,6 +130,17 @@ test("loadInstructions concatenates the files that exist and skips the ones that
   expect(loadInstructions([], dir)).toBe("");
 });
 
+test("loadInstructions can discover the project's own AGENTS.md / .niti.md, without doubling a listed one", () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-inst-"));
+  writeFileSync(join(dir, "AGENTS.md"), "agents rules");
+  expect(loadInstructions([], dir, true)).toContain("agents rules");
+  expect(loadInstructions(["AGENTS.md"], dir, true).match(/agents rules/g)).toHaveLength(1);
+  writeFileSync(join(dir, ".niti.md"), "niti rules"); // .niti.md wins the search
+  const out = loadInstructions([], dir, true);
+  expect(out).toContain("niti rules");
+  expect(out).not.toContain("agents rules");
+});
+
 // The team picker rewrites agents.yaml on every launch. Anything the user hand-wrote next to the
 // agents list has to survive that.
 test("saveAgents replaces only the agents block", () => {

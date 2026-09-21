@@ -6,6 +6,7 @@ package theme
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"sort"
 
 	"github.com/charmbracelet/lipgloss"
@@ -100,6 +101,7 @@ var (
 	Pink   lipgloss.Color
 
 	current = "neon graveyard"
+	light   bool
 	palette []lipgloss.Color
 )
 
@@ -113,6 +115,9 @@ func Use(name string) bool {
 		return false
 	}
 	current = name
+	if light {
+		t = lighten(t)
+	}
 	BgDeep, BgPane, Fg, Muted, Line = t.BgDeep, t.BgPane, t.Fg, t.Muted, t.Line
 	Accent, Alt = t.Accent, t.Alt
 	Green, Red, Amber, Blue, Pink = t.Green, t.Red, t.Amber, t.Blue, t.Pink
@@ -121,6 +126,46 @@ func Use(name string) bool {
 }
 
 func Current() string { return current }
+
+// SetLight switches between a theme's dark palette and its light counterpart, keeping the theme.
+func SetLight(on bool) {
+	light = on
+	Use(current)
+}
+
+func IsLight() bool { return light }
+
+// Light surfaces, the same neutrals the web dashboard uses in its light mode (web/style.css).
+const (
+	lightBg, lightPanel, lightFg, lightMuted, lightLine = "#f6f7fb", "#ffffff", "#1a1c25", "#6b7186", "#d5d8e6"
+)
+
+// lighten derives the light counterpart of a dark theme rather than authoring a second palette per
+// theme: the surfaces and text become fixed light neutrals, and every accent is darkened toward
+// black until it holds contrast on white — the neon greens and ambers that glow on #0a0a0f are
+// unreadable on it as they are. The hue, and so the theme's identity, is kept.
+func lighten(t Theme) Theme {
+	dim := func(c lipgloss.Color) lipgloss.Color { return mix(c, 0.55) }
+	t.BgDeep, t.BgPane = lightBg, lightPanel
+	t.Fg, t.Muted, t.Line = lightFg, lightMuted, lightLine
+	t.Accent, t.Alt = dim(t.Accent), dim(t.Alt)
+	t.Green, t.Red, t.Amber, t.Blue, t.Pink = dim(t.Green), dim(t.Red), dim(t.Amber), dim(t.Blue), dim(t.Pink)
+	t.Agents = make([]lipgloss.Color, len(t.Agents))
+	for i, c := range []lipgloss.Color{t.Accent, t.Alt, t.Green, t.Red, t.Amber, t.Blue, t.Pink} {
+		t.Agents[i] = c
+	}
+	return t
+}
+
+// mix scales a #rrggbb color's channels by f (0 = black, 1 = unchanged). Anything that isn't a
+// 6-digit hex is returned as-is.
+func mix(c lipgloss.Color, f float64) lipgloss.Color {
+	var r, g, b int
+	if _, err := fmt.Sscanf(string(c), "#%02x%02x%02x", &r, &g, &b); err != nil {
+		return c
+	}
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", int(float64(r)*f), int(float64(g)*f), int(float64(b)*f)))
+}
 
 // Names lists themes in a stable order, so "the next theme" means the same thing every launch.
 func Names() []string {

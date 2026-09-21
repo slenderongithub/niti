@@ -64,7 +64,7 @@ test("MCP and LSP tools are offered side by side — adding LSP replaces nothing
   // read_file carries the read-only search tools with it (expandTools) — an agent trusted to read
   // files is trusted to find them, and existing agents.yaml files never listed them.
   // `todo` is harness-internal (no file access, no command) and is offered to every agent.
-  expect(offered).toEqual(["read_file", "edit", "list_dir", "glob", "grep", "mcp__demo__ping", "diagnostics", "hover", "spawn_fork", "todo"]);
+  expect(offered).toEqual(["read_file", "edit", "list_dir", "glob", "grep", "repo_map", "mcp__demo__ping", "diagnostics", "hover", "spawn_fork", "todo"]);
   lsp.close();
 });
 

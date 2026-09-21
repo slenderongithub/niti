@@ -2,6 +2,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import type { ToolSpec, ToolCall as ProviderCall } from "../providers/provider.ts";
+import { buildRepoMap } from "../agent/repomap.ts";
 
 // Tool calls an agent may request. Executed locally, jailed to the project root.
 export type ToolCall =
@@ -11,6 +12,7 @@ export type ToolCall =
   | { tool: "shell"; command: string; args: string[] }
   | { tool: "list_dir"; path?: string }
   | { tool: "glob"; pattern: string; limit?: number }
+  | { tool: "repo_map"; path?: string }
   | { tool: "grep"; pattern: string; path?: string; glob?: string; limit?: number; ignoreCase?: boolean };
 
 // Tools that mutate a file at `path` — the set the agent loop checkpoints and locks on.
@@ -19,7 +21,7 @@ export const WRITE_TOOLS = new Set(["write_file", "edit"]);
 // Tools that only look. The agent loop runs a turn's worth of these concurrently instead of one
 // round-trip at a time: four reads and a grep are independent, and serializing them was pure
 // latency — the model had already decided on all of them before the first one ran.
-export const READ_ONLY_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "diagnostics", "hover", "recall"]);
+export const READ_ONLY_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "repo_map", "diagnostics", "hover", "recall"]);
 
 // SECURITY BOUNDARY — do not simplify. Resolve the agent-supplied path and reject any escape.
 // ponytail: path-prefix check only. Symlinks inside the root that point out are NOT caught —
@@ -319,6 +321,8 @@ export async function runTool(
       return await listDir(root, call.path ?? ".");
     case "glob":
       return await globFiles(root, call.pattern, call.limit ?? 100);
+    case "repo_map":
+      return buildRepoMap(root, { path: call.path, maxFiles: 40, maxChars: 6_000 }) || "No map: the project has too few source files to be worth one. Use list_dir.";
     case "grep":
       return await grepFiles(root, call.pattern, {
         path: call.path,
@@ -573,6 +577,12 @@ const SPECS: Record<string, ToolSpec> = {
     description: "List the entries of one directory in the project. Directories are marked with a trailing '/'. Use this to orient yourself; use 'glob' or 'grep' to search.",
     parameters: { type: "object", properties: { path: { type: "string", description: "project-relative directory (default '.')" } } },
   },
+  repo_map: {
+    name: "repo_map",
+    description:
+      "Ranked outline of the project's source: directory layout, the most-imported files, and what each exports. Recomputed from the current tree on every call (cheap, cached until a file changes), so call it again after a refactor or after creating files. Pass path to zoom into one directory. Prefer this to list_dir/read_file when orienting yourself.",
+    parameters: { type: "object", properties: { path: { type: "string", description: "limit the map to this project-relative directory" } } },
+  },
   glob: {
     name: "glob",
     description:
@@ -645,7 +655,7 @@ export const TOOL_GUIDANCE = `
 
 Working habits:
 - The project you are in is the whole job. Never look outside it (no '..', no absolute paths elsewhere on the machine).
-- Find before you read. 'grep' tells you where something is in one call; 'glob' finds a file by name. Reading files to look for something, or guessing at a path, wastes the turns you need for the actual work.
+- Start from the project map (or call 'repo_map', especially after a refactor). Find before you read. 'grep' tells you where something is in one call; 'glob' finds a file by name. Reading files to look for something, or guessing at a path, wastes the turns you need for the actual work.
 - Read before you write, and prefer 'edit' (exact snippet replacement) over 'write_file' for changes to an existing file — a blind overwrite loses work you didn't know was there.
 - 'edit' matches the file exactly. Copy oldString from what 'read_file' showed you, without the line numbers, and include enough surrounding lines to make it unique.
 - You can ask for several independent tool calls in one turn — they run together. Batch your reads and searches instead of spending a turn on each.
@@ -659,7 +669,7 @@ Working habits:
 // trusted to read files is already trusted to find them, and an agent that can't read files has
 // no use for either. Without this, every project configured before these tools existed would
 // silently keep the blind-navigation harness they were written against.
-const SEARCH_TOOLS = ["list_dir", "glob", "grep"];
+const SEARCH_TOOLS = ["list_dir", "glob", "grep", "repo_map"];
 
 export function expandTools(allowed: string[]): string[] {
   if (!allowed.includes("read_file")) return allowed;
@@ -752,6 +762,8 @@ export function toSandboxCall(c: ProviderCall): ToolCall {
       return { tool: "list_dir", path: i.path === undefined ? "." : String(i.path) };
     case "glob":
       return { tool: "glob", pattern: String(i.pattern ?? ""), limit: num(i.limit) };
+    case "repo_map":
+      return { tool: "repo_map", path: i.path === undefined ? undefined : String(i.path) };
     case "grep":
       return {
         tool: "grep",

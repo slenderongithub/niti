@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -457,5 +459,105 @@ func TestUnfinishedGuardLeavesCommandsAndCleanBoardsAlone(t *testing.T) {
 	done.input.SetValue("now add tests")
 	if _, cmd := done.onKey(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
 		t.Error("a completed board should submit a new goal straight away")
+	}
+}
+
+// The grey sidebar runs from the mode stripe down; the agent tab bar lives in the dark column
+// beside it, so on the tab row the sidebar's cells come first and the tabs start after them.
+func TestTabBarSitsBesideTheSidebarNotAcrossIt(t *testing.T) {
+	m := model(2)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	tabRow := lines[headerRows]
+	col := strings.Index(tabRow, "overview")
+	if col < sidebarMin {
+		t.Fatalf("tabs start at column %d, inside the sidebar (min width %d): %q", col, sidebarMin, tabRow)
+	}
+	if !strings.Contains(tabRow[:col], "CONTEXT") {
+		t.Fatalf("the sidebar should begin on the tab row, got %q", tabRow)
+	}
+	if got := len(lines); got > 30 {
+		t.Fatalf("layout is %d rows tall in a 30-row terminal", got)
+	}
+}
+
+// Shift+Enter cannot be told apart from Enter on most terminals under bubbletea v1, so the newline
+// keys are alt+enter and ctrl+j (and shift+enter where a terminal does report it). None of them
+// may submit; the break is sent as a real "\n" when enter finally does.
+func TestNewlineKeysInsertABreakInsteadOfSubmitting(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyEnter, Alt: true},
+		{Type: tea.KeyCtrlJ},
+	} {
+		m := model(1)
+		m = typing(m, "one")
+		next, cmd := m.onKey(key)
+		m = next.(Model)
+		if cmd != nil {
+			t.Fatalf("%q must not submit", key.String())
+		}
+		m = typing(m, "two")
+		if got := m.input.Value(); got != "one"+newlineMark+"two" {
+			t.Fatalf("%q: prompt = %q", key.String(), got)
+		}
+	}
+}
+
+// bubbletea v1 surfaces a modified-Enter report as an unexported unknownCSISequenceMsg; this pins
+// that Shift+Enter is recognised from it, and that ordinary keys and other CSI stay untouched.
+func TestShiftEnterIsRecognisedFromTheTerminalReport(t *testing.T) {
+	type unknownCSISequenceMsg []byte // same name and shape as bubbletea's, which IsShiftEnter matches on
+	for seq, want := range map[string]bool{"\x1b[27;2;13~": true, "\x1b[13;2u": true, "\x1b[27;5;13~": false, "\x1b[99;5u": false} {
+		if got := IsShiftEnter(unknownCSISequenceMsg(seq)); got != want {
+			t.Errorf("%q: got %v want %v", seq, got, want)
+		}
+	}
+	if IsShiftEnter(tea.KeyMsg{Type: tea.KeyEnter}) || IsShiftEnter("x") {
+		t.Fatal("a plain enter or an unrelated message must not count")
+	}
+
+	m := typing(model(1), "one")
+	next, cmd := m.Update(unknownCSISequenceMsg("\x1b[27;2;13~"))
+	if cmd != nil || !strings.Contains(next.(Model).input.Value(), newlineMark) {
+		t.Fatalf("shift+enter should insert a newline, got %q (cmd=%v)", next.(Model).input.Value(), cmd)
+	}
+}
+
+func TestOpenAgentsViewFocusesTheLeadAndReduceMotionStopsTheTick(t *testing.T) {
+	agents := []api.AgentConfig{{ID: "a", Role: "A"}, {ID: "b", Role: "B", Lead: true}}
+	m := New(nil, api.SessionInfo{Agents: agents}, nil, func() {})
+	if m.focus != "" {
+		t.Fatalf("overview is the default, got focus %q", m.focus)
+	}
+	m = New(nil, api.SessionInfo{Agents: agents, Prefs: map[string]bool{"openAgentsView": true}}, nil, func() {})
+	if m.focus != "b" {
+		t.Fatalf("should open on the lead's tab, got %q", m.focus)
+	}
+	if spinner(true) != spinner(true) || !isSpinning(spinner(true)) {
+		t.Fatal("reduced-motion spinner must be a fixed spinFrames glyph")
+	}
+
+	// With reduce motion on, a running agent must not schedule the animation tick.
+	m = New(nil, api.SessionInfo{Agents: agents, Prefs: map[string]bool{"reduceMotion": true}}, nil, func() {})
+	m.agents["a"].running = "Run ls"
+	next, _ := m.Update(tickMsg{})
+	if next.(Model).ticking {
+		t.Fatal("tick kept running under reduce motion")
+	}
+	m.prefs["reduceMotion"] = false
+	if next, _ = m.Update(tickMsg{}); !next.(Model).ticking {
+		t.Fatal("tick should run while an agent is working and motion is on")
+	}
+}
+
+func TestProjectInstructionsDefaultsOnAndAutoApproveComesFromTheCore(t *testing.T) {
+	m := New(nil, api.SessionInfo{}, nil, func() {})
+	if !m.prefs["projectInstructions"] || m.autoApprove {
+		t.Fatalf("defaults wrong: prefs=%v auto=%v", m.prefs, m.autoApprove)
+	}
+	m = New(nil, api.SessionInfo{Auto: true, Prefs: map[string]bool{"projectInstructions": false}}, nil, func() {})
+	if m.prefs["projectInstructions"] || !m.autoApprove {
+		t.Fatalf("core values ignored: prefs=%v auto=%v", m.prefs, m.autoApprove)
 	}
 }

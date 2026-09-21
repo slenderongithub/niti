@@ -24,6 +24,7 @@ export const DEFAULT_RULES: PermissionRules = {
   // and start guessing at paths instead.
   list_dir: { "*": "allow" },
   glob: { "*": "allow" },
+  repo_map: { "*": "allow" },
   grep: { "*": "allow" },
   // Read-only questions about code, answered by a language server — prompting for these would make
   // "check your work compiles" cost a dialog per call.

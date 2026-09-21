@@ -2,6 +2,7 @@ package wizard
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,7 +10,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/ui"
 )
 
 // MaxAgents must match the web dashboard's pixel-avatar palette (web/avatar.js's AVATAR_COLORS) —
@@ -377,5 +380,70 @@ func TestWantsExit(t *testing.T) {
 	}
 	if !free.wantsExit("/exit") || free.wantsExit("exit") {
 		t.Error("free-text stage: only the slash form should exit")
+	}
+}
+
+// A saved roster of six long entries used to stack above a list sized for a tall terminal, pushing
+// the card off the bottom. The list now takes only the rows the rest of the card leaves.
+func TestPickerWithAFullRosterFitsAShortTerminal(t *testing.T) {
+	client, _, _ := fakeCore(t)
+	m := loaded(t, client)
+	for i := 0; i < MaxAgents; i++ {
+		m.roles = append(m.roles, api.AgentConfig{ID: "a", Role: "Teammate", Provider: "anthropic", Model: "claude-opus-4-8"})
+	}
+	m.stage = "provider"
+	items := make([]ui.Item, 60)
+	for i := range items {
+		items[i] = ui.Item{Label: fmt.Sprintf("provider-%d", i), Value: "x"}
+	}
+	m.list.Set(items)
+	for _, h := range []int{24, 30} {
+		m.width, m.height = 90, h
+		if got := lipgloss.Height(m.View()); got > h {
+			t.Errorf("full roster at height %d renders %d rows", h, got)
+		}
+	}
+}
+
+// The saved-team row used to carry the whole roster as its description and was cut off at the
+// card's right edge. Now the row is short, the roster is wrapped into a details block under the
+// list, and that block is capped so a big team cannot stretch the card.
+func TestSavedTeamShowsAWrappedBoundedDetailsBlock(t *testing.T) {
+	client, _, _ := fakeCore(t)
+	var existing []api.AgentConfig
+	for i := 0; i < 12; i++ {
+		existing = append(existing, api.AgentConfig{ID: fmt.Sprint(i), Role: fmt.Sprintf("Role%d", i), Provider: "google", Model: "gemini-flash-latest"})
+	}
+	next, _ := NewPicker(client, existing).Update(providersMsg{
+		creds:     []api.Credential{{Provider: "google", Type: "api"}},
+		providers: []api.ProviderInfo{{ID: "google", Label: "Google", Category: "byok"}},
+	})
+	m := next.(Picker)
+	m.width, m.height = 90, 30
+	view := m.View()
+	plain := ansi.Strip(view)
+
+	if !strings.Contains(plain, "Continue with this team (12 agents)") {
+		t.Fatalf("row should be short and count the agents:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Role0 (google/gemini-flash-latest)") || !strings.Contains(plain, "…") {
+		t.Fatalf("details should show the roster and end in an ellipsis when cut:\n%s", plain)
+	}
+	if got := lipgloss.Height(view); got > 30 {
+		t.Fatalf("card is %d rows tall in a 30-row terminal", got)
+	}
+	// 2 list rows + at most 3 detail rows: a 12-agent team must not be any taller than a 40-agent one.
+	before := cardRows(view)
+	for i := 12; i < 40; i++ {
+		existing = append(existing, api.AgentConfig{ID: fmt.Sprint(i), Role: "Extra", Provider: "google", Model: "m"})
+	}
+	next, _ = NewPicker(client, existing).Update(providersMsg{
+		creds:     []api.Credential{{Provider: "google", Type: "api"}},
+		providers: []api.ProviderInfo{{ID: "google", Label: "Google", Category: "byok"}},
+	})
+	big := next.(Picker)
+	big.width, big.height = 90, 30
+	if after := cardRows(big.View()); after != before {
+		t.Fatalf("a bigger team changed the card height: %d -> %d", before, after)
 	}
 }

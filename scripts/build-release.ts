@@ -21,7 +21,7 @@ const TARGETS = [
 
 // The dashboard's runtime files. Explicit, not a directory copy, so the *.test.ts siblings in web/
 // never end up in a published tarball (or served by GET /dashboard/*).
-const WEB_FILES = ["index.html", "graph.html", "app.js", "graph.js", "style.css", "theme.js", "avatar.js"];
+const WEB_FILES = ["index.html", "graph.html", "app.js", "graph.js", "style.css", "theme.js", "avatar.js", "favicon-32.png", "apple-touch-icon.png"];
 
 const pkg = await Bun.file("package.json").json();
 // Deliberately not pkg.name: pkg.name is the scoped root wrapper (`@slenderbuilds/niti`), but the

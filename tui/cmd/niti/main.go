@@ -390,6 +390,15 @@ func parseArgs(args []string) (verbose bool, rest []string) {
 	return
 }
 
+// applyTheme applies the project's `theme:` and `lightMode:` from agents.yaml; ctrl+t still
+// overrides the theme live.
+func applyTheme(sess api.SessionInfo) {
+	if sess.Theme != "" && !theme.Use(sess.Theme) {
+		fmt.Fprintf(os.Stderr, "niti: unknown theme %q — using %s\n", sess.Theme, theme.Current())
+	}
+	theme.SetLight(sess.Prefs["lightMode"])
+}
+
 func main() {
 	// Skipped when attached to a core we didn't spawn (NITI_SERVER_URL set) — nothing to gate,
 	// since we aren't the one reading this directory's config or spawning anything from it.
@@ -408,6 +417,10 @@ func main() {
 	if err != nil {
 		fatal(fmt.Errorf("cannot reach core: %w", err))
 	}
+
+	// The saved theme and light/dark choice apply before the picker, which is the first thing on
+	// screen — otherwise it always drew in the base palette and then jumped when the session began.
+	applyTheme(sess)
 
 	// The team picker runs on every launch, not just the first: a static agents.yaml stops being
 	// useful the moment you want to try a different model without hand-editing YAML. It offers the
@@ -443,10 +456,7 @@ func main() {
 		}
 	}
 
-	// A `theme:` in agents.yaml is the project's choice of colours; ctrl+t still overrides it live.
-	if sess.Theme != "" && !theme.Use(sess.Theme) {
-		fmt.Fprintf(os.Stderr, "niti: unknown theme %q — using %s\n", sess.Theme, theme.Current())
-	}
+	applyTheme(sess) // the restarted core may have a different agents.yaml
 
 	ctx, cancel := context.WithCancel(context.Background())
 	events := make(chan api.Event, 256)
@@ -458,7 +468,12 @@ func main() {
 	if len(rest) > 0 {
 		m = m.OpenSettings(rest[0]) // niti status | config | settings | usage | stats
 	}
-	if _, err := tea.NewProgram(m, screenOpts()...).Run(); err != nil {
+	// Ask the terminal to report Shift+Enter (see session.EnableModifiedEnter), and put it back on
+	// the way out so it doesn't leak into the user's shell.
+	fmt.Fprint(os.Stdout, session.EnableModifiedEnter)
+	_, err = tea.NewProgram(m, screenOpts()...).Run()
+	fmt.Fprint(os.Stdout, session.DisableModifiedEnter)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	cancel()

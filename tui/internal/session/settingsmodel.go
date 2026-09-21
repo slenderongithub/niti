@@ -96,14 +96,29 @@ type cfgItem struct {
 	Label, Value, Hint string
 }
 
+// prefRows are the boolean preferences the core stores for the TUI (agents.yaml, via POST
+// /settings). Order here is the row order in the Config tab.
+var prefRows = []struct{ Label, Key, Hint string }{
+	{"Light mode", "lightMode", "swap the palette for a light background"},
+	{"Reduce motion", "reduceMotion", "hold the spinner still and stop animation ticks"},
+	{"Show turn duration", "showTurnDuration", "append how long each tool call took"},
+	{"Open agents view by default", "openAgentsView", "start on the lead agent's tab, not the overview (next launch)"},
+	{"Project instructions", "projectInstructions", "read .niti.md / AGENTS.md into every agent's prompt (next launch)"},
+}
+
 func (m Model) configItems() []cfgItem {
-	return []cfgItem{
+	items := []cfgItem{
 		{"Mode", m.mode, "build ⇄ plan"},
 		{"Theme", theme.Current(), "cycles the installed themes"},
+		{"Default permission mode", permMode(m.autoApprove), "manual asks before writes and shell; auto approves all but dangerous commands"},
 		{"Collapse tool calls", fmt.Sprint(!m.verbose), "false lists every call separately"},
 		{"Auto-compact", fmt.Sprint(m.autoCompact), "summarize old turns at 95% of the context window"},
 		{"Thinking mode", fmt.Sprint(m.thinkingMode), "send reasoning parameters to models that support them"},
 	}
+	for _, p := range prefRows {
+		items = append(items, cfgItem{p.Label, fmt.Sprint(m.prefs[p.Key]), p.Hint})
+	}
+	return items
 }
 
 // filterItems keeps rows whose label or value contains q, case-insensitively.
@@ -129,6 +144,10 @@ func (m *Model) toggle(label string) tea.Cmd {
 	case "Theme":
 		name, client := theme.Next(), m.client
 		return func() tea.Msg { return actionResultMsg{action: "theme", err: client.SetTheme(name)} }
+	case "Default permission mode":
+		m.autoApprove = !m.autoApprove
+		on, client := m.autoApprove, m.client
+		return func() tea.Msg { return actionResultMsg{action: "auto", err: client.SetAuto(on)} }
 	case "Auto-compact", "Thinking mode":
 		key, field := "autoCompact", &m.autoCompact
 		if label == "Thinking mode" {
@@ -137,6 +156,8 @@ func (m *Model) toggle(label string) tea.Cmd {
 		*field = !*field
 		on, client := *field, m.client
 		return func() tea.Msg { return actionResultMsg{action: key, err: client.SetSetting(key, on)} }
+	case "Light mode", "Reduce motion", "Show turn duration", "Open agents view by default", "Project instructions":
+		return m.togglePref(label)
 	case "Collapse tool calls":
 		m.verbose = !m.verbose
 		for _, st := range m.agents {
@@ -156,4 +177,36 @@ func fetchCreds(client *api.Client) tea.Cmd {
 		c, err := client.Credentials()
 		return credsMsg{c, err}
 	}
+}
+
+func permMode(auto bool) string {
+	if auto {
+		return "Auto"
+	}
+	return "Manual"
+}
+
+// togglePref flips one prefRows entry, applies its live effect, and persists it through the core.
+func (m *Model) togglePref(label string) tea.Cmd {
+	for _, p := range prefRows {
+		if p.Label != label {
+			continue
+		}
+		if m.prefs == nil {
+			m.prefs = map[string]bool{}
+		}
+		on := !m.prefs[p.Key]
+		m.prefs[p.Key] = on
+		switch p.Key {
+		case "lightMode":
+			theme.SetLight(on)
+		case "showTurnDuration":
+			for _, st := range m.agents {
+				st.showDur = on
+			}
+		}
+		key, client := p.Key, m.client
+		return func() tea.Msg { return actionResultMsg{action: key, err: client.SetSetting(key, on)} }
+	}
+	return nil
 }

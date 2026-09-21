@@ -7,25 +7,20 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'"
     />
-    <title>niti — live agents</title>
+    <title>dashboard</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <header>
       <div class="brand"><span class="dot"></span> niti</div>
       <div class="goal" id="goal">waiting for a task…</div>
-      <div class="progress"><div class="bar" id="bar"></div><span id="pct">0%</span></div>
       <div class="conn" id="conn">connecting…</div>
-      <button class="theme-btn" id="theme-btn" title="theme"><span id="theme-dot"></span></button>
-      <div class="theme-menu hidden" id="theme-menu"></div>
     </header>
 
     <div class="promptbar">
-      <div class="mode" id="prompt-mode">
-        <button data-mode="build" class="active">Build</button>
-        <button data-mode="plan">Plan</button>
-      </div>
-      <input id="prompt-input" type="text" placeholder="give the team a new goal…" />
+      <textarea id="prompt-input" rows="1" placeholder="give the team a new goal…"></textarea>
       <button id="prompt-send">Send</button>
       <span class="status" id="prompt-status"></span>
     </div>

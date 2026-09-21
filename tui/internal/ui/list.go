@@ -23,6 +23,9 @@ type Item struct {
 	Desc  string
 	Value string
 	Tag   string // optional short marker rendered before the label (e.g. "✓" for "key stored")
+	// Detail is long-form text for the highlighted row, shown by the caller in a bounded block
+	// under the list (see Wrap). Never drawn in the row itself, so it can't widen or truncate it.
+	Detail string
 }
 
 // List is a filtered, cursor-driven selection list. Zero value is usable: Set() then Render().
@@ -104,6 +107,42 @@ func (l *List) Rows(rows int) int {
 		return 1 // the "no matches" line
 	}
 	return min(len(l.shown), rows)
+}
+
+// SelectedDetail is the highlighted row's Detail, or "" when nothing is highlighted.
+func (l *List) SelectedDetail() string {
+	it, ok := l.Selected()
+	if !ok {
+		return ""
+	}
+	return it.Detail
+}
+
+// DetailRows is how many lines the Detail block needs at width w for the *longest* Detail in the
+// list, capped at maxLines. Callers reserve exactly this, so the frame stays one height while the
+// cursor moves between a row with a long Detail and one with none.
+func (l *List) DetailRows(w, maxLines int) int {
+	n := 0
+	for _, i := range l.shown {
+		if d := l.items[i].Detail; d != "" {
+			n = max(n, len(Wrap(d, w, maxLines)))
+		}
+	}
+	return n
+}
+
+// Wrap word-wraps s to width w (breaking a word only if it alone is wider than w) and keeps at
+// most maxLines lines; if text was cut, the last kept line ends in an ellipsis.
+func Wrap(s string, w, maxLines int) []string {
+	if s == "" || w < 1 || maxLines < 1 {
+		return nil
+	}
+	lines := strings.Split(ansi.Wrap(s, w, ""), "\n")
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		lines[maxLines-1] = Truncate(lines[maxLines-1]+"…", w)
+	}
+	return lines
 }
 
 // NaturalWidth is the width the widest row wants, so a frame can shrink to its content instead of

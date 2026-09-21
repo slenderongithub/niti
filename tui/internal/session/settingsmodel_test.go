@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
 )
 
 func TestStatusRowsCoverTheSpec(t *testing.T) {
@@ -46,8 +48,10 @@ func TestToggleFlipsSettings(t *testing.T) {
 	if m.mode != "plan" || !m.verbose || !a.verbose {
 		t.Fatalf("mode=%s verbose=%v agent=%v", m.mode, m.verbose, a.verbose)
 	}
-	if v := m.configItems()[2].Value; v != "false" {
-		t.Fatalf("collapse row should read false once verbose, got %s", v)
+	for _, it := range m.configItems() {
+		if it.Label == "Collapse tool calls" && it.Value != "false" {
+			t.Fatalf("collapse row should read false once verbose, got %s", it.Value)
+		}
 	}
 	if !strings.Contains(loginMethod(nil), "none") {
 		t.Fatal("no creds should say so")
@@ -121,7 +125,76 @@ func TestToggleSendsCoreSettings(t *testing.T) {
 	if m.autoCompact || m.thinkingMode || got["autoCompact"] != false || got["thinkingMode"] != false {
 		t.Fatalf("model=%v/%v sent=%v", m.autoCompact, m.thinkingMode, got)
 	}
-	if items := m.configItems(); items[3].Value != "false" || items[4].Value != "false" {
-		t.Fatalf("rows should read false: %v", items)
+	for _, it := range m.configItems() {
+		if (it.Label == "Auto-compact" || it.Label == "Thinking mode") && it.Value != "false" {
+			t.Fatalf("rows should read false: %v", m.configItems())
+		}
+	}
+}
+
+func TestLightModeToggleSwitchesPaletteAndPersists(t *testing.T) {
+	got := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/settings" && r.Method == "POST" {
+			json.NewDecoder(r.Body).Decode(&got)
+		}
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	defer theme.SetLight(false)
+	m := &Model{client: api.New(srv.URL, "")}
+	if res := m.toggle("Light mode")().(actionResultMsg); res.err != nil {
+		t.Fatal(res.err)
+	}
+	if !m.prefs["lightMode"] || !theme.IsLight() || got["lightMode"] != true {
+		t.Fatalf("model=%v theme=%v sent=%v", m.prefs["lightMode"], theme.IsLight(), got)
+	}
+}
+
+// The Status rows once ran the value straight into the widest key ("Settings sources" filled its
+// whole 16-cell column), so the red key and yellow value read as one word.
+func TestKVLeavesAGapAfterTheLongestKey(t *testing.T) {
+	plain := ansi.Strip(kv(80, "Settings sources", "global x"))
+	if !strings.Contains(plain, "Settings sources    global x") {
+		t.Fatalf("key and value collide: %q", plain)
+	}
+}
+
+// Every preference row must round-trip: toggling flips the model, and the change is what gets sent.
+func TestPrefRowsToggleAndPersist(t *testing.T) {
+	got := map[string]bool{}
+	autoSent := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/settings":
+			json.NewDecoder(r.Body).Decode(&got)
+		case "/auto":
+			json.NewDecoder(r.Body).Decode(&autoSent)
+		}
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	defer theme.SetLight(false)
+	a := &agentState{}
+	m := &Model{client: api.New(srv.URL, ""), agents: map[string]*agentState{"a": a}}
+	for _, p := range prefRows {
+		got = map[string]bool{}
+		if res := m.toggle(p.Label)().(actionResultMsg); res.err != nil {
+			t.Fatal(p.Label, res.err)
+		}
+		if !m.prefs[p.Key] || got[p.Key] != true {
+			t.Errorf("%s: model=%v sent=%v", p.Label, m.prefs[p.Key], got)
+		}
+	}
+	if !a.showDur {
+		t.Error("turning on Show turn duration must reach the live agents")
+	}
+	if res := m.toggle("Default permission mode")().(actionResultMsg); res.err != nil || !m.autoApprove || autoSent["auto"] != true {
+		t.Errorf("permission mode: auto=%v sent=%v err=%v", m.autoApprove, autoSent, res.err)
+	}
+	for _, it := range m.configItems() {
+		if it.Label == "Default permission mode" && it.Value != "Auto" {
+			t.Errorf("row reads %q", it.Value)
+		}
 	}
 }

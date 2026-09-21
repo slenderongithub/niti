@@ -1,5 +1,5 @@
 import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Engine } from "../engine.ts";
@@ -404,4 +404,46 @@ test("/graph's cache drops on a file_edit event, not just external_change — an
 
   const after = await (await fetch(`${h.url}/graph?token=${h.token}`)).json();
   expect(after.nodes).toHaveLength(2); // a.ts and b.ts — cache was invalidated, not served stale
+});
+
+test("POST /settings persists the Config-tab prefs and /session reports them", async () => {
+  // setOption writes .niti/agents.yaml relative to the cwd — keep it out of the repo.
+  const prev = process.cwd();
+  const dir = mkdtempSync(join(tmpdir(), "niti-light-"));
+  process.chdir(dir);
+  try {
+    const h = track(setup().h);
+    const headers = { authorization: `Bearer ${h.token}`, "content-type": "application/json" };
+    const post = (path: string, body?: unknown) => fetch(`${h.url}${path}`, { method: "POST", headers, body: JSON.stringify(body ?? {}) });
+    expect((await (await post("/settings", { lightMode: true, reduceMotion: true })).json()).lightMode).toBe(true);
+    const session = await (await post("/session")).json();
+    expect(session.prefs).toEqual({ lightMode: true, reduceMotion: true, showTurnDuration: false, openAgentsView: false, projectInstructions: true });
+    expect(session.auto).toBe(false);
+    expect((await post("/settings", { lightMode: "yes" })).status).toBe(400);
+    expect(readFileSync(join(dir, ".niti/agents.yaml"), "utf8")).toContain("reduceMotion: true");
+  } finally {
+    process.chdir(prev);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("/session prefs contains only the boolean flags, even when handed the whole options object", async () => {
+  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false });
+  const h = track(startServer(engine, { prefs: { theme: "x", auto: true, reduceMotion: true, lightMode: undefined } as any }));
+  const res = await fetch(`${h.url}/session`, { method: "POST", headers: { authorization: `Bearer ${h.token}` } });
+  expect((await res.json()).prefs).toEqual({ lightMode: false, reduceMotion: true, showTurnDuration: false, openAgentsView: false, projectInstructions: true });
+});
+
+test("the favicon stack is public, square-sized PNGs, and both pages link it", async () => {
+  const h = track(setup().h);
+  for (const path of ["/favicon-32.png", "/apple-touch-icon.png", "/favicon.ico"]) {
+    const res = await fetch(`${h.url}${path}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+  }
+  for (const page of ["/dashboard", "/graph/view"]) {
+    const html = await (await fetch(`${h.url}${page}`)).text();
+    expect(html).toContain('rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"');
+    expect(html).toContain('rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"');
+  }
 });

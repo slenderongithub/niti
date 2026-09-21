@@ -316,7 +316,7 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
 async function buildEngine(interactive: boolean): Promise<Engine> {
   const configs = loadAgents();
   const options = loadOptions();
-  const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions);
+  const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions, process.cwd(), options.projectInstructions !== false);
   const mcpServers = loadMcpServers();
   let mcp: McpManager | undefined;
   if (mcpServers.length) {
