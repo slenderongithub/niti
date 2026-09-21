@@ -70,11 +70,11 @@ function load() {
   const avatarSrc = readFileSync(new URL("./avatar.js", import.meta.url), "utf8");
   const src = readFileSync(new URL("./app.js", import.meta.url), "utf8");
   const exported = new Function(
-    "window", "document", "location", "requestAnimationFrame", "fetch", "EventSource", "performance", "URLSearchParams",
+    "window", "document", "location", "requestAnimationFrame", "fetch", "EventSource", "performance", "URLSearchParams", "ResizeObserver",
     `${avatarSrc}\n${src}\nreturn { handle, onAgentEvent, ensureNode, nodes, renderApproval, answerApproval, onOrch,
        openAgentPanel, sendAgentMessage, esc, submitPrompt,
        getPending: () => pendingApprovals, getRunning: () => running, setPromptEnabled };`,
-  )(win, doc, win.location, win.requestAnimationFrame, win.fetch, win.EventSource, performance, URLSearchParams);
+  )(win, doc, win.location, win.requestAnimationFrame, win.fetch, win.EventSource, performance, URLSearchParams, class { observe() {} });
   return { ...exported, elFor: el, calls };
 }
 
@@ -219,10 +219,7 @@ test("a cancelled run reports real progress, and review/replan events are surfac
   const g = load();
   await settled();
 
-  // `complete` used to jump to 100% unconditionally — and my first cut of this referenced the
-  // wrong variable, which would have thrown instead. Both are pinned here.
   g.onOrch({ type: "complete", completed: 1, total: 4 });
-  expect(g.elFor("bar").style.width).toBe("25%");
 
   // Review and replan carry the reviewer, task and verdict; the dashboard used to drop them.
   g.onOrch({ type: "review", reviewer: "qa", taskId: "t1", phase: "changes_requested" });
@@ -232,36 +229,18 @@ test("a cancelled run reports real progress, and review/replan events are surfac
   g.onOrch({ type: "review", reviewer: "orchestrator", taskId: "t1", phase: "approved" });
 });
 
-test("the Build/Plan control drives POST /prompt's mode, and Plan keeps the goal in the box", async () => {
+test("the header says working… while a session runs, and prompts always go out as build", async () => {
   const g = load();
   await settled();
-  const [build, plan] = g.elFor("prompt-mode").querySelectorAll("button");
-
-  // Default is Build: the goal runs, and the box is cleared.
-  g.elFor("prompt-input").value = "ship the thing";
-  await g.submitPrompt();
-  let call = g.calls.filter((c: any) => c.path.startsWith("/prompt")).at(-1);
-  expect(call.body.mode).toBe("build");
-  expect(g.elFor("prompt-input").value).toBe("");
-
-  // Switching to Plan stops after the DAG — and leaves the goal typed, because sending it again
-  // in Build is what runs the plan you just read (no second planning call, see runProject).
-  g.elFor("prompt-mode").fire("click", { target: plan });
-  expect(plan.classList.contains("active")).toBe(true);
-  expect(build.classList.contains("active")).toBe(false);
-  g.elFor("prompt-input").value = "ship the thing";
-  await g.submitPrompt();
-  call = g.calls.filter((c: any) => c.path.startsWith("/prompt")).at(-1);
-  expect(call.body.mode).toBe("plan");
-  expect(g.elFor("prompt-input").value).toBe("ship the thing");
-  expect(g.elFor("prompt-status").textContent).toContain("switch to Build");
-});
-
-test("a running session disables the mode buttons too, not just Send", async () => {
-  const g = load();
-  await settled();
+  expect(g.elFor("goal").textContent).toBe("waiting for a task…");
   g.handle({ kind: "session", state: "started", goal: "x" });
-  expect(g.elFor("prompt-mode").querySelectorAll("button").every((b: any) => b.disabled)).toBe(true);
+  expect(g.elFor("goal").textContent).toBe("working…");
   g.handle({ kind: "session", state: "ended" });
-  expect(g.elFor("prompt-mode").querySelectorAll("button").some((b: any) => b.disabled)).toBe(false);
+  expect(g.elFor("goal").textContent).toBe("waiting for a task…");
+
+  g.elFor("prompt-input").value = "ship the thing";
+  await g.submitPrompt();
+  const call = g.calls.filter((c: any) => c.path.startsWith("/prompt")).at(-1);
+  expect(call.body).toEqual({ text: "ship the thing", mode: "build" });
+  expect(g.elFor("prompt-input").value).toBe("");
 });

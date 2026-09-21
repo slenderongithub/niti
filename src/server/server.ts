@@ -30,6 +30,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".json": "application/json",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
 };
 
 // Defense-in-depth, not a fix for a found XSS: every dynamic-content insertion site in web/*.js
@@ -211,7 +212,7 @@ export function startServer(
       if (p === "/health") return json({ ok: true, name: "niti", running: engine.running });
       if (p === "/" || p === "/dashboard" || p === "/dashboard/") return serveFile("index.html");
       if (p.startsWith("/dashboard/")) return serveFile(p.slice("/dashboard/".length));
-      if (p === "/app.js" || p === "/style.css" || p === "/theme.js" || p === "/avatar.js") return serveFile(p.slice(1));
+      if (p === "/app.js" || p === "/style.css" || p === "/theme.js" || p === "/avatar.js" || p === "/favicon.png") return serveFile(p.slice(1));
       if (p === "/palettes.json") return servePalettes();
       // The interactive graph page — public shell like the dashboard; its /graph and /events calls
       // carry the token via ?token=. (Distinct from the gated data route `/graph` below.)

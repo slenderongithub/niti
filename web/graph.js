@@ -699,7 +699,9 @@ const tip = q("tip");
 function showTip(i, x, y) {
   const n = nodes[i];
   const sub = mode === "project" ? esc(n.id) : `${esc(n.status || "idle")}${n.tokens ? " · " + n.tokens.toLocaleString() + " tok" : ""}${n.lead ? " · orchestrator" : ""}`;
-  tip.innerHTML = `<div class="t">${esc(n.label)}</div><div class="s">${sub} · ${n.deg} link${n.deg === 1 ? "" : "s"}</div>`;
+  const linked = [...adj[i]].map((j) => nodes[j].label).sort();
+  const list = linked.slice(0, 12).map((l) => `<div class="s">↔ ${esc(l)}</div>`).join("") + (linked.length > 12 ? `<div class="s">+${linked.length - 12} more</div>` : "");
+  tip.innerHTML = `<div class="t">${esc(n.label)}</div><div class="s">${sub} · ${n.deg} link${n.deg === 1 ? "" : "s"}</div>${list}`;
   tip.classList.add("show"); moveTip(x, y);
 }
 function moveTip(x, y) { tip.style.left = Math.min(x + 14, W - tip.offsetWidth - 8) + "px"; tip.style.top = (y + 16) + "px"; }

@@ -23,7 +23,6 @@ const messages = [];
 let pulses = []; // {from,to,kind,born}
 let totals = { inputTokens: 0, outputTokens: 0, calls: 0 };
 const usageByAgent = new Map();
-let progress = 0;
 let running = false; // session state — gates the "new goal" prompt bar
 let openAgentId = null; // which node's detail panel is open, if any
 let pendingApprovals = []; // the FIFO queue's current snapshot — same one the TUI answers from
@@ -72,7 +71,7 @@ function connect() {
   // blip replays only what was missed instead of the whole 2000-event buffer.
   const es = new EventSource(`/events?token=${encodeURIComponent(TOKEN)}`);
   let everOpened = false;
-  es.onopen = () => { everOpened = true; conn.textContent = "live"; conn.className = "conn live"; };
+  es.onopen = () => { everOpened = true; conn.textContent = ""; };
   es.onerror = () => {
     // A bad/absent token and an unplugged network both land here, and "reconnecting…" forever is
     // a miserable way to learn the URL was missing its ?token=. If we never once connected, the
@@ -97,8 +96,6 @@ function handle(e) {
     case "session":
       running = e.state === "started";
       setPromptEnabled();
-      if (e.state === "started") { $("goal").textContent = e.goal || "working…"; setProgress(0); }
-      if (e.state === "ended") setProgress(100);
       if (e.state === "cancelled") $("conn").textContent = "cancelled";
       break;
     case "approval_request":
@@ -148,7 +145,6 @@ function onOrch(ev) {
       const n = nodes.get(ev.role);
       if (n) n.status = ev.ok ? "done" : "failed";
       setTaskStatus(ev.taskId, ev.ok ? "done" : "failed");
-      if (ev.total) setProgress(Math.round((ev.completed / ev.total) * 100));
       if (openAgentId === ev.role) renderAgentPanel(); // disables it again once the task ends
       break;
     }
@@ -156,7 +152,6 @@ function onOrch(ev) {
     // Not unconditionally 100: a cancelled or partly-failed run leaves tasks unfinished, and
     // claiming completion there is the UI lying about the work.
     case "complete":
-      setProgress(ev.total > 0 ? Math.round((ev.completed / ev.total) * 100) : 100);
       for (const n of nodes.values()) if (n.status === "working") n.status = "idle";
       break;
     // The core has always emitted these; the dashboard ignored them, so a silently-rejected review
@@ -208,7 +203,6 @@ function feedDelta(n, chunk) {
 }
 
 // ---------- panels ----------
-function setProgress(p) { progress = p; $("bar").style.width = p + "%"; $("pct").textContent = p + "%"; }
 function setTaskStatus(id, st) { const t = tasks.find((x) => x.id === id); if (t) { t.status = st; renderTasks(); } }
 
 function renderTasks() {
@@ -348,35 +342,21 @@ $("approval-always").addEventListener("click", () => answerApproval(true, "agent
 $("approval-no").addEventListener("click", () => answerApproval(false));
 
 // ---------- prompt bar: submit a whole-team goal (POST /prompt) ----------
-// BUILD runs the goal; PLAN stops once the orchestrator has built the task DAG, so you can read it
-// (and edit the team) before any agent writes a file — the dashboard's copy of the TUI's shift+tab.
-let promptMode = "build";
 function setPromptEnabled() {
   $("prompt-send").disabled = running;
   $("prompt-input").disabled = running;
-  for (const b of $("prompt-mode").querySelectorAll("button")) b.disabled = running;
+  $("goal").textContent = running ? "working…" : "waiting for a task…";
 }
-$("prompt-mode").addEventListener("click", (e) => {
-  const b = e.target.closest("button");
-  if (!b || running) return;
-  promptMode = b.dataset.mode;
-  for (const x of $("prompt-mode").querySelectorAll("button")) x.classList.toggle("active", x === b);
-  $("prompt-status").textContent = "";
-});
 async function submitPrompt() {
   const text = $("prompt-input").value.trim();
   if (!text || running) return;
-  const mode = promptMode;
-  const res = await authedFetch("/prompt", { text, mode });
+  const res = await authedFetch("/prompt", { text, mode: "build" });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     $("prompt-status").textContent = e.error || "failed";
     return;
   }
-  // The goal stays in the box after a plan: switching to Build and sending it again is how you run
-  // the plan you just read, and the core matches it by text to skip a second planning call.
-  if (mode === "plan") $("prompt-status").textContent = "planning — switch to Build and send again to run it";
-  else { $("prompt-input").value = ""; $("prompt-status").textContent = ""; }
+  $("prompt-input").value = ""; $("prompt-status").textContent = "";
 }
 $("prompt-send").addEventListener("click", submitPrompt);
 $("prompt-input").addEventListener("keydown", (e) => { if (e.key === "Enter") submitPrompt(); });
@@ -391,22 +371,44 @@ function resize() {
   canvas.width = W * DPR; canvas.height = H * DPR;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 }
-window.addEventListener("resize", resize);
+// ResizeObserver, not window "resize": opening the agent panel shrinks the canvas's CSS box without
+// touching the window, and a stale backing store gets stretched to the new box (squished avatars).
+new ResizeObserver(resize).observe(canvas);
 
-// Click-to-inspect: hit-test against each node's drawn circle, same x/y/radius draw() uses.
-canvas.addEventListener("click", (ev) => {
+// Hit-test against each node's drawn circle, same x/y/radius draw() uses.
+function nodeAt(ev) {
   const rect = canvas.getBoundingClientRect();
   const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
-  for (const n of nodes.values()) {
-    const x = n.x * W, y = n.y * H, r = AVATAR_R;
-    if (Math.hypot(mx - x, my - y) <= r) { openAgentPanel(n.id); return; }
-  }
+  for (const n of nodes.values()) if (Math.hypot(mx - n.x * W, my - n.y * H) <= AVATAR_R) return n;
+}
+// Drag to move (and pin, like graph.js); a press that never moved is a click-to-inspect.
+let drag = null;
+canvas.addEventListener("pointerdown", (ev) => {
+  const n = nodeAt(ev);
+  if (!n) return;
+  drag = { n, moved: false, x: ev.clientX, y: ev.clientY };
+  canvas.setPointerCapture(ev.pointerId);
 });
+canvas.addEventListener("pointermove", (ev) => {
+  if (!drag) return;
+  if (!drag.moved && Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) < 4) return;
+  drag.moved = true;
+  const rect = canvas.getBoundingClientRect();
+  drag.n.x = Math.max(0.02, Math.min(0.98, (ev.clientX - rect.left) / W));
+  drag.n.y = Math.max(0.02, Math.min(0.98, (ev.clientY - rect.top) / H));
+  drag.n.pinned = true;
+});
+canvas.addEventListener("pointerup", () => {
+  if (drag && !drag.moved) openAgentPanel(drag.n.id);
+  drag = null;
+});
+canvas.addEventListener("dblclick", (ev) => { const n = nodeAt(ev); if (n) n.pinned = false; });
 
 function step() {
   const arr = [...nodes.values()];
   // force sim (small N → O(n^2) is fine)
   for (const a of arr) {
+    if (a.pinned) { a.vx = a.vy = 0; continue; }
     a.vx += (0.5 - a.x) * 0.002; // gravity to center
     a.vy += (0.5 - a.y) * 0.002;
     for (const b of arr) {
