@@ -3,7 +3,7 @@ import { mkdtempSync, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, editDiff, splitCommand, normalizeShellInput, canonicalizeShellCall } from "./tools.ts";
+import { runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, editDiff, snippetDiff, splitCommand, normalizeShellInput, canonicalizeShellCall } from "./tools.ts";
 
 const root = mkdtempSync(join(tmpdir(), "niti-tools-"));
 const ALL = ["read_file", "write_file", "edit", "shell"];
@@ -307,4 +307,14 @@ test("an empty shell command is answered with a usable error, not a Node TypeErr
     expect(out).toStartWith("error: shell was called with an empty command");
     expect(out).not.toContain("ERR_INVALID_ARG_VALUE");
   }
+});
+
+test("snippetDiff shows the changed range with context and caps long hunks", () => {
+  const before = ["a", "b", "c", "d", "e", "f", "g"].join("\n");
+  const after = ["a", "b", "c", "D", "e", "f", "g"].join("\n");
+  expect(snippetDiff("x.ts", before, after)).toBe("@@ x.ts:4-4\n b\n c\n-d\n+D\n e\n f");
+  expect(snippetDiff("x.ts", before, before)).toBe("");
+  const fresh = snippetDiff("n.ts", null, Array.from({ length: 30 }, (_, i) => `l${i}`).join("\n"));
+  expect(fresh.split("\n")).toHaveLength(1 + 12 + 1);
+  expect(fresh).toContain("+… 18 more lines");
 });

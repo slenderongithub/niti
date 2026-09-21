@@ -11,15 +11,16 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, snippetDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
 import { StallGuard, stallNudge, recurringNudge } from "./stall.ts";
-import { compactTurns, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
+import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
 import { createHash } from "node:crypto";
+import { defaultSettings, type RuntimeSettings } from "../settings.ts";
 import { runChecks, checkSurface, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 
@@ -227,6 +228,7 @@ export interface AgentDeps {
   messenger?: Messenger; // present → send_message/ask_agent tools + inbox injection
   store?: SessionStore; // present → every turn is mirrored to SQLite (resume, undo, session history)
   audit?: AuditLog; // present → every executed tool call appends to the tamper-evident audit log
+  settings?: RuntimeSettings; // live toggles (auto-compact, thinking mode); absent → defaults
   permissionLayers?: PermissionRules[]; // project-level policy (and --auto), consulted after the agent's own
   lsp?: LspRegistry; // present → diagnostics/hover tools, alongside (not instead of) MCP
   onWrite?: (relPath: string) => void; // called just before a file write, so the watcher can ignore our own echo
@@ -275,6 +277,7 @@ export class Agent {
   private messenger?: Messenger;
   private store?: SessionStore;
   private audit?: AuditLog;
+  private settings: RuntimeSettings;
   private permissionLayers: PermissionRules[];
   private lsp?: LspRegistry;
   private onWrite?: (relPath: string) => void;
@@ -317,6 +320,7 @@ export class Agent {
     this.messenger = deps.messenger;
     this.store = deps.store;
     this.audit = deps.audit;
+    this.settings = deps.settings ?? defaultSettings();
     this.permissionLayers = deps.permissionLayers ?? [];
     this.lsp = deps.lsp;
     this.onWrite = deps.onWrite;
@@ -398,6 +402,7 @@ export class Agent {
         this.restateTodos(turns, sessionId);
         this.maskOldObservations(turns, ctx);
         const tools = this.buildTools(allowed, ctx);
+        this.provider.setThinking?.(this.settings.thinkingMode);
         const reply = await this.provider.send(this.config.systemPrompt, turns, tools, onDelta);
         if (reply.text) {
           finalText = reply.text; // per-call, unlike lastText, which every concurrent loop shares
@@ -424,7 +429,7 @@ export class Agent {
         // but only if there *is* a next call. With no tool calls this turn ends the loop, so
         // compacting here paid for a whole extra billed summarization whose result nothing read.
         let compacted = false;
-        if (reply.toolCalls.length > 0 && reply.usage && overContextThreshold(this.contextFill(reply.usage), context, COMPACT_RATIO)) {
+        if (reply.toolCalls.length > 0 && reply.usage && shouldAutoCompact(this.settings.autoCompact, this.contextFill(reply.usage), context, COMPACT_RATIO)) {
           const before = turns.length;
           turns.splice(
             0,
@@ -608,6 +613,7 @@ export class Agent {
         this.injectInbox(turns, sessionId);
         this.injectNotes(turns, sessionId);
         this.maskOldObservations(turns, ctx);
+        this.provider.setThinking?.(this.settings.thinkingMode);
         const reply = await this.provider.send(this.config.systemPrompt, turns, this.buildTools(allowed, ctx), onDelta);
         if (reply.text) text = reply.text;
         if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
@@ -615,7 +621,7 @@ export class Agent {
         // (a 12-turn loop with full file contents in its tool results) hit a hard provider error on
         // overflow instead of shrinking — and the parent only saw "fork failed".
         let compacted = false;
-        if (reply.toolCalls.length > 0 && reply.usage && overContextThreshold(this.contextFill(reply.usage), context, COMPACT_RATIO)) {
+        if (reply.toolCalls.length > 0 && reply.usage && shouldAutoCompact(this.settings.autoCompact, this.contextFill(reply.usage), context, COMPACT_RATIO)) {
           const before = turns.length;
           turns.splice(
             0,
@@ -1201,12 +1207,14 @@ export class Agent {
           if (!ctx.checkBaseline.has(writeRel)) ctx.checkBaseline.set(writeRel, before);
         }
       }
+      const after = writeRel !== undefined ? await this.readForCheckpoint(writeRel) : undefined;
       this.bus.publish({
         agentId: id,
         type: kind,
         payload: `${call.name} → ${output.slice(0, 120).replace(/\n/g, " ")}`,
         time: Date.now(),
         path: writeRel,
+        diff: after === undefined ? undefined : snippetDiff(writeRel!, before ?? null, after) || undefined,
       });
       return this.admit(call, output, ctx);
     } catch (err) {

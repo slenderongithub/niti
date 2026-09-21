@@ -62,6 +62,8 @@ export interface NitiOptions {
   // Commands an agent's changes must pass before it may report a task done, e.g.
   // ["bun run typecheck", "bun test"]. Omitted → detected from the project; `false` → never verify.
   verify?: string[] | false;
+  autoCompact?: boolean; // false → never compact the context (default true); toggled live via POST /settings
+  thinkingMode?: boolean; // false → send no thinking/reasoning parameters (default true)
   repoMap?: boolean; // false → don't put a generated project map in the system prompt
 }
 
@@ -79,6 +81,8 @@ export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
     worktree: raw.worktree === true,
     // `false` is meaningful here (turn detection off), so it can't collapse into undefined.
     verify: raw.verify === false ? false : Array.isArray(raw.verify) ? raw.verify.filter((v): v is string => typeof v === "string") : undefined,
+    autoCompact: raw.autoCompact === false ? false : undefined,
+    thinkingMode: raw.thinkingMode === false ? false : undefined,
     repoMap: raw.repoMap === false ? false : undefined,
   };
 }
@@ -185,12 +189,14 @@ export function setTheme(theme: string, path = ".niti/agents.yaml"): void {
 // Persist the approval mode back to .niti/agents.yaml (written by the team picker's setup question
 // and by /auto | /manual) so the choice survives a restart. Same read-merge-write shape as
 // setTheme — only the `auto` key is touched, every comment and hand-written block around it stays.
-export function setAuto(on: boolean, path = ".niti/agents.yaml"): void {
+export function setOption(key: string, value: boolean, path = ".niti/agents.yaml"): void {
   mkdirSync(dirname(path), { recursive: true });
   const doc = existsSync(path) ? parseDocument(readFileSync(path, "utf8")) : parseDocument("{}");
-  doc.set("auto", on);
+  doc.set(key, value);
   writeFileSync(path, doc.toString());
 }
+
+export const setAuto = (on: boolean, path?: string): void => setOption("auto", on, path);
 
 function validate(a: unknown, i: number, path: string): AgentConfig {
   const rec = (a ?? {}) as Record<string, unknown>;

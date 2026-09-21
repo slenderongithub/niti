@@ -113,3 +113,16 @@ test("reasoning_effort is sent only when asked for, since most catalog models re
   expect(reasoningEffort("auto")).toEqual({}); // auto = leave the model's own default alone
   expect(reasoningEffort(undefined)).toEqual({});
 });
+
+test("setThinking(false) drops reasoning_effort from the request; true restores it", async () => {
+  const p = new OpenAIProvider("o3", "k", undefined, undefined, "high");
+  const seen = withStub(p, reply({ content: "ok" }));
+  await p.send("S", [{ role: "user", text: "hi" }], []);
+  expect(seen.params.reasoning_effort).toBe("high");
+  p.setThinking(false);
+  await p.send("S", [{ role: "user", text: "hi" }], []);
+  expect("reasoning_effort" in seen.params).toBe(false);
+  p.setThinking(true);
+  await p.send("S", [{ role: "user", text: "hi" }], []);
+  expect(seen.params.reasoning_effort).toBe("high");
+});

@@ -50,22 +50,56 @@ type settings struct {
 	stats       api.Stats
 	statsLoaded bool
 	statsErr    string
+	creds       []api.Credential // GET /auth, for the Status tab's login row
+	credsLoaded bool
+	query       string // Config tab search filter
+	cursor      int    // Config tab: highlighted row within the filtered list
 }
 
 // settingsKey drives the overlay. ←/→/tab move between panels; on Stats, ↑/↓ toggle its two
 // sub-views; esc closes. Everything is swallowed so the prompt underneath never sees a keystroke.
 func (m *Model) settingsKey(k tea.KeyMsg) tea.Cmd {
-	switch k.String() {
-	case "esc", "q":
+	onConfig := m.sett.tab == 2
+	switch key := k.String(); {
+	case key == "esc" && onConfig && m.sett.query != "":
+		m.sett.query, m.sett.cursor = "", 0 // first esc clears the search, the next closes
+	case key == "esc", key == "q" && !onConfig:
 		m.sett = settings{}
-	case "right", "tab", "l":
+	case key == "right", key == "tab", key == "l" && !onConfig:
 		m.sett.tab = (m.sett.tab + 1) % len(settingsTabs)
-	case "left", "shift+tab", "h":
+	case key == "left", key == "shift+tab", key == "h" && !onConfig:
 		m.sett.tab = (m.sett.tab - 1 + len(settingsTabs)) % len(settingsTabs)
-	case "up", "down":
+	case len(key) == 1 && key[0] >= '1' && key[0] <= '5' && (!onConfig || m.sett.query == ""):
+		m.sett.tab = int(key[0] - '1') // number keys jump straight to a tab
+	case onConfig:
+		return m.configKey(k)
+	case key == "up" || key == "down":
 		if m.sett.tab == 4 {
 			m.sett.statsTab ^= 1 // Overview ⇄ Models
 		}
+	}
+	return nil
+}
+
+// configKey drives the searchable settings list: typing filters, ↑/↓ move, enter/space toggle.
+func (m *Model) configKey(k tea.KeyMsg) tea.Cmd {
+	items := filterItems(m.configItems(), m.sett.query)
+	switch k.Type {
+	case tea.KeyUp:
+		m.sett.cursor = max(m.sett.cursor-1, 0)
+	case tea.KeyDown:
+		m.sett.cursor = min(m.sett.cursor+1, max(len(items)-1, 0))
+	case tea.KeyEnter, tea.KeySpace:
+		if m.sett.cursor < len(items) {
+			return m.toggle(items[m.sett.cursor].Label)
+		}
+	case tea.KeyBackspace:
+		if r := []rune(m.sett.query); len(r) > 0 {
+			m.sett.query, m.sett.cursor = string(r[:len(r)-1]), 0
+		}
+	case tea.KeyRunes:
+		m.sett.query += string(k.Runes)
+		m.sett.cursor = 0
 	}
 	return nil
 }
@@ -103,7 +137,10 @@ func (m Model) settingsView(w, h int) string {
 	}
 	lines = append(lines, body...)
 
-	hint := "←/→ switch tabs · esc close"
+	hint := "←/→ or 1-5 switch tabs · esc close"
+	if m.sett.tab == 2 {
+		hint = "type to search · ↑/↓ move · enter/space toggle · ←/→ tabs · esc clear/close"
+	}
 	if m.sett.tab == 4 {
 		hint = "↑/↓ overview/models · ←/→ tabs · esc close"
 	}
@@ -134,57 +171,43 @@ func (m Model) settWelcome(w int) []string {
 
 func (m Model) settStatus(w int) []string {
 	bg := theme.BgDeep
-	mcp := "none connected"
-	if len(m.mcp) > 0 {
-		var names []string
-		for _, s := range m.mcp {
-			names = append(names, fmt.Sprintf("%s(%d)", s.Name, s.Tools))
+	var lines []string
+	for _, r := range m.statusRows(m.sett.creds) {
+		if r.Key == "Login method" && !m.sett.credsLoaded {
+			r.Val = "loading…"
 		}
-		mcp = fmt.Sprintf("%d connected · %s", len(m.mcp), strings.Join(names, ", "))
+		lines = append(lines, kv(w, r.Key, r.Val))
 	}
-	lsp := "none configured"
-	if len(m.lsp) > 0 {
-		running := 0
-		var names []string
-		for _, l := range m.lsp {
-			if l.Running {
-				running++
-			}
-			names = append(names, l.Name)
-		}
-		lsp = fmt.Sprintf("%d running / %d · %s", running, len(m.lsp), strings.Join(names, ", "))
-	}
-	lines := []string{
-		kv(w, "Version", version),
-		kv(w, "Project", shortPath(m.root, max(w-14, 8))),
-		kv(w, "Team", fmt.Sprintf("%d agents", len(m.order))),
-		kv(w, "Mode", m.mode),
-		kv(w, "Theme", theme.Current()),
-		kv(w, "Status", m.status),
-		"",
-		txt(theme.Accent, bg).Bold(true).Render("Models"),
-	}
+	lines = append(lines, "", txt(theme.Accent, bg).Bold(true).Render("Models"))
 	for _, id := range m.order {
 		st := m.agents[id]
 		lines = append(lines, txt(theme.Fg, bg).Render(truncate(fmt.Sprintf("  %s %-14s %s/%s", st.avatar, st.cfg.Role, st.cfg.Provider, st.cfg.Model), w)))
 	}
-	return append(lines, "",
-		kv(w, "MCP servers", mcp),
-		kv(w, "Language servers", lsp))
+	return lines
 }
 
-// settConfig — niti's real, changeable settings, not a mock of Claude Code's forty toggles. Theme
-// and mode are live-editable (ctrl+t / shift+tab); the model assignments are what /config exists to
-// show. ponytail: no fake switches — a config row for a value nothing reads is just decoration.
+// settConfig — a searchable list of niti's real settings; every row toggles in place. ponytail: no fake switches — a row for a value nothing reads is decoration.
 func (m Model) settConfig(w int) []string {
 	bg := theme.BgDeep
-	lines := []string{
-		kvHint(w, "Theme", theme.Current(), "ctrl+t picks"),
-		kvHint(w, "Mode", m.mode, "shift+tab toggles"),
-		kvHint(w, "Themes", strings.Join(theme.Names(), " "), "/theme <name>"),
-		"",
-		txt(theme.Accent, bg).Bold(true).Render("Agents"),
+	search := "⌕ Search settings..."
+	style := txt(theme.Muted, bg)
+	if m.sett.query != "" {
+		search, style = "⌕ "+m.sett.query+"▏", txt(theme.Fg, bg)
 	}
+	lines := []string{style.Render(truncate(search, w)), ""}
+	items := filterItems(m.configItems(), m.sett.query)
+	if len(items) == 0 {
+		return append(lines, txt(theme.Muted, bg).Render("no settings match"))
+	}
+	for i, it := range items {
+		mark, label := "  ", txt(theme.Accent, bg)
+		if i == m.sett.cursor {
+			mark, label = "▸ ", txt(theme.Accent, bg).Bold(true)
+		}
+		val := txt(theme.Amber, bg).Render(it.Value)
+		lines = append(lines, truncate(mark+label.Render(pad(it.Label+":", 22))+val+txt(theme.Muted, bg).Render("   "+it.Hint), w))
+	}
+	lines = append(lines, "", txt(theme.Accent, bg).Bold(true).Render("Agents"))
 	for _, id := range m.order {
 		st := m.agents[id]
 		lead := ""
@@ -195,8 +218,7 @@ func (m Model) settConfig(w int) []string {
 			txt(st.color, bg).Render(truncate(fmt.Sprintf("  %s %s%s", st.avatar, st.cfg.Role, lead), max(w/2, 8)))+
 				txt(theme.Muted, bg).Render(truncate("  "+st.cfg.Provider+"/"+st.cfg.Model, max(w/2, 8))))
 	}
-	return append(lines, "",
-		txt(theme.Muted, bg).Render(truncate("ctrl+p switches an agent's model.", w)))
+	return append(lines, "", txt(theme.Muted, bg).Render(truncate("ctrl+p switches an agent's model.", w)))
 }
 
 func (m Model) settUsage(w int) []string {

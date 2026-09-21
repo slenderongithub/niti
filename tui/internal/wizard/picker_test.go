@@ -367,3 +367,15 @@ func TestBackingOutOfTheKeepPromptKeepsRatherThanQuitting(t *testing.T) {
 		t.Fatalf("esc on the keep prompt should keep the team, got Completed=%v Kept=%v", m.Completed, m.Kept)
 	}
 }
+
+func TestWantsExit(t *testing.T) {
+	list, free := Picker{stage: "size"}, Picker{stage: "desc"}
+	for typed, want := range map[string]bool{"/exit": true, "Quit": true, "3": false} {
+		if got := list.wantsExit(typed); got != want {
+			t.Errorf("list stage %q: got %v", typed, got)
+		}
+	}
+	if !free.wantsExit("/exit") || free.wantsExit("exit") {
+		t.Error("free-text stage: only the slash form should exit")
+	}
+}

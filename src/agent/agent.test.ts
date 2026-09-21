@@ -157,6 +157,53 @@ test("auto-compacts turns once usage crosses 95% of the context window", async (
   expect(warnings.some((w) => w.includes("context compacted automatically"))).toBe(true);
 });
 
+test("autoCompact off: the same 95% usage leaves the turns untouched", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const bus = new Bus();
+  const warnings: string[] = [];
+  bus.subscribe((e) => {
+    if (e.type === "warning") warnings.push(e.payload);
+  });
+  let n = 0;
+  const seenLengths: number[] = [];
+  const stub: Provider = {
+    async send(_sys, turns) {
+      n++;
+      seenLengths.push(turns.length);
+      if (n < 6) {
+        const usage = n === 5 ? { inputTokens: 960_000, outputTokens: 10 } : undefined;
+        return { text: "", toolCalls: [{ id: String(n), name: "write_file", input: { path: `f${n}.txt`, content: "x" } }], usage };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const settings = { autoCompact: false, thinkingMode: true };
+  const agent = new Agent({ ...cfg, provider: "anthropic" }, stub, bus, { root, settings });
+  expect(await agent.run("build something long")).toBe("done");
+  expect(seenLengths[5]).toBe(11); // 1 initial + 5 rounds × 2 turns: nothing was folded away
+  expect(warnings.some((w) => w.includes("context compacted automatically"))).toBe(false);
+});
+
+test("thinkingMode is read live: the provider is told before every call", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const told: boolean[] = [];
+  let n = 0;
+  const settings = { autoCompact: true, thinkingMode: false };
+  const stub: Provider = {
+    setThinking: (on) => void told.push(on),
+    async send() {
+      n++;
+      if (n === 1) settings.thinkingMode = true; // flipped mid-run, as POST /settings would
+      return n < 3
+        ? { text: "", toolCalls: [{ id: String(n), name: "write_file", input: { path: `t${n}.txt`, content: "x" } }] }
+        : { text: "done", toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, provider: "anthropic" }, stub, new Bus(), { root, settings });
+  await agent.run("go");
+  expect(told).toEqual([false, true, true]);
+});
+
 test("reconfigure swaps provider and updates config", async () => {
   const bus = new Bus();
   const first: Provider = { async send() { return { text: "first", toolCalls: [] }; } };

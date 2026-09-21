@@ -333,6 +333,7 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
     store: new SessionStore(db),
     audit: new AuditLog(db),
     permissions: loadPermissions(),
+    settings: { autoCompact: options.autoCompact, thinkingMode: options.thinkingMode },
     auto: args.includes("--auto") || options.auto,
     lsp: new LspRegistry(loadLspServers()),
     watch: options.watch,

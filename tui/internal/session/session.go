@@ -49,6 +49,9 @@ type agentState struct {
 	ctxUsed  int // most recent call's input tokens = current context depth
 	ctxLimit int // the model's context window, from /session
 	log      []string
+	verbose  bool       // mirrors Model.verbose: no merging of same-tool runs
+	running  string     // tool call in flight, e.g. "Run npm test"; see toolfeed.go
+	group    *toolGroup // the collapsed line at the tail of log, if any
 	pending  string // partial line being streamed by `delta` events, shown live under the log
 	color    lipgloss.Color
 	avatar   string
@@ -95,6 +98,10 @@ func (s *agentState) feedDelta(chunk string) {
 }
 
 type Model struct {
+	sid       string // this TUI launch's id, shown on the Status tab
+	autoCompact, thinkingMode bool // mirrors the core's live settings; toggled from the Config tab
+	verbose   bool   // list every tool call separately instead of collapsing runs
+	ticking   bool // a spinner tick is scheduled
 	client    *api.Client
 	events    <-chan api.Event
 	cancel    context.CancelFunc
@@ -165,7 +172,11 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	m := Model{
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected",
-		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true,
+		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(),
+		autoCompact: true, thinkingMode: true, // the core's defaults, kept when an older core sends none
+	}
+	if sess.Settings != nil {
+		m.autoCompact, m.thinkingMode = sess.Settings.AutoCompact, sess.Settings.ThinkingMode
 	}
 	for i, c := range sess.Agents {
 		m.order = append(m.order, c.ID)
@@ -180,7 +191,32 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return tea.Batch(waitFor(m.events), fetchCommands(m.client)) }
+func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{waitFor(m.events), fetchCommands(m.client)}
+	if m.sett.open { // launched as `niti status` / `niti config`: the panels need their data
+		cmds = append(cmds, fetchStats(m.client), fetchCreds(m.client))
+	}
+	return tea.Batch(cmds...)
+}
+
+// OpenSettings starts the session with the tabbed overlay already open on the tab a `niti <name>`
+// subcommand names. Unknown names leave the session untouched.
+// WithVerbose starts the session with tool-call collapsing off (`niti --verbose`); it is the same
+// switch as the Config tab's "Collapse tool calls" row.
+func (m Model) WithVerbose(on bool) Model {
+	m.verbose = on
+	for _, st := range m.agents {
+		st.verbose = on
+	}
+	return m
+}
+
+func (m Model) OpenSettings(name string) Model {
+	if tab, ok := settingsTabFor(name); ok {
+		m.sett = settings{open: true, tab: tab}
+	}
+	return m
+}
 
 // The command list lives on the server (src/commands/registry.ts) so the TUI and the web dashboard
 // share one implementation. A failure here is not fatal: /quit still works, and the next fetch —
@@ -287,6 +323,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case credsMsg:
+		m.sett.creds, m.sett.credsLoaded = msg.creds, true
+		return m, nil
+
 	case commandResultMsg:
 		switch {
 		case msg.err != nil:
@@ -307,7 +347,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, e := range msg {
 			m.apply(e)
 		}
+		if !m.ticking && m.anyRunning() {
+			m.ticking = true
+			return m, tea.Batch(waitFor(m.events), tick())
+		}
 		return m, waitFor(m.events) // one View for the whole batch
+	case tickMsg:
+		if m.ticking = m.anyRunning(); m.ticking {
+			return m, tick()
+		}
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -588,7 +637,7 @@ func (m *Model) submit(text string) tea.Cmd {
 	if name, args, _ := strings.Cut(strings.TrimPrefix(text, "/"), " "); strings.HasPrefix(text, "/") {
 		if tab, ok := settingsTabFor(name); ok {
 			m.sett = settings{open: true, tab: tab}
-			return fetchStats(m.client) // load the all-time history the Stats/Usage panels draw
+			return tea.Batch(fetchStats(m.client), fetchCreds(m.client)) // load the all-time history the Stats/Usage panels draw
 		}
 		switch name {
 		case "help":
@@ -746,6 +795,10 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 		st.status = "failed"
 	}
 
+	if ae.Type != "tool_call" {
+		st.toolEnd(false) // whatever was running is done: the agent has moved on
+	}
+
 	// `delta` is streamed text — it belongs in the agent's transcript, assembled line by line.
 	// Everything else is a discrete event and gets its own labelled line.
 	if ae.Type == "delta" {
@@ -760,7 +813,14 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 		return
 	}
 	st.activity = truncate(strings.TrimLeft(line, "⏺⎿▸·✖ "), 46)
+	if call, ok := strings.CutPrefix(line, "⏺ "); ok && ae.Type == "tool_call" {
+		st.toolStart(call) // shown live, then collapsed — see toolfeed.go
+		return
+	}
 	st.push(line)
+	for _, l := range diffLines(ae.Diff) {
+		st.push(l)
+	}
 }
 
 func (m *Model) applyOrch(oe api.OrchestrationEvent) {

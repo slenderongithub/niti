@@ -60,6 +60,7 @@ type SessionInfo struct {
 	Mcp           []McpInfo      `json:"mcp"`
 	ContextLimits map[string]int `json:"contextLimits"` // agent id → its model's context window
 	Theme         string         `json:"theme"`         // `theme:` from agents.yaml, applied at launch
+	Settings      *Settings      `json:"settings"`      // live toggles; nil from an older core
 }
 
 type AgentEvent struct {
@@ -67,6 +68,7 @@ type AgentEvent struct {
 	Type    string `json:"type"`
 	Payload string `json:"payload"`
 	Time    int64  `json:"time"`
+	Diff    string `json:"diff"` // file_edit only: unified snippet of the change
 }
 
 type AgentMessage struct {
@@ -303,6 +305,18 @@ func (c *Client) SwitchModel(agentID, provider, model, baseURL string) error {
 
 // SetTheme persists the active theme to .niti/agents.yaml and broadcasts it over SSE so the web
 // dashboard and graph page pick it up live (see the theme carousel's enter handler).
+// Settings mirrors the core's RuntimeSettings.
+type Settings struct {
+	AutoCompact  bool `json:"autoCompact"`
+	ThinkingMode bool `json:"thinkingMode"`
+}
+
+// SetSetting flips one runtime setting ("autoCompact" | "thinkingMode") on the live engine; the
+// core persists it to agents.yaml.
+func (c *Client) SetSetting(key string, on bool) error {
+	return c.do("POST", "/settings", map[string]bool{key: on}, nil)
+}
+
 func (c *Client) SetTheme(name string) error {
 	return c.do("POST", "/theme", map[string]string{"theme": name}, nil)
 }

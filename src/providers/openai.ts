@@ -41,6 +41,12 @@ export class OpenAIProvider implements Provider {
     });
   }
 
+  private thinking = true;
+
+  setThinking(on: boolean): void {
+    this.thinking = on;
+  }
+
   async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: "system", content: sysPrompt },
@@ -72,7 +78,7 @@ export class OpenAIProvider implements Provider {
     const params = {
       model: this.model,
       messages,
-      ...reasoningEffort(this.reasoning),
+      ...reasoningEffort(this.thinking ? this.reasoning : undefined),
       ...(tools.length
         ? {
             tools: tools.map((t) => ({

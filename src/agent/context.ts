@@ -18,6 +18,12 @@ function describeTurn(t: Turn): string {
   return `Assistant: ${t.text}${calls}`;
 }
 
+// Whether to compact now: the context is past `ratio` of the window and the user has not turned
+// auto-compact off. With it off, turns accumulate untouched until the provider itself refuses.
+export function shouldAutoCompact(autoCompact: boolean, inputTokens: number, context: number, ratio: number): boolean {
+  return autoCompact && context > 0 && inputTokens > context * ratio;
+}
+
 export async function compactTurns(
   turns: Turn[],
   provider: Provider,

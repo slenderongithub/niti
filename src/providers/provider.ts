@@ -113,6 +113,9 @@ export interface Provider {
   // want semantic search (see niti IDE's codebase index) must check for this before calling it,
   // and fall back to a non-semantic strategy when it's absent — never assume every provider has it.
   embed?(texts: string[]): Promise<number[][]>;
+  // Optional: the user's thinking-mode switch. false → omit every reasoning/thinking parameter from
+  // requests, even one configured on the agent. Providers with no such parameter simply lack it.
+  setThinking?(on: boolean): void;
 }
 
 // How hard a model should think before answering. Portable across providers because the thing
