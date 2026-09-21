@@ -597,6 +597,12 @@ func lineStyle(line string, bg lipgloss.Color) lipgloss.Style {
 		return txt(theme.Red, bg)
 	case strings.HasPrefix(line, "✔"):
 		return txt(theme.Green, bg)
+	case strings.HasPrefix(line, "  - "):
+		return txt(theme.Red, bg)
+	case strings.HasPrefix(line, "  + "):
+		return txt(theme.Green, bg)
+	case strings.HasPrefix(line, "  │ "), strings.HasPrefix(line, "  ╭ "):
+		return txt(theme.Muted, bg)
 	case isSpinning(line):
 		return txt(theme.Accent, bg)
 	case strings.HasPrefix(line, "⚠"):

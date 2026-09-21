@@ -11,7 +11,7 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, snippetDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
@@ -1201,12 +1201,14 @@ export class Agent {
           if (!ctx.checkBaseline.has(writeRel)) ctx.checkBaseline.set(writeRel, before);
         }
       }
+      const after = writeRel !== undefined ? await this.readForCheckpoint(writeRel) : undefined;
       this.bus.publish({
         agentId: id,
         type: kind,
         payload: `${call.name} → ${output.slice(0, 120).replace(/\n/g, " ")}`,
         time: Date.now(),
         path: writeRel,
+        diff: after === undefined ? undefined : snippetDiff(writeRel!, before ?? null, after) || undefined,
       });
       return this.admit(call, output, ctx);
     } catch (err) {

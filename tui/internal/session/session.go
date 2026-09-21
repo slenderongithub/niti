@@ -781,6 +781,9 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 		return
 	}
 	st.push(line)
+	for _, l := range diffLines(ae.Diff) {
+		st.push(l)
+	}
 }
 
 func (m *Model) applyOrch(oe api.OrchestrationEvent) {

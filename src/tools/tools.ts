@@ -522,6 +522,35 @@ export function writeFileDiff(before: string | null, content: string): string {
   return [`@@ line 1 @@`, ...minus, ...plus].join("\n");
 }
 
+// The change a write actually made, as a unified snippet for the live feed: `@@ path:14-22`, then
+// changed lines (-/+) with `ctx` unchanged lines around them. Trims the common prefix and suffix
+// rather than running an LCS — an edit is one contiguous hunk, and a scattered rewrite just shows
+// as one big hunk. Long hunks are capped so a whole-file write cannot flood the feed.
+// Returns "" when nothing changed.
+export function snippetDiff(path: string, before: string | null, after: string, ctx = 2, cap = 12): string {
+  const a = before === null ? [] : before.split("\n");
+  const b = after.split("\n");
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let s = 0;
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  const removed = a.slice(p, a.length - s);
+  const added = b.slice(p, b.length - s);
+  if (removed.length === 0 && added.length === 0) return "";
+  const show = (sign: string, ls: string[]) => [
+    ...ls.slice(0, cap).map((l) => `${sign}${l}`),
+    ...(ls.length > cap ? [`${sign}… ${ls.length - cap} more lines`] : []),
+  ];
+  const range = `${p + 1}-${p + Math.max(added.length, 1)}`;
+  return [
+    `@@ ${path}:${range}`,
+    ...b.slice(Math.max(0, p - ctx), p).map((l) => ` ${l}`),
+    ...show("-", removed),
+    ...show("+", added),
+    ...b.slice(b.length - s, b.length - s + ctx).map((l) => ` ${l}`),
+  ].join("\n");
+}
+
 // Tool definitions exposed to the model, keyed by allowedTools name. (No additionalProperties —
 // Gemini's schema subset rejects it, and the others don't need it.)
 const SPECS: Record<string, ToolSpec> = {

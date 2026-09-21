@@ -22,6 +22,8 @@ export interface AgentEvent {
   // readable string. Optional and additive: every existing consumer that only reads `payload`
   // is unaffected.
   path?: string;
+  // "file_edit" only: a unified snippet of what changed (see snippetDiff), for the TUI feed.
+  diff?: string;
 }
 
 // Thin typed wrapper over node:events. Many agents publish; the log/TUI subscribes.

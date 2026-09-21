@@ -67,6 +67,7 @@ type AgentEvent struct {
 	Type    string `json:"type"`
 	Payload string `json:"payload"`
 	Time    int64  `json:"time"`
+	Diff    string `json:"diff"` // file_edit only: unified snippet of the change
 }
 
 type AgentMessage struct {
