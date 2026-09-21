@@ -300,3 +300,11 @@ test("shell output over the cap keeps the end, where a failure summary lives", a
   expect(r.stdout).toContain("[output truncated]");
   expect(r.stdout.length).toBeLessThan(700);
 });
+
+test("an empty shell command is answered with a usable error, not a Node TypeError", async () => {
+  for (const command of ["", "   "]) {
+    const out = await runTool({ tool: "shell", command, args: [] }, ALL, root);
+    expect(out).toStartWith("error: shell was called with an empty command");
+    expect(out).not.toContain("ERR_INVALID_ARG_VALUE");
+  }
+});

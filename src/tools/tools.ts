@@ -344,6 +344,11 @@ export async function runTool(
       return `edited ${call.path}`;
     }
     case "shell": {
+      // spawn("") throws a Node TypeError that names an argument the model never saw. Say what is
+      // actually wrong, and how to fix the call, in the model's own terms.
+      if (!call.command.trim()) {
+        return "error: shell was called with an empty command. Give the program to run in `command` (for example command: \"npm\", args: [\"run\", \"typecheck\"]).";
+      }
       const r = await shell(root, call.command, call.args);
       return `exit ${r.code}\n${r.stdout}${r.stderr}`;
     }
