@@ -433,3 +433,17 @@ test("/session prefs contains only the boolean flags, even when handed the whole
   const res = await fetch(`${h.url}/session`, { method: "POST", headers: { authorization: `Bearer ${h.token}` } });
   expect((await res.json()).prefs).toEqual({ lightMode: false, reduceMotion: true, showTurnDuration: false, openAgentsView: false, projectInstructions: true });
 });
+
+test("the favicon stack is public, square-sized PNGs, and both pages link it", async () => {
+  const h = track(setup().h);
+  for (const path of ["/favicon-32.png", "/apple-touch-icon.png", "/favicon.ico"]) {
+    const res = await fetch(`${h.url}${path}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+  }
+  for (const page of ["/dashboard", "/graph/view"]) {
+    const html = await (await fetch(`${h.url}${page}`)).text();
+    expect(html).toContain('rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"');
+    expect(html).toContain('rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"');
+  }
+});
