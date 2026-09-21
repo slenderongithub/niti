@@ -49,6 +49,8 @@ type agentState struct {
 	ctxUsed  int // most recent call's input tokens = current context depth
 	ctxLimit int // the model's context window, from /session
 	log      []string
+	running  string     // tool call in flight, e.g. "Run npm test"; see toolfeed.go
+	group    *toolGroup // the collapsed line at the tail of log, if any
 	pending  string // partial line being streamed by `delta` events, shown live under the log
 	color    lipgloss.Color
 	avatar   string
@@ -95,6 +97,7 @@ func (s *agentState) feedDelta(chunk string) {
 }
 
 type Model struct {
+	ticking   bool // a spinner tick is scheduled
 	client    *api.Client
 	events    <-chan api.Event
 	cancel    context.CancelFunc
@@ -307,7 +310,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, e := range msg {
 			m.apply(e)
 		}
+		if !m.ticking && m.anyRunning() {
+			m.ticking = true
+			return m, tea.Batch(waitFor(m.events), tick())
+		}
 		return m, waitFor(m.events) // one View for the whole batch
+	case tickMsg:
+		if m.ticking = m.anyRunning(); m.ticking {
+			return m, tick()
+		}
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -746,6 +758,10 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 		st.status = "failed"
 	}
 
+	if ae.Type != "tool_call" {
+		st.toolEnd(false) // whatever was running is done: the agent has moved on
+	}
+
 	// `delta` is streamed text — it belongs in the agent's transcript, assembled line by line.
 	// Everything else is a discrete event and gets its own labelled line.
 	if ae.Type == "delta" {
@@ -760,6 +776,10 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 		return
 	}
 	st.activity = truncate(strings.TrimLeft(line, "⏺⎿▸·✖ "), 46)
+	if call, ok := strings.CutPrefix(line, "⏺ "); ok && ae.Type == "tool_call" {
+		st.toolStart(call) // shown live, then collapsed — see toolfeed.go
+		return
+	}
 	st.push(line)
 }
 

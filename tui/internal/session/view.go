@@ -457,6 +457,9 @@ func (m Model) agentBlock(st *agentState, w, per int) string {
 	if st.pending != "" {
 		body = append(append([]string{}, body...), st.pending) // the line still being streamed
 	}
+	if st.running != "" {
+		body = append(append([]string{}, body...), spinner()+" "+st.running+"…")
+	}
 	if len(body) == 0 {
 		body = []string{"—"}
 	}
@@ -592,6 +595,10 @@ func lineStyle(line string, bg lipgloss.Color) lipgloss.Style {
 	switch {
 	case strings.HasPrefix(line, "✖"):
 		return txt(theme.Red, bg)
+	case strings.HasPrefix(line, "✔"):
+		return txt(theme.Green, bg)
+	case isSpinning(line):
+		return txt(theme.Accent, bg)
 	case strings.HasPrefix(line, "⚠"):
 		return txt(theme.Amber, bg)
 	case strings.HasPrefix(line, "▸"):
