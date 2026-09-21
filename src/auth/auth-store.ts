@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, rmSync } from "node:fs";
-import { envKey, getKey as keychainKey, setKey as keychainSet, deleteKey as keychainDelete } from "../keystore/keystore.ts";
+import { getKey as keychainKey, setKey as keychainSet, deleteKey as keychainDelete } from "../keystore/keystore.ts";
 
 // Typed, global credential store — the niti equivalent of opencode's auth.json.
 // A credential is one of three shapes: a raw API key (BYOK), an OAuth grant
@@ -81,14 +81,9 @@ export function removeCredential(provider: string): void {
   if (!process.env.NITI_AUTH_FILE) keychainDelete(provider);
 }
 
-// The value a provider client needs as its API key. Resolution order: env → typed store → keychain.
-// An exported variable is the most explicit, most recent statement of intent (and the only way to
-// override a saved key for one command), so it wins. A test store (NITI_AUTH_FILE) stays hermetic.
+// The value a provider client needs as its API key. Resolution order: typed store → keychain → env.
+// (keychain/env fallback preserves the legacy `niti keys set` and `export <ENV>` paths.)
 export function resolveApiKey(provider: string): string | undefined {
-  if (!process.env.NITI_AUTH_FILE) {
-    const fromEnv = envKey(provider);
-    if (fromEnv) return fromEnv;
-  }
   const cred = getCredential(provider);
   if (cred) {
     if (cred.type === "api") return cred.key;
