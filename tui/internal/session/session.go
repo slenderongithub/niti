@@ -491,8 +491,14 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+t":
 		m.openThemePicker()
 		return m, nil
+	case "alt+enter", "shift+enter", "ctrl+j":
+		// A newline, not a submit. The prompt is a single-line textinput, which strips real
+		// newlines, so the break is held as a visible ⏎ and turned back into "\n" on send.
+		m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(newlineMark)})
+		m.refreshMenu()
+		return m, nil
 	case "enter":
-		text := strings.TrimSpace(m.input.Value())
+		text := strings.TrimSpace(strings.ReplaceAll(m.input.Value(), newlineMark, "\n"))
 		// Every plain message is a BRAND NEW goal to the core: the planner only ever sees the text
 		// just typed, never the previous run's. So a follow-up sent while a half-finished plan is
 		// still on the board silently throws that plan away and re-plans from a sentence that was
@@ -606,6 +612,9 @@ func (m *Model) refreshMenu() {
 	}
 	m.menu.SetQuery(strings.TrimPrefix(text, "/"))
 }
+
+// newlineMark stands in for a line break inside the single-line prompt.
+const newlineMark = "⏎"
 
 func (m *Model) submit(text string) tea.Cmd {
 	if text == "" {

@@ -481,3 +481,25 @@ func TestTabBarSitsBesideTheSidebarNotAcrossIt(t *testing.T) {
 		t.Fatalf("layout is %d rows tall in a 30-row terminal", got)
 	}
 }
+
+// Shift+Enter cannot be told apart from Enter on most terminals under bubbletea v1, so the newline
+// keys are alt+enter and ctrl+j (and shift+enter where a terminal does report it). None of them
+// may submit; the break is sent as a real "\n" when enter finally does.
+func TestNewlineKeysInsertABreakInsteadOfSubmitting(t *testing.T) {
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyEnter, Alt: true},
+		{Type: tea.KeyCtrlJ},
+	} {
+		m := model(1)
+		m = typing(m, "one")
+		next, cmd := m.onKey(key)
+		m = next.(Model)
+		if cmd != nil {
+			t.Fatalf("%q must not submit", key.String())
+		}
+		m = typing(m, "two")
+		if got := m.input.Value(); got != "one"+newlineMark+"two" {
+			t.Fatalf("%q: prompt = %q", key.String(), got)
+		}
+	}
+}
