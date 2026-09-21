@@ -47,6 +47,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
     store: new SessionStore(db),
     audit: new AuditLog(db),
     permissions: loadPermissions(),
+    settings: { autoCompact: options.autoCompact, thinkingMode: options.thinkingMode },
     auto: opts.auto || options.auto, // the flag and the config both turn it on; neither can turn the other off
     lsp: new LspRegistry(loadLspServers()),
     // A long-lived server is exactly where an external edit is worth announcing, so watching is on

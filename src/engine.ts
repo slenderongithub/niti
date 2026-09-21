@@ -9,6 +9,7 @@ import { Orchestrator } from "./orchestrator/orchestrator.ts";
 import { LockRegistry } from "./orchestrator/locks.ts";
 import { ApprovalQueue } from "./approval.ts";
 import { UsageTracker } from "./usage.ts";
+import { defaultSettings, type RuntimeSettings } from "./settings.ts";
 import { runProject, resumeProject, type RunnerDeps } from "./orchestrator/runner.ts";
 import { EventHub } from "./server/events.ts";
 import type { Provider } from "./providers/provider.ts";
@@ -33,6 +34,7 @@ export interface EngineOptions {
   store?: SessionStore; // present → conversations persist (resume, undo, session history)
   audit?: AuditLog; // present → tool calls + approval decisions append to a tamper-evident log
   permissions?: PermissionRules; // project-level tool policy from agents.yaml
+  settings?: Partial<RuntimeSettings>; // autoCompact / thinkingMode from agents.yaml; both default on
   auto?: boolean; // --auto: approve anything not explicitly denied (dangerous commands still prompt)
   lsp?: LspRegistry; // present → diagnostics/hover available to every agent, alongside MCP
   watch?: boolean; // true → emit external_change events for edits made outside niti
@@ -138,6 +140,8 @@ export class Engine {
     // restart and no per-agent replumbing.
     const permissionLayers = [...(opts.permissions ? [opts.permissions] : []), ...(opts.auto ? [AUTO_RULES] : [])];
     this.permissionLayers = permissionLayers;
+    const d = defaultSettings();
+    this.settings = { autoCompact: opts.settings?.autoCompact ?? d.autoCompact, thinkingMode: opts.settings?.thinkingMode ?? d.thinkingMode };
 
     // Resolved once, at wiring time: detection reads package.json/go.mod off disk, and doing that
     // per task would re-read it on every one of them for an answer that cannot change mid-run.
@@ -191,6 +195,7 @@ export class Engine {
         store: this.store,
         audit: this.audit,
         permissionLayers,
+        settings: this.settings,
         lsp: opts.lsp,
         onWrite: (path) => this.watcher?.markSelfWrite(path),
         maxTurns: opts.maxTurns,
@@ -370,6 +375,9 @@ export class Engine {
   // /auto and /manual, and the team picker's setup question. Toggling approval mode for a live
   // session is just adding or removing the blanket-allow layer — an explicit project `deny` still
   // wins either way, and dangerous or project-escaping commands still force a prompt (see agent.ts).
+  // Live toggles shared by reference with every agent (see settings.ts).
+  readonly settings: RuntimeSettings;
+
   setAuto(on: boolean): void {
     const at = this.permissionLayers.indexOf(AUTO_RULES);
     if (on && at === -1) this.permissionLayers.push(AUTO_RULES);

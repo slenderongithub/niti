@@ -20,6 +20,12 @@ export class GeminiProvider implements Provider {
     });
   }
 
+  private thinking = true;
+
+  setThinking(on: boolean): void {
+    this.thinking = on;
+  }
+
   async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
     // Gemini roles are "user"/"model"; tool results are functionResponse parts paired by name.
     const contents = turns.map((t) => {
@@ -50,7 +56,7 @@ export class GeminiProvider implements Provider {
       contents: contents as any,
       config: {
         systemInstruction: sysPrompt,
-        ...thinkingConfig(this.reasoning),
+        ...thinkingConfig(this.thinking ? this.reasoning : undefined),
         ...(tools.length
           ? {
               tools: [

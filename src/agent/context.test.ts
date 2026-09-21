@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { compactTurns, NOTES_BOARD_MARKER, truncateMiddle, resultBudgetChars, promptTokens, maskObservations, MASKED_PREFIX, BOARD_STUB, MAX_RESULT_CHARS } from "./context.ts";
+import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, truncateMiddle, resultBudgetChars, promptTokens, maskObservations, MASKED_PREFIX, BOARD_STUB, MAX_RESULT_CHARS } from "./context.ts";
 import type { Provider, Turn } from "../providers/provider.ts";
 
 test("leaves the array untouched when it's already at or under keepRecent", async () => {
@@ -305,4 +305,11 @@ test("superseded notes boards are masked in the batch pass; only the newest stay
   expect((turns[5] as { text: string }).text).toStartWith(NOTES_BOARD_MARKER);
   expect((turns[0] as { text: string }).text).toBe("go");
   expect(maskObservations(turns, { keepRecent: 10, highWater: 1 }).masked).toBe(0); // idempotent
+});
+
+test("shouldAutoCompact honors the switch and the threshold", () => {
+  expect(shouldAutoCompact(true, 960, 1000, 0.95)).toBe(true);
+  expect(shouldAutoCompact(true, 900, 1000, 0.95)).toBe(false);
+  expect(shouldAutoCompact(false, 960, 1000, 0.95)).toBe(false); // off: never, however full
+  expect(shouldAutoCompact(true, 960, 0, 0.95)).toBe(false); // unknown window
 });

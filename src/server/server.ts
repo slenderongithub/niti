@@ -11,7 +11,7 @@ import { CATALOG, contextWindow, providersByCategory, splitModelId, type Categor
 import { costOf } from "../providers/pricing.ts";
 import { buildFileGraph, trackedFiles } from "../graph/filegraph.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
-import { saveAgents, setTheme, setAuto } from "../config/config.ts";
+import { saveAgents, setTheme, setAuto, setOption } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
 import type { AgentConfig } from "../agent/agent.ts";
 import { makeProvider } from "../providers/factory.ts";
@@ -244,6 +244,7 @@ export function startServer(
           lsp: engine.lsp?.list() ?? [],
           mcp: engine.mcp?.servers?.() ?? [],
           contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider)])),
+          settings: engine.settings, // live toggles; change with POST /settings
           theme: currentTheme, // `theme:` from agents.yaml, or whatever POST /theme last set
         });
       }
@@ -418,6 +419,23 @@ export function startServer(
         engine.setAuto(auto);
         setAuto(auto);
         return json({ ok: true, auto });
+      }
+
+      // Runtime toggles, same shape as POST /auto: flip them on the live engine (every agent reads
+      // the shared object on its next call) and persist to agents.yaml so they survive a restart.
+      if (p === "/settings" && (method === "GET" || method === "POST")) {
+        if (method === "POST") {
+          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+          const keys = ["autoCompact", "thinkingMode"] as const;
+          const bad = keys.some((k) => k in body && typeof body[k] !== "boolean");
+          const given = keys.filter((k) => typeof body[k] === "boolean");
+          if (bad || given.length === 0) return json({ error: "expected { autoCompact?: boolean, thinkingMode?: boolean }" }, 400);
+          for (const k of given) {
+            engine.settings[k] = body[k] as boolean;
+            setOption(k, body[k] as boolean);
+          }
+        }
+        return json(engine.settings);
       }
 
       if (p === "/providers" && method === "GET") {
