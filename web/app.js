@@ -529,7 +529,7 @@ function renderLegend() {
 }
 renderLegend();
 
-// A theme switch (dropdown, TUI ctrl+t, another tab) re-reads the CSS vars and repaints — draw()
+// A theme switch (TUI ctrl+t, another tab) re-reads the CSS vars and repaints — draw()
 // already reads KIND_COLORS/STATUS_FILL fresh every frame, so refreshing them here is enough for the
 // live graph; the legend and avatar mascots need an explicit rebuild.
 document.addEventListener("niti-theme", () => {

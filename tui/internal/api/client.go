@@ -55,14 +55,14 @@ type SessionInfo struct {
 	LastSeq int           `json:"lastSeq"`
 	Running bool          `json:"running"`
 	// Static project context, sent once on /session rather than repeated on every event.
-	Root          string         `json:"root"`
-	Lsp           []LspInfo      `json:"lsp"`
-	Mcp           []McpInfo      `json:"mcp"`
-	ContextLimits map[string]int `json:"contextLimits"` // agent id → its model's context window
-	Theme         string         `json:"theme"`         // `theme:` from agents.yaml, applied at launch
-	Prefs         map[string]bool `json:"prefs"`        // Config-tab flags from agents.yaml (lightMode, reduceMotion, …); nil from an older core
-	Auto          bool           `json:"auto"`          // default permission mode: true = auto-approve
-	Settings      *Settings      `json:"settings"`      // live toggles; nil from an older core
+	Root          string          `json:"root"`
+	Lsp           []LspInfo       `json:"lsp"`
+	Mcp           []McpInfo       `json:"mcp"`
+	ContextLimits map[string]int  `json:"contextLimits"` // agent id → its model's context window
+	Theme         string          `json:"theme"`         // `theme:` from agents.yaml, applied at launch
+	Prefs         map[string]bool `json:"prefs"`         // Config-tab flags from agents.yaml (lightMode, reduceMotion, …); nil from an older core
+	Auto          bool            `json:"auto"`          // default permission mode: true = auto-approve
+	Settings      *Settings       `json:"settings"`      // live toggles; nil from an older core
 }
 
 type AgentEvent struct {

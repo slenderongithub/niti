@@ -40,7 +40,6 @@ header {
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-  position: relative; /* anchors .theme-menu below the swatch button */
 }
 .brand { font-weight: 700; color: var(--violet); display: flex; align-items: center; gap: 8px; }
 .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--violet); box-shadow: 0 0 10px var(--violet); }

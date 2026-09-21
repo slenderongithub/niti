@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
-import { parse, parseDocument, stringify } from "yaml";
+import { parse, parseDocument } from "yaml";
 import type { AgentConfig } from "../agent/agent.ts";
 import type { McpServerConfig } from "../mcp/mcp.ts";
 import type { LspServerConfig } from "../lsp/registry.ts";
