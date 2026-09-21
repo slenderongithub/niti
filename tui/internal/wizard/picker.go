@@ -141,8 +141,14 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.Move(1)
 			return m, nil
 		case "esc":
+			if m.stage == "size" && len(m.existing) == 0 {
+				return m.quit() // first question, nowhere to go back to
+			}
 			return m.back()
 		case "enter":
+			if m.wantsExit(strings.TrimSpace(m.input.Value())) {
+				return m.quit()
+			}
 			return m.advance(strings.TrimSpace(m.input.Value()))
 		}
 	}
@@ -152,6 +158,24 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetQuery(m.input.Value()) // typing narrows the list instead of being read literally
 	}
 	return m, cmd
+}
+
+// quit abandons the picker without touching anything; main treats !Completed as a clean exit 0.
+func (m Picker) quit() (tea.Model, tea.Cmd) {
+	m.quitting = true
+	return m, tea.Quit
+}
+
+// wantsExit: "/exit" and "/quit" work on any stage; bare "exit"/"quit" only where the input just
+// filters a list, since a role description or model id could legitimately be that word.
+func (m Picker) wantsExit(typed string) bool {
+	switch strings.ToLower(typed) {
+	case "/exit", "/quit":
+		return true
+	case "exit", "quit":
+		return m.listStage()
+	}
+	return false
 }
 
 func (m Picker) listStage() bool {
