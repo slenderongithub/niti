@@ -27,7 +27,7 @@ const IGNORE = new Set([
 // True when any segment of a project-relative path sits in IGNORE. The walk applies IGNORE as it
 // descends; a caller-supplied list has never been filtered at all, so the same boundary has to be
 // enforced here or the two paths disagree about what the project is.
-function ignored(rel: string): boolean {
+export function ignored(rel: string): boolean {
   return rel.split("/").some((seg) => IGNORE.has(seg));
 }
 
@@ -37,15 +37,22 @@ function ignored(rel: string): boolean {
 // of the actual project in the result. Untracked new files are missed, which is the right trade
 // for both callers: the graph view redraws on the next change, and an agent's search tools find
 // what an outline omits. undefined (not a git repo, or no git) falls back to the walk.
-export function trackedFiles(root: string): string[] | undefined {
+export function trackedFiles(root: string, includeUntracked = false): string[] | undefined {
   try {
-    const r = spawnSync("git", ["-C", root, "ls-files"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+    // --exclude-standard is what makes "others" honour .gitignore, so new files an agent just
+    // created show up while build output and dependency trees still do not.
+    const args = includeUntracked ? ["ls-files", "--cached", "--others", "--exclude-standard"] : ["ls-files"];
+    const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
     if (r.status !== 0 || !r.stdout) return undefined;
     return r.stdout.split("\n").filter(Boolean);
   } catch {
     return undefined;
   }
 }
+
+// What the graph reads: source files, plus go.mod (needed to resolve Go imports, never a node).
+export const isGraphFile = (f: string): boolean =>
+  f === "go.mod" || f.endsWith("/go.mod") || (SRC_EXT.has(extname(f)) && !f.endsWith(".d.ts"));
 
 // `files` overrides the directory walk with a caller-supplied list of project-relative paths —
 // see trackedFiles above for why a caller would want to.
@@ -54,10 +61,7 @@ export function buildFileGraph(root: string, maxFiles = 400, files?: string[]): 
     files = [];
     walk(root, "", files, maxFiles);
   } else {
-    files = files
-      .filter((f) => !ignored(f))
-      .filter((f) => f === "go.mod" || f.endsWith("/go.mod") || (SRC_EXT.has(extname(f)) && !f.endsWith(".d.ts")))
-      .slice(0, maxFiles);
+    files = files.filter((f) => !ignored(f)).filter(isGraphFile).slice(0, maxFiles);
   }
   const set = new Set(files);
   const goModule = findGoModule(root, files);
