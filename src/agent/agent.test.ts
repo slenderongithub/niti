@@ -970,44 +970,102 @@ test("buildTools() rebuilds when the peer roster changes, and caches again at th
   expect(toolsSeen[1]).toBe(toolsSeen[2]); // stable again once nothing further changes
 });
 
-test("injectNotes replaces the previous board turn instead of accumulating a new one every change", async () => {
-  let version = 0;
-  let board = "key1: v1";
-  const messenger: Messenger = {
+// A messenger whose notes board the test controls: bump `state.version` to publish a new board.
+function boardMessenger(state: { version: number; board: string }): Messenger {
+  return {
     peers: () => [],
     send: () => "ok",
     ask: async () => "ok",
     inbox: () => [],
     pending: () => 0,
     remember: () => ({ id: "n1", from: "a", to: "*", kind: "note", subject: "", body: "", time: 0 }),
-    recall: () => [{ id: "n1", from: "b", to: "*", kind: "note", subject: "key1", body: board, time: 0 }],
-    notesVersion: () => version,
+    recall: () => [{ id: "n1", from: "b", to: "*", kind: "note", subject: "key1", body: state.board, time: 0 }],
+    notesVersion: () => state.version,
   };
+}
+const boardsIn = (turns: Turn[]): string[] => turns.filter((t) => t.role === "user" && t.text.startsWith("Team notes board")).map((t) => (t as { text: string }).text);
+
+test("a changed notes board is appended, never spliced in: every request extends the last", async () => {
+  const state = { version: 0, board: "key1: v1" };
+  const snapshots: string[][] = [];
   let n = 0;
-  let finalTurns: Turn[] = [];
   const stub: Provider = {
     async send(_sys, turns) {
+      snapshots.push(turns.map((t) => JSON.stringify(t)));
       n++;
       if (n === 1) {
-        version = 1; // board changes between turn 1 and 2
-        board = "key1: v2";
+        state.version = 1; // the board changes between calls 1 and 2
+        state.board = "key1: v2";
         return { text: "", toolCalls: [{ id: "1", name: "read_file", input: { path: "x.ts" } }] };
       }
       if (n === 2) {
-        version = 2; // and again between turn 2 and 3
-        board = "key1: v3";
+        state.version = 2; // and again between calls 2 and 3
+        state.board = "key1: v3";
         return { text: "", toolCalls: [{ id: "2", name: "read_file", input: { path: "y.ts" } }] };
       }
-      finalTurns = turns;
+      if (n === 3) return { text: "", toolCalls: [{ id: "3", name: "read_file", input: { path: "z.ts" } }] }; // no change this time
       return { text: "done", toolCalls: [] };
     },
   };
-  await new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, new Bus(), { messenger }).run("do the thing");
+  const finalTurns: Turn[] = [];
+  const spy: Provider = { send: async (sys, turns, tools, onDelta) => { finalTurns.splice(0, finalTurns.length, ...turns); return stub.send(sys, turns, tools, onDelta); } };
+  await new Agent({ ...cfg, allowedTools: ["read_file"] }, spy, new Bus(), { messenger: boardMessenger(state) }).run("do the thing");
 
-  const boardTurns = finalTurns.filter((t) => t.role === "user" && t.text.includes("Team notes board"));
-  expect(boardTurns).toHaveLength(1); // not 3 — each change replaced the last, not appended to it
-  expect((boardTurns[0] as { text: string }).text).toContain("v3"); // and it's the latest content
-  expect((boardTurns[0] as { text: string }).text).not.toContain("v1");
+  // The invariant that keeps the provider's cached prefix alive: nothing already sent is rewritten.
+  for (let k = 1; k < snapshots.length; k++) {
+    expect(snapshots[k]!.slice(0, snapshots[k - 1]!.length)).toEqual(snapshots[k - 1]!);
+  }
+  const boards = boardsIn(finalTurns);
+  expect(boards).toHaveLength(3); // one per version change, in order — and none for the unchanged call 4
+  expect(boards[0]).toContain("v1");
+  expect(boards[1]).toContain("v2");
+  expect(boards[2]).toContain("v3");
+});
+
+test("an unchanged notes version adds nothing", async () => {
+  const state = { version: 5, board: "key1: only" };
+  const lengths: number[] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(_sys, turns) {
+      lengths.push(boardsIn(turns).length);
+      n++;
+      return n < 4 ? { text: "", toolCalls: [{ id: String(n), name: "read_file", input: { path: "x.ts" } }] } : { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, new Bus(), { messenger: boardMessenger(state) }).run("go");
+  expect(lengths).toEqual([1, 1, 1, 1]); // injected once, then left alone while the version held
+});
+
+test("compaction folds the accumulated boards down to the newest, so dead notes do not linger", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const state = { version: 0, board: "key1: v1" };
+  let seen: Turn[] = [];
+  let summarised = "";
+  let n = 0;
+  const stub: Provider = {
+    async send(sys, turns) {
+      if (sys !== "s") {
+        summarised = turns.map((t) => (t.role === "user" ? t.text : "")).join("\n"); // compactTurns' own call
+        return { text: "summary of the work so far", toolCalls: [] };
+      }
+      seen = turns;
+      n++;
+      state.version = n; // the board changes every call
+      state.board = `key1: v${n + 1}`;
+      if (n < 5) return { text: "", toolCalls: [{ id: `w${n}`, name: "write_file", input: { path: `f${n}.txt`, content: "x" } }] };
+      // 96% of the window: this reply triggers compaction before its own tool runs.
+      if (n === 5) return { text: "", toolCalls: [{ id: "w5", name: "write_file", input: { path: "f5.txt", content: "x" } }], usage: { inputTokens: 960_000, outputTokens: 10 } };
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), { root, messenger: boardMessenger(state) }).run("go");
+
+  const boards = boardsIn(seen);
+  expect(boards).toHaveLength(2); // the compaction left one; the next call's change appended the newer one after it
+  expect(boards[0]).toContain("key1: v5"); // the newest as of compaction, not the first or a summary of them
+  expect(boards[1]).toContain("key1: v6");
+  expect(summarised).not.toContain("Team notes board"); // the summarizer was not made to read five copies of it
 });
 
 // ── One turn's tool calls: read-only together, anything that changes the world in order ──────

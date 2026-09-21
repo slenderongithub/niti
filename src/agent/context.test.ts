@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { compactTurns, truncateMiddle, resultBudgetChars, promptTokens, maskObservations, MASKED_PREFIX, MAX_RESULT_CHARS } from "./context.ts";
+import { compactTurns, NOTES_BOARD_MARKER, truncateMiddle, resultBudgetChars, promptTokens, maskObservations, MASKED_PREFIX, MAX_RESULT_CHARS } from "./context.ts";
 import type { Provider, Turn } from "../providers/provider.ts";
 
 test("leaves the array untouched when it's already at or under keepRecent", async () => {
@@ -247,4 +247,49 @@ test("masking builds new turns rather than editing the ones the store and provid
   maskObservations(turns, OPTS);
   expect(turns[2]).not.toBe(original);
   expect((original as { results: { output: string }[] }).results[0]!.output).toStartWith("o0"); // the old object is intact
+});
+
+// ── Compaction and the notes board ───────────────────────────────────────────────────────────
+
+const board = (v: string): Turn => ({ role: "user", text: `${NOTES_BOARD_MARKER}\n\n[k] (from b) ${v}` });
+const say = (text: string): Turn => ({ role: "assistant", text, toolCalls: [] });
+function capturing(): { provider: Provider; sent: string[] } {
+  const sent: string[] = [];
+  return {
+    sent,
+    provider: {
+      async send(_sys, turns) {
+        sent.push(turns.map((t) => (t.role === "user" ? t.text : "")).join("\n"));
+        return { text: "SUMMARY", toolCalls: [] };
+      },
+    },
+  };
+}
+const boardsOf = (turns: Turn[]) => turns.filter((t) => t.role === "user" && t.text.startsWith(NOTES_BOARD_MARKER)).map((t) => (t as { text: string }).text);
+
+test("compaction keeps only the newest board, carrying it across when it would have been summarized away", async () => {
+  const turns: Turn[] = [{ role: "user", text: "task" }, board("v1"), say("a"), board("v2"), say("b"), board("v3"), say("c"), say("d"), say("e"), say("f"), say("g")];
+  const { provider, sent } = capturing();
+  const out = await compactTurns(turns, provider, 4);
+  expect(boardsOf(out)).toHaveLength(1);
+  expect(boardsOf(out)[0]).toContain("v3");
+  expect(out[0]).toMatchObject({ role: "user" });
+  expect((out[0] as { text: string }).text).toContain("SUMMARY");
+  expect(out[1]).toEqual(board("v3")); // right behind the summary, so the model still has its teammates' notes
+  expect(sent[0]).not.toContain("Team notes board"); // and the summarizer never reads them
+});
+
+test("a board already in the recent window is kept in place, and older copies in it are dropped", async () => {
+  const turns: Turn[] = [{ role: "user", text: "task" }, board("v1"), say("a"), say("b"), say("c"), board("v2"), say("d"), board("v3"), say("e")];
+  const out = await compactTurns(turns, capturing().provider, 5);
+  expect(boardsOf(out)).toHaveLength(1);
+  expect(boardsOf(out)[0]).toContain("v3");
+  expect(out.findIndex((t) => t.role === "user" && t.text.includes("v3"))).toBeGreaterThan(1); // in its own place, not moved up
+});
+
+test("compaction with no board anywhere is unchanged from before", async () => {
+  const turns: Turn[] = [{ role: "user", text: "task" }, say("a"), say("b"), say("c"), say("d"), say("e"), say("f")];
+  const out = await compactTurns(turns, capturing().provider, 4);
+  expect(out).toHaveLength(5); // summary + 4 recent
+  expect(boardsOf(out)).toHaveLength(0);
 });
