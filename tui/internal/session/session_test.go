@@ -503,3 +503,23 @@ func TestNewlineKeysInsertABreakInsteadOfSubmitting(t *testing.T) {
 		}
 	}
 }
+
+// bubbletea v1 surfaces a modified-Enter report as an unexported unknownCSISequenceMsg; this pins
+// that Shift+Enter is recognised from it, and that ordinary keys and other CSI stay untouched.
+func TestShiftEnterIsRecognisedFromTheTerminalReport(t *testing.T) {
+	type unknownCSISequenceMsg []byte // same name and shape as bubbletea's, which IsShiftEnter matches on
+	for seq, want := range map[string]bool{"\x1b[27;2;13~": true, "\x1b[13;2u": true, "\x1b[27;5;13~": false, "\x1b[99;5u": false} {
+		if got := IsShiftEnter(unknownCSISequenceMsg(seq)); got != want {
+			t.Errorf("%q: got %v want %v", seq, got, want)
+		}
+	}
+	if IsShiftEnter(tea.KeyMsg{Type: tea.KeyEnter}) || IsShiftEnter("x") {
+		t.Fatal("a plain enter or an unrelated message must not count")
+	}
+
+	m := typing(model(1), "one")
+	next, cmd := m.Update(unknownCSISequenceMsg("\x1b[27;2;13~"))
+	if cmd != nil || !strings.Contains(next.(Model).input.Value(), newlineMark) {
+		t.Fatalf("shift+enter should insert a newline, got %q (cmd=%v)", next.(Model).input.Value(), cmd)
+	}
+}

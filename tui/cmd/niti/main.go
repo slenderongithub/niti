@@ -468,7 +468,12 @@ func main() {
 	if len(rest) > 0 {
 		m = m.OpenSettings(rest[0]) // niti status | config | settings | usage | stats
 	}
-	if _, err := tea.NewProgram(m, screenOpts()...).Run(); err != nil {
+	// Ask the terminal to report Shift+Enter (see session.EnableModifiedEnter), and put it back on
+	// the way out so it doesn't leak into the user's shell.
+	fmt.Fprint(os.Stdout, session.EnableModifiedEnter)
+	_, err = tea.NewProgram(m, screenOpts()...).Run()
+	fmt.Fprint(os.Stdout, session.DisableModifiedEnter)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	cancel()
