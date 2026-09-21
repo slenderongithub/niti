@@ -99,6 +99,7 @@ func (s *agentState) feedDelta(chunk string) {
 
 type Model struct {
 	sid       string // this TUI launch's id, shown on the Status tab
+	autoCompact, thinkingMode bool // mirrors the core's live settings; toggled from the Config tab
 	verbose   bool   // list every tool call separately instead of collapsing runs
 	ticking   bool // a spinner tick is scheduled
 	client    *api.Client
@@ -172,6 +173,10 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected",
 		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(),
+		autoCompact: true, thinkingMode: true, // the core's defaults, kept when an older core sends none
+	}
+	if sess.Settings != nil {
+		m.autoCompact, m.thinkingMode = sess.Settings.AutoCompact, sess.Settings.ThinkingMode
 	}
 	for i, c := range sess.Agents {
 		m.order = append(m.order, c.ID)
@@ -196,6 +201,16 @@ func (m Model) Init() tea.Cmd {
 
 // OpenSettings starts the session with the tabbed overlay already open on the tab a `niti <name>`
 // subcommand names. Unknown names leave the session untouched.
+// WithVerbose starts the session with tool-call collapsing off (`niti --verbose`); it is the same
+// switch as the Config tab's "Collapse tool calls" row.
+func (m Model) WithVerbose(on bool) Model {
+	m.verbose = on
+	for _, st := range m.agents {
+		st.verbose = on
+	}
+	return m
+}
+
 func (m Model) OpenSettings(name string) Model {
 	if tab, ok := settingsTabFor(name); ok {
 		m.sett = settings{open: true, tab: tab}

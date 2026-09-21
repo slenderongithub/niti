@@ -1,7 +1,10 @@
 package session
 
 import (
+	"encoding/json"
 	tea "github.com/charmbracelet/bubbletea"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -35,12 +38,11 @@ func TestFilterItems(t *testing.T) {
 	}
 }
 
-func TestToggleFlipsRealSettingsOnly(t *testing.T) {
+func TestToggleFlipsSettings(t *testing.T) {
 	a := &agentState{}
 	m := &Model{mode: "build", agents: map[string]*agentState{"a": a}}
 	m.toggle("Mode")
 	m.toggle("Collapse tool calls")
-	m.toggle("Auto-compact") // read-only: must be a no-op
 	if m.mode != "plan" || !m.verbose || !a.verbose {
 		t.Fatalf("mode=%s verbose=%v agent=%v", m.mode, m.verbose, a.verbose)
 	}
@@ -97,5 +99,29 @@ func TestOpenSettingsByCommandName(t *testing.T) {
 	}
 	if (Model{}).OpenSettings("bogus").sett.open {
 		t.Fatal("unknown name must not open the overlay")
+	}
+}
+
+func TestToggleSendsCoreSettings(t *testing.T) {
+	got := map[string]bool{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/settings" && r.Method == "POST" {
+			json.NewDecoder(r.Body).Decode(&got)
+		}
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	m := &Model{autoCompact: true, thinkingMode: true, client: api.New(srv.URL, "")}
+	for _, label := range []string{"Auto-compact", "Thinking mode"} {
+		cmd := m.toggle(label)
+		if res := cmd().(actionResultMsg); res.err != nil {
+			t.Fatal(res.err)
+		}
+	}
+	if m.autoCompact || m.thinkingMode || got["autoCompact"] != false || got["thinkingMode"] != false {
+		t.Fatalf("model=%v/%v sent=%v", m.autoCompact, m.thinkingMode, got)
+	}
+	if items := m.configItems(); items[3].Value != "false" || items[4].Value != "false" {
+		t.Fatalf("rows should read false: %v", items)
 	}
 }

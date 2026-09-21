@@ -90,7 +90,7 @@ func (m *Model) configKey(k tea.KeyMsg) tea.Cmd {
 	case tea.KeyDown:
 		m.sett.cursor = min(m.sett.cursor+1, max(len(items)-1, 0))
 	case tea.KeyEnter, tea.KeySpace:
-		if m.sett.cursor < len(items) && items[m.sett.cursor].Editable {
+		if m.sett.cursor < len(items) {
 			return m.toggle(items[m.sett.cursor].Label)
 		}
 	case tea.KeyBackspace:
@@ -186,8 +186,7 @@ func (m Model) settStatus(w int) []string {
 	return lines
 }
 
-// settConfig — a searchable list of niti's real settings. Editable rows toggle in place; the
-// read-only ones say why. ponytail: no fake switches — a row for a value nothing reads is decoration.
+// settConfig — a searchable list of niti's real settings; every row toggles in place. ponytail: no fake switches — a row for a value nothing reads is decoration.
 func (m Model) settConfig(w int) []string {
 	bg := theme.BgDeep
 	search := "⌕ Search settings..."
@@ -206,9 +205,6 @@ func (m Model) settConfig(w int) []string {
 			mark, label = "▸ ", txt(theme.Accent, bg).Bold(true)
 		}
 		val := txt(theme.Amber, bg).Render(it.Value)
-		if !it.Editable {
-			val = txt(theme.Muted, bg).Render(it.Value)
-		}
 		lines = append(lines, truncate(mark+label.Render(pad(it.Label+":", 22))+val+txt(theme.Muted, bg).Render("   "+it.Hint), w))
 	}
 	lines = append(lines, "", txt(theme.Accent, bg).Bold(true).Render("Agents"))

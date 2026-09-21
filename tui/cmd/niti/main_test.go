@@ -110,3 +110,13 @@ func chdir(t *testing.T, dir string) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prev) })
 }
+
+func TestParseArgs(t *testing.T) {
+	v, rest := parseArgs([]string{"status", "-v"})
+	if !v || len(rest) != 1 || rest[0] != "status" {
+		t.Fatalf("got %v %v", v, rest)
+	}
+	if v, rest = parseArgs(nil); v || len(rest) != 0 {
+		t.Fatal("no args, no verbose")
+	}
+}

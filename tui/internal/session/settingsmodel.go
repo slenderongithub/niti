@@ -91,20 +91,18 @@ func settingsSources(root string) string {
 	return "global " + mark(auth) + " · project " + mark(proj)
 }
 
-// cfgItem is one row of the Config tab. Editable rows flip on enter/space; the rest are shown so
-// the list is honest about what exists, but nothing at runtime can change them.
+// cfgItem is one row of the Config tab; enter/space flips it.
 type cfgItem struct {
 	Label, Value, Hint string
-	Editable           bool
 }
 
 func (m Model) configItems() []cfgItem {
 	return []cfgItem{
-		{"Mode", m.mode, "build ⇄ plan", true},
-		{"Theme", theme.Current(), "cycles the installed themes", true},
-		{"Collapse tool calls", fmt.Sprint(!m.verbose), "false lists every call separately", true},
-		{"Auto-compact", "true", "fixed: compacts at 95% of the context window", false},
-		{"Thinking mode", "per agent", "set in .niti/agents.yaml", false},
+		{"Mode", m.mode, "build ⇄ plan"},
+		{"Theme", theme.Current(), "cycles the installed themes"},
+		{"Collapse tool calls", fmt.Sprint(!m.verbose), "false lists every call separately"},
+		{"Auto-compact", fmt.Sprint(m.autoCompact), "summarize old turns at 95% of the context window"},
+		{"Thinking mode", fmt.Sprint(m.thinkingMode), "send reasoning parameters to models that support them"},
 	}
 }
 
@@ -131,6 +129,14 @@ func (m *Model) toggle(label string) tea.Cmd {
 	case "Theme":
 		name, client := theme.Next(), m.client
 		return func() tea.Msg { return actionResultMsg{action: "theme", err: client.SetTheme(name)} }
+	case "Auto-compact", "Thinking mode":
+		key, field := "autoCompact", &m.autoCompact
+		if label == "Thinking mode" {
+			key, field = "thinkingMode", &m.thinkingMode
+		}
+		*field = !*field
+		on, client := *field, m.client
+		return func() tea.Msg { return actionResultMsg{action: key, err: client.SetSetting(key, on)} }
 	case "Collapse tool calls":
 		m.verbose = !m.verbose
 		for _, st := range m.agents {

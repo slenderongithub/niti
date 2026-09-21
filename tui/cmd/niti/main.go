@@ -377,6 +377,19 @@ func ensureTrustedTUI() bool {
 	return true
 }
 
+// parseArgs pulls the global --verbose / -v flag out of the arguments, wherever it appears, and
+// returns the rest (the optional subcommand) in order.
+func parseArgs(args []string) (verbose bool, rest []string) {
+	for _, a := range args {
+		if a == "--verbose" || a == "-v" {
+			verbose = true
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	return
+}
+
 func main() {
 	// Skipped when attached to a core we didn't spawn (NITI_SERVER_URL set) — nothing to gate,
 	// since we aren't the one reading this directory's config or spawning anything from it.
@@ -440,8 +453,10 @@ func main() {
 	go streamWithReconnect(ctx, c.client, events, c.exited)
 
 	m := session.New(c.client, sess, events, cancel)
-	if len(os.Args) > 1 {
-		m = m.OpenSettings(os.Args[1]) // niti status | config | settings | usage | stats
+	verbose, rest := parseArgs(os.Args[1:])
+	m = m.WithVerbose(verbose)
+	if len(rest) > 0 {
+		m = m.OpenSettings(rest[0]) // niti status | config | settings | usage | stats
 	}
 	if _, err := tea.NewProgram(m, screenOpts()...).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
