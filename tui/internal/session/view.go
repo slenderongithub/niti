@@ -107,15 +107,18 @@ func (m Model) View() string {
 		sw = clamp(w/5, sidebarMin, sidebarMax)
 	}
 
+	// The agent tab bar belongs to the main column, not the whole terminal: the grey sidebar runs
+	// from the mode stripe down through the tab row, so the tabs and their views both start in the
+	// dark area beside it instead of the bar sitting across the top of the sidebar.
 	body := m.mainPane(w-sw, bodyH)
+	if tabRows > 0 {
+		body = m.tabBar(w-sw) + "\n" + body
+	}
 	if sw > 0 {
-		body = lipgloss.JoinHorizontal(lipgloss.Top, m.sidebar(sw, bodyH), body)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, m.sidebar(sw, bodyH+tabRows), body)
 	}
 
 	rows := []string{m.header(w)}
-	if tabRows > 0 {
-		rows = append(rows, m.tabBar(w))
-	}
 	rows = append(rows, body)
 	if tasksRows > 0 {
 		rows = append(rows, m.tasksStrip(w))

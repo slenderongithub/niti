@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -457,5 +459,25 @@ func TestUnfinishedGuardLeavesCommandsAndCleanBoardsAlone(t *testing.T) {
 	done.input.SetValue("now add tests")
 	if _, cmd := done.onKey(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
 		t.Error("a completed board should submit a new goal straight away")
+	}
+}
+
+// The grey sidebar runs from the mode stripe down; the agent tab bar lives in the dark column
+// beside it, so on the tab row the sidebar's cells come first and the tabs start after them.
+func TestTabBarSitsBesideTheSidebarNotAcrossIt(t *testing.T) {
+	m := model(2)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = updated.(Model)
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	tabRow := lines[headerRows]
+	col := strings.Index(tabRow, "overview")
+	if col < sidebarMin {
+		t.Fatalf("tabs start at column %d, inside the sidebar (min width %d): %q", col, sidebarMin, tabRow)
+	}
+	if !strings.Contains(tabRow[:col], "CONTEXT") {
+		t.Fatalf("the sidebar should begin on the tab row, got %q", tabRow)
+	}
+	if got := len(lines); got > 30 {
+		t.Fatalf("layout is %d rows tall in a 30-row terminal", got)
 	}
 }
