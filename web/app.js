@@ -356,10 +356,19 @@ async function submitPrompt() {
     $("prompt-status").textContent = e.error || "failed";
     return;
   }
-  $("prompt-input").value = ""; $("prompt-status").textContent = "";
+  $("prompt-input").value = ""; $("prompt-status").textContent = ""; growPrompt();
 }
 $("prompt-send").addEventListener("click", submitPrompt);
-$("prompt-input").addEventListener("keydown", (e) => { if (e.key === "Enter") submitPrompt(); });
+// Enter submits; Shift+Enter falls through to the textarea's own newline. isComposing keeps an IME's
+// "confirm this candidate" Enter from sending half a prompt.
+const promptInput = $("prompt-input");
+function growPrompt() { promptInput.style.height = "auto"; promptInput.style.height = `${promptInput.scrollHeight}px`; }
+promptInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+  e.preventDefault();
+  submitPrompt();
+});
+promptInput.addEventListener("input", growPrompt);
 
 // ---------- canvas render loop ----------
 const canvas = $("canvas");

@@ -244,3 +244,21 @@ test("the header says working… while a session runs, and prompts always go out
   expect(call.body).toEqual({ text: "ship the thing", mode: "build" });
   expect(g.elFor("prompt-input").value).toBe("");
 });
+
+test("Enter submits the prompt; Shift+Enter is left alone so the textarea inserts a newline", async () => {
+  const g = load();
+  await settled();
+  const input = g.elFor("prompt-input");
+  input.value = "line one";
+
+  let prevented = false;
+  input.fire("keydown", { key: "Enter", shiftKey: true, preventDefault: () => { prevented = true; } });
+  await settled();
+  expect(prevented).toBe(false);
+  expect(g.calls.some((c: any) => c.path.startsWith("/prompt"))).toBe(false);
+
+  input.fire("keydown", { key: "Enter", shiftKey: false, preventDefault: () => { prevented = true; } });
+  await settled();
+  expect(prevented).toBe(true);
+  expect(g.calls.find((c: any) => c.path.startsWith("/prompt"))?.body.text).toBe("line one");
+});

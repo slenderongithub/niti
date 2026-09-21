@@ -92,7 +92,7 @@ main { flex: 1; display: flex; min-height: 0; }
 
 /* prompt bar: submit a whole-team goal, uses the same /prompt route the TUI does */
 .promptbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.promptbar input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); padding: 6px 10px; font: inherit; }
+.promptbar input, .promptbar textarea { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); padding: 6px 10px; font: inherit; resize: none; max-height: 8em; }
 .promptbar button, .ap-row button { background: var(--violet); border: none; border-radius: 6px; color: var(--bg); padding: 6px 12px; font: inherit; font-weight: 700; cursor: pointer; }
 .promptbar button:disabled, .ap-row button:disabled { opacity: 0.4; cursor: default; }
 .status { color: var(--muted); font-size: 12px; min-height: 1em; }
