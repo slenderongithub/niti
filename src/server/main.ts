@@ -28,7 +28,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   const configs = existsSync(".niti/agents.yaml") ? loadAgents() : [];
   if (!configs.length) console.error("niti: no agents configured yet — running in setup mode");
   const options = loadOptions();
-  const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions);
+  const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions, process.cwd(), options.projectInstructions !== false);
 
   const mcpServers = loadMcpServers();
   let mcp: McpManager | undefined;
@@ -60,7 +60,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   });
   engine.orch.load(loadTasks()); // show any prior tasks on connect
 
-  const server = startServer(engine, { port: opts.port, theme: options.theme, lightMode: options.lightMode });
+  const server = startServer(engine, { port: opts.port, theme: options.theme, prefs: options });
   // Handshake — the ONLY thing on stdout, first line, machine-readable for the Go TUI.
   process.stdout.write(JSON.stringify({ nitiServer: { url: server.url, token: server.token } }) + "\n");
   return { engine, server };

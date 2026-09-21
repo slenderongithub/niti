@@ -11,7 +11,7 @@ import { CATALOG, contextWindow, providersByCategory, splitModelId, type Categor
 import { costOf } from "../providers/pricing.ts";
 import { buildFileGraph, trackedFiles } from "../graph/filegraph.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
-import { saveAgents, setTheme, setAuto, setOption } from "../config/config.ts";
+import { saveAgents, setTheme, setAuto, setOption, PREF_DEFAULTS, type PrefKey } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
 import type { AgentConfig } from "../agent/agent.ts";
 import { makeProvider } from "../providers/factory.ts";
@@ -55,7 +55,7 @@ export function startServer(
     webDir?: string;
     commands?: CommandRegistry;
     theme?: string;
-    lightMode?: boolean;
+    prefs?: Partial<Record<PrefKey, boolean>>; // Config-tab flags from agents.yaml
     makeProvider?: typeof makeProvider;
   } = {},
 ): ServerHandle {
@@ -68,9 +68,9 @@ export function startServer(
   // Mutable, unlike the rest of `opts` — POST /theme updates this in place so /session reflects a
   // theme changed mid-session (by the TUI carousel or the web dropdown) without a server restart.
   let currentTheme = opts.theme ?? "";
-  // TUI-only palette flag, not an engine setting: nothing in the core reads it, it just has to
-  // survive a restart and reach the next TUI launch via /session.
-  let lightMode = opts.lightMode ?? false;
+  // TUI-facing flags, not engine settings: the core doesn't read them, they just have to survive a
+  // restart and reach the next TUI launch via /session (projectInstructions is read at boot).
+  const prefs: Record<PrefKey, boolean> = { ...PREF_DEFAULTS, ...opts.prefs };
 
   const json = (data: unknown, status = 200) =>
     new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -250,7 +250,8 @@ export function startServer(
           mcp: engine.mcp?.servers?.() ?? [],
           contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider)])),
           settings: engine.settings, // live toggles; change with POST /settings
-          lightMode,
+          prefs,
+          auto: engine.auto, // default permission mode: true = auto-approve
           theme: currentTheme, // `theme:` from agents.yaml, or whatever POST /theme last set
         });
       }
@@ -432,17 +433,17 @@ export function startServer(
       if (p === "/settings" && (method === "GET" || method === "POST")) {
         if (method === "POST") {
           const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-          const keys = ["autoCompact", "thinkingMode", "lightMode"] as const;
+          const keys = ["autoCompact", "thinkingMode", ...Object.keys(PREF_DEFAULTS)] as (keyof typeof engine.settings | PrefKey)[];
           const bad = keys.some((k) => k in body && typeof body[k] !== "boolean");
           const given = keys.filter((k) => typeof body[k] === "boolean");
-          if (bad || given.length === 0) return json({ error: "expected { autoCompact?: boolean, thinkingMode?: boolean, lightMode?: boolean }" }, 400);
+          if (bad || given.length === 0) return json({ error: `expected booleans for: ${keys.join(", ")}` }, 400);
           for (const k of given) {
-            if (k === "lightMode") lightMode = body[k] as boolean;
-            else engine.settings[k] = body[k] as boolean;
+            if (k in PREF_DEFAULTS) prefs[k as PrefKey] = body[k] as boolean;
+            else engine.settings[k as keyof typeof engine.settings] = body[k] as boolean;
             setOption(k, body[k] as boolean);
           }
         }
-        return json({ ...engine.settings, lightMode });
+        return json({ ...engine.settings, ...prefs });
       }
 
       if (p === "/providers" && method === "GET") {

@@ -64,7 +64,12 @@ export interface NitiOptions {
   verify?: string[] | false;
   autoCompact?: boolean; // false → never compact the context (default true); toggled live via POST /settings
   thinkingMode?: boolean; // false → send no thinking/reasoning parameters (default true)
-  lightMode?: boolean; // TUI light palette; toggled from the Config tab via POST /settings
+  // TUI/preference flags, toggled from the Config tab via POST /settings (see PREF_DEFAULTS).
+  lightMode?: boolean; // light palette
+  reduceMotion?: boolean; // static spinner, no animation ticks
+  showTurnDuration?: boolean; // append how long a tool call took to its finished line
+  openAgentsView?: boolean; // launch focused on an agent tab instead of the overview
+  projectInstructions?: boolean; // false → don't auto-read .niti.md / AGENTS.md (default true)
   repoMap?: boolean; // false → don't put a generated project map in the system prompt
 }
 
@@ -85,6 +90,10 @@ export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
     autoCompact: raw.autoCompact === false ? false : undefined,
     thinkingMode: raw.thinkingMode === false ? false : undefined,
     lightMode: raw.lightMode === true ? true : undefined,
+    reduceMotion: raw.reduceMotion === true ? true : undefined,
+    showTurnDuration: raw.showTurnDuration === true ? true : undefined,
+    openAgentsView: raw.openAgentsView === true ? true : undefined,
+    projectInstructions: raw.projectInstructions === false ? false : undefined,
     repoMap: raw.repoMap === false ? false : undefined,
   };
 }
@@ -92,8 +101,25 @@ export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
 // The contents of every `instructions:` file, concatenated for the system prompt. A listed file
 // that doesn't exist is skipped rather than fatal — AGENTS.md is commonly listed before it's
 // written, and half a prompt beats a core that won't boot.
-export function loadInstructions(files: string[] = [], root = process.cwd()): string {
+// With `discover`, the first of INSTRUCTION_FILES that exists in the project root is included too,
+// so a plain AGENTS.md needs no `instructions:` entry — unless the user already listed it.
+export const INSTRUCTION_FILES = [".niti.md", "AGENTS.md", "agents.md"];
+
+// The Config tab's preference flags and their defaults — one table so the core, /session and
+// /settings can't disagree about which keys exist.
+export const PREF_DEFAULTS = {
+  lightMode: false,
+  reduceMotion: false,
+  showTurnDuration: false,
+  openAgentsView: false,
+  projectInstructions: true,
+} as const;
+export type PrefKey = keyof typeof PREF_DEFAULTS;
+
+export function loadInstructions(files: string[] = [], root = process.cwd(), discover = false): string {
   const parts: string[] = [];
+  const auto = discover ? INSTRUCTION_FILES.find((f) => existsSync(join(root, f))) : undefined;
+  if (auto && !files.some((f) => f.replace(/^\.\//, "").toLowerCase() === auto.toLowerCase())) files = [auto, ...files];
   for (const f of files) {
     const p = f.startsWith("/") ? f : join(root, f);
     if (!existsSync(p)) continue;
