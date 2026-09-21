@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { compactTurns, NOTES_BOARD_MARKER, truncateMiddle, resultBudgetChars, promptTokens, maskObservations, MASKED_PREFIX, MAX_RESULT_CHARS } from "./context.ts";
+import { compactTurns, NOTES_BOARD_MARKER, truncateMiddle, resultBudgetChars, promptTokens, maskObservations, MASKED_PREFIX, BOARD_STUB, MAX_RESULT_CHARS } from "./context.ts";
 import type { Provider, Turn } from "../providers/provider.ts";
 
 test("leaves the array untouched when it's already at or under keepRecent", async () => {
@@ -292,4 +292,17 @@ test("compaction with no board anywhere is unchanged from before", async () => {
   const out = await compactTurns(turns, capturing().provider, 4);
   expect(out).toHaveLength(5); // summary + 4 recent
   expect(boardsOf(out)).toHaveLength(0);
+});
+
+test("superseded notes boards are masked in the batch pass; only the newest stays whole", () => {
+  const board = (n: number): Turn => ({ role: "user", text: `${NOTES_BOARD_MARKER}\n\n${`note ${n} `.repeat(200)}` });
+  const turns: Turn[] = [{ role: "user", text: "go" }, board(1), ...step("a", "shell", { command: "ls" }, big("a", 100)), board(2), board(3)];
+  const { masked, savedChars } = maskObservations(turns, { keepRecent: 10, highWater: 1_000 });
+  expect(masked).toBe(2);
+  expect(savedChars).toBeGreaterThan(2_000);
+  expect((turns[1] as { text: string }).text).toBe(BOARD_STUB);
+  expect((turns[4] as { text: string }).text).toBe(BOARD_STUB);
+  expect((turns[5] as { text: string }).text).toStartWith(NOTES_BOARD_MARKER);
+  expect((turns[0] as { text: string }).text).toBe("go");
+  expect(maskObservations(turns, { keepRecent: 10, highWater: 1 }).masked).toBe(0); // idempotent
 });

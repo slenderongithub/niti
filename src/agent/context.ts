@@ -167,6 +167,7 @@ const MASK_HIGH_WATER_CHARS = 30_000; // ~10k tokens of eligible output before a
 const MASK_MIN_CHARS = 500; // a stub is ~150 chars; below this the saving is not worth the edit
 const OBSERVATION_TOOLS = new Set(["read_file", "shell", "grep", "glob", "list_dir"]);
 export const MASKED_PREFIX = "[Previous output masked for brevity";
+export const BOARD_STUB = "[Team notes board superseded by newer version]";
 
 // What the model needs to re-issue the call if it turns out to matter.
 function describeCall(call: ToolCall | undefined, name: string): string {
@@ -255,9 +256,23 @@ export function maskObservations(
       eligible += r.output.length;
     });
   }
+  // Every board is a superset of the one before it, so all but the newest are dead weight. They are
+  // user turns, not tool results, so the recency window does not apply: superseded is superseded.
+  const latestBoard = turns.findLastIndex(isBoard);
+  const boards: { i: number; size: number }[] = [];
+  turns.forEach((t, i) => {
+    if (i < latestBoard && isBoard(t) && t.role === "user" && t.text.length >= minChars) {
+      boards.push({ i, size: t.text.length });
+      eligible += t.text.length;
+    }
+  });
   if (eligible < highWater) return { masked: 0, savedChars: 0 };
 
   let saved = 0;
+  for (const { i, size } of boards) {
+    turns[i] = { role: "user", text: BOARD_STUB };
+    saved += size - BOARD_STUB.length;
+  }
   for (const { i, k, stub, size } of targets) {
     const t = turns[i];
     if (t?.role !== "tool") continue;
@@ -266,5 +281,5 @@ export function maskObservations(
     turns[i] = { role: "tool", results: t.results.map((r, idx) => (idx === k ? { ...r, output: stub } : r)) };
     saved += size - stub.length;
   }
-  return { masked: targets.length, savedChars: saved };
+  return { masked: targets.length + boards.length, savedChars: saved };
 }
