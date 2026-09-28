@@ -13,7 +13,9 @@ import type { ServerEvent } from "./server/events.ts";
 let backendCalls = 0;
 let backendSaw = "";
 
-// Fake provider dispatched by a marker in each agent's system prompt. The frontend, on its task,
+// Fake provider dispatched by a marker in each agent's system prompt. The engines below pass
+// repoMap: false — the map of *this* repo lists the symbol ORCHESTRATOR, which put "ORCH" into every
+// agent's prompt and sent every call down the orchestrator branch. The frontend, on its task,
 // asks the backend for the API shape (ask_agent), then finishes.
 const fake: Provider = {
   async send(sys, turns): Promise<ProviderReply> {
@@ -47,7 +49,7 @@ const configs: AgentConfig[] = [
 test("ask_agent: frontend talks directly to backend; answer doesn't clobber frontend's task output", async () => {
   backendCalls = 0;
   backendSaw = "";
-  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false });
+  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false, repoMap: false });
   const messages: { from: string; to: string; kind: string }[] = [];
   engine.hub.subscribe((e: ServerEvent) => {
     if (e.kind === "agent_message") messages.push({ from: e.message.from, to: e.message.to, kind: e.message.kind });
@@ -73,7 +75,7 @@ test("ask_agent: frontend talks directly to backend; answer doesn't clobber fron
 test("a cross-provider exchange leaves a persisted, linked thread behind", async () => {
   backendCalls = 0;
   const store = new SessionStore(openDb(":memory:"));
-  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false, store });
+  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false, store, repoMap: false });
 
   await engine.submit("build me a store");
 
