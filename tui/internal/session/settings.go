@@ -218,7 +218,7 @@ func (m Model) settConfig(w int) []string {
 			txt(st.color, bg).Render(truncate(fmt.Sprintf("  %s %s%s", st.avatar, st.cfg.Role, lead), max(w/2, 8)))+
 				txt(theme.Muted, bg).Render(truncate("  "+st.cfg.Provider+"/"+st.cfg.Model, max(w/2, 8))))
 	}
-	return append(lines, "", txt(theme.Muted, bg).Render(truncate("ctrl+p switches an agent's model.", w)))
+	return append(lines, "", txt(theme.Muted, bg).Render(truncate("ctrl+l (or ^p → model) switches an agent's model.", w)))
 }
 
 func (m Model) settUsage(w int) []string {
@@ -355,17 +355,27 @@ func (m Model) settStatsModels(w int) []string {
 
 func (m Model) welcomeView(w, h int) string {
 	bg := theme.BgDeep
-	lines := []string{
-		"",
+	block := []string{
 		txt(theme.Accent, bg).Bold(true).Render(truncate(greeting(), w)),
-		txt(theme.Muted, bg).Render(truncate("niti v"+version+" · "+fmt.Sprintf("%d agents on %s mode", len(m.order), m.mode), w)),
+		txt(theme.Muted, bg).Render(truncate(fmt.Sprintf("%d agents · %s mode", len(m.order), m.mode), w)),
 		"",
 		m.avatarRow(w),
 		"",
-		txt(theme.Fg, bg).Render(truncate("Describe your project below to begin, or type / for commands.", w)),
-		txt(theme.Muted, bg).Render(truncate("/settings for status · usage · stats · config", w)),
+		txt(theme.Fg, bg).Render(truncate("Describe what to build in the prompt below.", w)),
+		txt(theme.Muted, bg).Render(truncate("/ for commands · ^p to search everything · f1 for keys", w)),
 	}
-	return exactly(lines, h)
+	// posting's empty state: the region hatched, the message centered on clear ground — so an empty
+	// panel reads as "nothing yet", not as a rendering fault.
+	hatch := strings.Split(ui.Hatch("", w, h, bg), "\n")
+	top := max((h-len(block))/2, 0)
+	for i, l := range block {
+		if top+i >= len(hatch) {
+			break
+		}
+		left := max((w-lipgloss.Width(l))/2, 0)
+		hatch[top+i] = txt(theme.Fg, bg).Render(strings.Repeat(" ", left)) + l + txt(theme.Fg, bg).Render(strings.Repeat(" ", max(w-left-lipgloss.Width(l), 0)))
+	}
+	return strings.Join(hatch, "\n")
 }
 
 // avatarRow draws the team as its avatars wired together with ⇄ — the "visual representation of

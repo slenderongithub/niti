@@ -11,10 +11,10 @@ import (
 )
 
 // Commands like /help, /agents, /tasks and /sessions answer with a table, not a sentence. Those
-// used to be pushed into the one-line footer and the agent-to-agent feed, where a five-row answer
+// used to be pushed into the one-line status and the agent-to-agent feed, where a five-row answer
 // arrived as five stacked lines of debris that pushed the real traffic off screen. A multi-line
 // result now opens this pager instead: a scrollable box in the middle of the screen, esc to close.
-// One-line results still go to the footer, where a one-line answer belongs.
+// One-line results go to the status line in the prompt panel's border, where a one-line answer belongs.
 
 type output struct {
 	open  bool

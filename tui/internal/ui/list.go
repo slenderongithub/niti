@@ -63,7 +63,10 @@ func (l *List) refilter() {
 	// command whose description happens to contain an m. Names that *start* with the query are
 	// listed before names that merely contain it, so "/m" highlights /model rather than /theme
 	// while still letting "opus" find claude-opus-4-8.
-	var loose []int
+	//
+	// Last come fuzzy matches — the query's letters in order, gaps allowed — so the command palette
+	// finds "theme: tide" from "thti" the way posting's and VS Code's palettes do.
+	var loose, fuzzy []int
 	for i, it := range l.items {
 		name := strings.ToLower(it.Label)
 		switch {
@@ -71,12 +74,33 @@ func (l *List) refilter() {
 			l.shown = append(l.shown, i)
 		case strings.Contains(name+" "+strings.ToLower(it.Value), q):
 			loose = append(loose, i)
+		case subsequence(name, q):
+			fuzzy = append(fuzzy, i)
 		}
 	}
-	l.shown = append(l.shown, loose...)
+	l.shown = append(append(l.shown, loose...), fuzzy...)
 	if l.cursor >= len(l.shown) {
 		l.cursor = max(len(l.shown)-1, 0)
 	}
+}
+
+// subsequence reports whether every rune of q appears in s, in order (spaces in q are ignored).
+func subsequence(s, q string) bool {
+	rs := []rune(s)
+	i := 0
+	for _, c := range q {
+		if c == ' ' {
+			continue
+		}
+		for i < len(rs) && rs[i] != c {
+			i++
+		}
+		if i == len(rs) {
+			return false
+		}
+		i++
+	}
+	return true
 }
 
 // Move wraps at both ends — a five-item list is faster to reach backwards than to scroll down.
@@ -88,6 +112,9 @@ func (l *List) Move(delta int) {
 }
 
 func (l *List) Len() int    { return len(l.shown) }
+
+// At is the i-th visible (filtered) item — for callers that draw rows themselves.
+func (l *List) At(i int) Item { return l.items[l.shown[i]] }
 func (l *List) Cursor() int { return l.cursor }
 
 func (l *List) Selected() (Item, bool) {
@@ -258,12 +285,18 @@ func Box(title, body, hint string, w int) string {
 // sidebar keeps its own background instead of being blanked into a dark stripe wherever a modal
 // happens to sit. The right-hand gap is repainted in BgDeep, which is what the main pane is anyway.
 func Overlay(base, box string, w, h int) string {
+	return OverlayAt(base, box, w, h, max((h-lipgloss.Height(box))/2, 0))
+}
+
+// OverlayAt is Overlay with the box's first row at `top` instead of vertically centered — a
+// command palette sits near the top, where the eye already is, as posting's and VS Code's do.
+func OverlayAt(base, box string, w, h, top int) string {
 	baseLines := strings.Split(base, "\n")
 	boxLines := strings.Split(box, "\n")
 	if len(boxLines) > h {
 		boxLines = boxLines[:h]
 	}
-	top := max((h-len(boxLines))/2, 0)
+	top = min(max(top, 0), max(h-len(boxLines), 0))
 	gap := lipgloss.NewStyle().Background(theme.BgDeep)
 	for i, bl := range boxLines {
 		row := top + i

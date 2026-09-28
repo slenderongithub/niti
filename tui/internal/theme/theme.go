@@ -6,6 +6,7 @@ package theme
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -290,4 +291,21 @@ func StatusColor(status string) lipgloss.Color {
 	default:
 		return Muted
 	}
+}
+
+// Tint is c laid 30% over the canvas — the fill for chips, banners and the selected row, so a
+// saturated color marks a small area without shouting across a large one (Textual's `$x-muted`).
+func Tint(c lipgloss.Color) lipgloss.Color { return blend(c, BgDeep, 0.3) }
+
+// blend mixes a over b at weight w (1 = all a). Non-hex input is returned unchanged.
+func blend(a, b lipgloss.Color, w float64) lipgloss.Color {
+	var ar, ag, ab, br, bg, bb int
+	if _, err := fmt.Sscanf(string(a), "#%02x%02x%02x", &ar, &ag, &ab); err != nil {
+		return a
+	}
+	if _, err := fmt.Sscanf(string(b), "#%02x%02x%02x", &br, &bg, &bb); err != nil {
+		return a
+	}
+	mix := func(x, y int) int { return int(float64(x)*w + float64(y)*(1-w) + 0.5) }
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", mix(ar, br), mix(ag, bg), mix(ab, bb)))
 }
