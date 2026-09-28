@@ -248,7 +248,7 @@ func Names() []string {
 
 // Next activates the theme after the current one, wrapping — what ctrl+t is bound to.
 func Next() string {
-	names := Names()
+	names := Choices()
 	for i, n := range names {
 		if n == current {
 			Use(names[(i+1)%len(names)])
@@ -257,6 +257,29 @@ func Next() string {
 	}
 	Use(names[0])
 	return current
+}
+
+// Choices is what the theme picker offers: the dark themes normally, and only their light siblings
+// while light mode is on. Light mode is a setting (Settings → Config), not twelve entries mixed
+// into one list — so the picker never shows a light theme you'd have to hunt past.
+func Choices() []string {
+	var out []string
+	for _, n := range Names() {
+		if Themes[n].Light == IsLight() {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// Pick applies a theme chosen by name, honoring light mode: with it on, `/theme tide` means
+// "tide light". Names that are already light (or have no sibling) apply as given.
+func Pick(name string) bool {
+	name = Resolve(name)
+	if IsLight() && !Themes[name].Light && Use(name+" light") {
+		return true
+	}
+	return Use(name)
 }
 
 // No ★: the sidebar marks the lead agent with ★, so the fifth agent's avatar read as a second lead.

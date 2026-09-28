@@ -61,7 +61,7 @@ func (m *Model) openPalette() tea.Cmd {
 		add("spacing: Compact", paletteEntry{desc: "Drop the panel borders to fit more output", run: func(m *Model) tea.Cmd { m.prefs["compact"] = true; return nil }})
 	}
 	add("help: Keys and glyphs", paletteEntry{desc: "What every key does here, and what the symbols mean (f1)", run: (*Model).openHelp})
-	for _, name := range theme.Names() {
+	for _, name := range theme.Choices() {
 		name := name
 		add("theme: "+name, paletteEntry{desc: "Switch the palette to " + name, theme: name, run: func(m *Model) tea.Cmd { return m.commitTheme(name) }})
 	}

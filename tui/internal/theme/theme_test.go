@@ -31,7 +31,7 @@ func TestUseRejectsUnknownWithoutChangingAnything(t *testing.T) {
 
 // Next walks every theme exactly once and returns to where it started — the ctrl+t contract.
 func TestNextCyclesThroughEveryThemeAndWraps(t *testing.T) {
-	names := Names()
+	names := Choices() // the dark set; light siblings only cycle while light mode is on
 	Use(names[0])
 	seen := map[string]bool{names[0]: true}
 	for i := 1; i < len(names); i++ {
@@ -174,4 +174,24 @@ func TestEveryDarkThemeHasALightSiblingAndLightModeMovesBetweenThem(t *testing.T
 		t.Errorf("the former light theme name should load graphite light, got %q", Current())
 	}
 	Use("graphite")
+}
+
+// The picker lists dark themes only, or only light siblings while light mode is on — never both.
+func TestChoicesFollowLightMode(t *testing.T) {
+	Use("graphite")
+	for _, n := range Choices() {
+		if Themes[n].Light {
+			t.Errorf("light theme %q offered with light mode off", n)
+		}
+	}
+	SetLight(true)
+	defer SetLight(false)
+	for _, n := range Choices() {
+		if !Themes[n].Light {
+			t.Errorf("dark theme %q offered with light mode on", n)
+		}
+	}
+	if !Pick("ember") || Current() != "ember light" {
+		t.Errorf("/theme ember in light mode should apply ember light, got %q", Current())
+	}
 }

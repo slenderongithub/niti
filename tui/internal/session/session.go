@@ -600,10 +600,10 @@ func (m *Model) submit(text string) tea.Cmd {
 			// Bare /theme opens the same swatch picker ctrl+t does — nobody should have to type a
 			// theme name from memory. `/theme <name>` (below) stays direct-apply for scripting.
 			m.openThemePicker()
-		case theme.Use(strings.TrimSpace(args)):
+		case theme.Pick(strings.TrimSpace(args)):
 			m.status = "theme: " + theme.Current()
 		default:
-			m.status = "unknown theme " + args + " — try: " + strings.Join(theme.Names(), " ")
+			m.status = "unknown theme " + args + " — try: " + strings.Join(theme.Choices(), ", ")
 		}
 		return nil
 	}
