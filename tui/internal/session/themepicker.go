@@ -23,7 +23,7 @@ type themePicker struct {
 }
 
 func (m *Model) openThemePicker() {
-	names := theme.Names()
+	names := theme.Choices()
 	cur := theme.Current()
 	cursor := 0
 	for i, n := range names {
