@@ -5,7 +5,7 @@ import type { MessageBus } from "../messaging/message-bus.ts";
 import type { Turn } from "../providers/provider.ts";
 import type { TaskNode } from "./task.ts";
 import type { OrchestrationEvent } from "./scheduler.ts";
-import { makePlan, type RoleInfo } from "./planner.ts";
+import { makePlan, type Exchange, type RoleInfo } from "./planner.ts";
 import { schedule } from "./scheduler.ts";
 
 
@@ -19,7 +19,12 @@ export interface RunnerDeps {
   shouldStop?: () => boolean; // graceful cancel signal, forwarded to the scheduler
   priorTurns?: (taskId: string) => Turn[]; // resume: stored conversation to seed each task with
   planOnly?: boolean; // build and publish the DAG, then stop — nothing is executed
+  history?: Exchange[]; // recent exchanges, so a follow-up message can refer back to them
 }
+
+// What a message turned into: a direct reply, an answered question, or a run of tasks. The engine
+// keeps it as conversation memory; `text` is the reply/answer (work summaries arrive via events).
+export type RunResult = { kind: "reply" | "answer" | "work"; text?: string };
 
 // The DAG a PLAN-mode run left on the board for this exact goal, if it is still untouched —
 // meaning BUILD should execute it rather than pay for a second planning call. Anything else
@@ -45,7 +50,7 @@ export async function runProject(
   orch: Orchestrator,
   bus: Bus,
   deps: RunnerDeps = {},
-): Promise<void> {
+): Promise<RunResult> {
   const lead = agents.find((a) => a.config.lead) ?? agents[0];
   if (!lead) throw new Error("no agents configured");
   const roles: RoleInfo[] = agents.map((a) => ({ id: a.config.id, role: a.config.role, description: a.config.systemPrompt.slice(0, 140) }));
@@ -56,8 +61,18 @@ export async function runProject(
   if (tasks) {
     bus.publish({ agentId: lead.config.id, type: "thought", payload: `running the plan you reviewed (${tasks.length} tasks) — no second planning call`, time: Date.now() });
   } else {
-    bus.publish({ agentId: lead.config.id, type: "thought", payload: `planning: ${prompt}`, time: Date.now() });
-    const plan = await makePlan(lead, prompt, roles);
+    bus.publish({ agentId: lead.config.id, type: "thought", payload: `thinking about: ${prompt}`, time: Date.now() });
+    const plan = await makePlan(lead, prompt, roles, deps.history);
+    // Not work: say it and stop. "hi" used to be forced into 2-6 invented tasks here.
+    if (plan.reply !== undefined) {
+      bus.publish({ agentId: lead.config.id, type: "message", payload: plan.reply, time: Date.now() });
+      return { kind: "reply", text: plan.reply };
+    }
+    if (plan.question !== undefined) {
+      const answer = await lead.answer(plan.question);
+      bus.publish({ agentId: lead.config.id, type: "message", payload: answer, time: Date.now() });
+      return { kind: "answer", text: answer };
+    }
     orch.load(plan.tasks); // shares the Task objects — scheduler mutates them, orch/UI/resume see updates
     for (const t of plan.tasks) {
       bus.publish({ agentId: lead.config.id, type: "thought", payload: `queued ${t.id} → ${t.assignedTo}: ${t.description}`, time: Date.now() });
@@ -76,7 +91,7 @@ export async function runProject(
         time: Date.now(),
       });
       bus.publish({ agentId: lead.config.id, type: "thought", payload: `plan ready (${tasks.length} tasks) — switch to BUILD and send the same goal to run it (or /resume)`, time: Date.now() });
-      return;
+      return { kind: "work" };
     }
   }
 
@@ -86,6 +101,7 @@ export async function runProject(
     // e.g. a dependency cycle — surface it, don't crash the session.
     bus.publish({ agentId: lead.config.id, type: "error", payload: `scheduling failed: ${err instanceof Error ? err.message : err}`, time: Date.now() });
   }
+  return { kind: "work" };
 }
 
 // Resume: re-schedule the tasks a previous run left unfinished, with no planning pass (the DAG

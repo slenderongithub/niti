@@ -10,7 +10,10 @@ import { LockRegistry } from "./orchestrator/locks.ts";
 import { ApprovalQueue } from "./approval.ts";
 import { UsageTracker } from "./usage.ts";
 import { defaultSettings, type RuntimeSettings } from "./settings.ts";
-import { runProject, resumeProject, type RunnerDeps } from "./orchestrator/runner.ts";
+import { runProject, resumeProject, type RunnerDeps, type RunResult } from "./orchestrator/runner.ts";
+import type { Exchange } from "./orchestrator/planner.ts";
+
+const HISTORY_MAX = 6; // exchanges the planner sees — enough for follow-ups, bounded so planning stays cheap
 import { EventHub } from "./server/events.ts";
 import type { Provider } from "./providers/provider.ts";
 import type { McpTools } from "./mcp/mcp.ts";
@@ -247,10 +250,21 @@ export class Engine {
   // planOnly stops after the DAG is built, so you can read the plan (and edit agents.yaml, or say
   // it differently) before any agent writes a file — the TUI's PLAN mode.
   async submit(goal: string, opts: { planOnly?: boolean } = {}): Promise<void> {
-    // A fresh goal starts a fresh conversation: no priorTurns, so nothing from an earlier run
-    // bleeds in just because the planner reused a task id.
-    await this.runSession(goal, (deps) => runProject(goal, this.agents, this.orch, this.bus, { ...deps, planOnly: opts.planOnly }));
+    // A fresh goal gets no priorTurns (nothing from an earlier run's task transcripts bleeds in), but
+    // it does get the recent exchanges, so "now add tests" knows what "it" was.
+    this.lastSummary = undefined;
+    let result: RunResult | undefined;
+    await this.runSession(goal, async (deps) => {
+      result = await runProject(goal, this.agents, this.orch, this.bus, { ...deps, planOnly: opts.planOnly, history: this.history });
+    });
+    const outcome = result?.text ?? this.lastSummary ?? `${this.orch.all.filter((t) => t.status === "done").length} of ${this.orch.all.length} tasks done`;
+    this.history.push({ goal, outcome });
+    if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
   }
+
+  // Conversation memory for the planner (see Exchange). /clear empties it along with the board.
+  readonly history: Exchange[] = [];
+  private lastSummary?: string; // the lead's integrate summary for the run in progress
 
   // Continue the tasks a previous session left unfinished, each agent seeded with that task's
   // stored conversation. Requires a store — without one there is no history to resume from.
@@ -268,7 +282,7 @@ export class Engine {
     );
   }
 
-  private async runSession(goal: string, run: (deps: RunnerDeps) => Promise<void>): Promise<void> {
+  private async runSession(goal: string, run: (deps: RunnerDeps) => Promise<unknown>): Promise<void> {
     if (this.busy) throw new Error("a task is already running");
     if (this.worktreeEnabled) {
       if (this.worktreeHandle) {
@@ -290,6 +304,7 @@ export class Engine {
         messageBus: this.messageBus,
         onOrchestration: (e) => {
           this.hub.publish({ kind: "orchestration", event: e, time: e.time });
+          if (e.type === "integrate") this.lastSummary = e.summary;
           // Persisted on every board change, not only after a clean finish — a crash or kill
           // mid-run used to leave `niti resume` reloading the board from the run before.
           saveTasks(this.orch.all);

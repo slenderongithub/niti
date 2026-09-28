@@ -568,6 +568,12 @@ export class Agent {
 
   // Answer a teammate's question. A bounded agentic loop (can read files / call tools to ground the
   // answer) that returns the final text. askDepth bounds A→B→A→… chains via MAX_ASK_DEPTH.
+  // A question from the user that needs no changes: the same loop as respond(), limited to tools
+  // that can only look — so "where is auth handled?" gets read, searched and answered, never edited.
+  async answer(question: string): Promise<string> {
+    return this.subLoop(question, { kind: "ask", maxTurns: MAX_RESPOND_TURNS, askDepth: 0, forkDepth: MAX_FORK_DEPTH, readOnly: true });
+  }
+
   async respond(question: string, askDepth: number, parentSessionId?: string): Promise<string> {
     return this.subLoop(question, { kind: "ask", maxTurns: MAX_RESPOND_TURNS, askDepth, forkDepth: 0, parentSessionId });
   }
@@ -600,10 +606,11 @@ export class Agent {
   // `output`. inFlightCount is a counter precisely so these can overlap.
   private async subLoop(
     prompt: string,
-    o: { kind: SessionKind; maxTurns: number; askDepth: number; forkDepth: number; parentSessionId?: string },
+    o: { kind: SessionKind; maxTurns: number; askDepth: number; forkDepth: number; parentSessionId?: string; readOnly?: boolean },
   ): Promise<string> {
     const id = this.config.id;
-    const allowed = expandTools(this.config.allowedTools ?? []);
+    const all = expandTools(this.config.allowedTools ?? []);
+    const allowed = o.readOnly ? all.filter((t) => READ_ONLY_TOOLS.has(t)) : all;
     const turns: Turn[] = [];
     const sessionId = this.store?.createSession({
       agentId: id,

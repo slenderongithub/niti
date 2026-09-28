@@ -404,3 +404,18 @@ test("/auto and /manual flip approval mode live, without restarting the team", a
   engine.setAuto(false);
   expect(engine.auto).toBe(false); // and back, still live
 });
+
+test("the engine remembers recent exchanges for follow-ups, bounded, and /clear forgets them", async () => {
+  const replies = ['{"reply":"Hello!"}', '{"reply":"Sure."}'];
+  let i = 0;
+  const p: Provider = { async send() { return { text: replies[Math.min(i++, 1)]!, toolCalls: [] }; } };
+  const engine = new Engine({ configs: [{ id: "lead", provider: "anthropic", model: "x", role: "Lead", systemPrompt: "s", lead: true }], makeProvider: () => p, interactive: false, repoMap: false });
+  await engine.submit("hi");
+  expect(engine.history).toEqual([{ goal: "hi", outcome: "Hello!" }]);
+  for (let n = 0; n < 8; n++) await engine.submit(`msg ${n}`);
+  expect(engine.history.length).toBe(6); // bounded
+  expect(engine.history.at(-1)?.goal).toBe("msg 7");
+  const { CommandRegistry } = await import("./commands/registry.ts");
+  await new CommandRegistry().run(engine, "clear");
+  expect(engine.history).toEqual([]);
+});

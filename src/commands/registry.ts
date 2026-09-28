@@ -276,6 +276,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       if (engine.running) return { ok: false, message: "cancel the running task first" };
       const n = engine.orch.all.length;
       engine.orch.clear();
+      engine.history.length = 0; // a clean slate means the planner forgets the conversation too
       saveTasks([]); // otherwise a restart resurrects the board this just cleared
       return { ok: true, message: `cleared ${n} task(s)` };
     },
