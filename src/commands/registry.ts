@@ -263,7 +263,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     async run(engine) {
       if (engine.running) return { ok: false, message: "a task is already running" };
       if (!engine.orch.all.some((t) => t.status !== "done")) return { ok: false, message: "nothing left to resume" };
-      engine.resume().catch(() => {}); // long-running: progress arrives over the event stream
+      engine.resume().catch(reportRunFailure(engine)); // long-running: progress arrives over the event stream
       return { ok: true, message: "resuming unfinished tasks" };
     },
   },
@@ -283,11 +283,19 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: "Have the team read this project and write an AGENTS.md for it",
     async run(engine) {
       if (engine.running) return { ok: false, message: "a task is already running" };
-      engine.submit(INIT_PROMPT).catch(() => {});
+      engine.submit(INIT_PROMPT).catch(reportRunFailure(engine));
       return { ok: true, message: "analysing the project → AGENTS.md" };
     },
   },
 ];
+
+// The command has already answered "ok" by the time a background run can fail, so the failure
+// goes where every other run failure goes — the transcript — instead of vanishing (same shape
+// server.ts uses for POST /prompt).
+function reportRunFailure(engine: Engine) {
+  return (err: unknown) =>
+    engine.bus.publish({ agentId: "orchestrator", type: "error", payload: `run failed: ${err instanceof Error ? err.message : err}`, time: Date.now() });
+}
 
 const TASK_GLYPH: Record<string, string> = { done: "●", in_progress: "◐", failed: "✖", pending: "○" };
 
@@ -321,7 +329,7 @@ export function loadCommands(dir = ".niti/commands"): Command[] {
         async run(engine, args) {
           const prompt = body.replaceAll("$ARGUMENTS", args.trim());
           if (engine.running) return { ok: false, message: "a task is already running" };
-          engine.submit(prompt).catch(() => {}); // long-running: progress arrives over the event stream
+          engine.submit(prompt).catch(reportRunFailure(engine)); // long-running: progress arrives over the event stream
           return { ok: true, message: `running /${name}` };
         },
       });

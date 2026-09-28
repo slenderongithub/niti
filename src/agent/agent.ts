@@ -91,7 +91,15 @@ export function isDangerousShellCall(name: string, input: Record<string, unknown
     if (argv[0] === "reset" && has(argv, "--hard")) return true;
     if (argv[0] === "clean" && has(argv, "-f", "--force")) return true;
   }
-  if (base === "find" && has(argv, "-delete")) return true;
+  // `find` and `rg` sit on the auto-allowed list, so every flag that turns them into "run a
+  // program" or "write a file" has to force a prompt here — the allowlist can't see flags.
+  if (base === "find" && argv.some((a) => /^-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/.test(a))) return true;
+  if (base === "rg" && argv.some((a) => /^--pre(-glob)?(=|$)/.test(a))) return true;
+  if (base === "git") {
+    // diff/log/show --output=<file> writes anywhere; branch -D/-f/-m rewrites or drops refs.
+    if (argv.some((a) => /^--output(=|$)/.test(a))) return true;
+    if (argv[0] === "branch" && has(argv, "-D", "-d", "-f", "-m", "-M", "--delete", "--force", "--move")) return true;
+  }
   if (base === "truncate" && argv.some((a) => /^-s\s*0$/.test(a))) return true;
   if (INTERPRETERS.has(base) && has(argv, "-c", "-e")) return true;
   return false;
@@ -107,7 +115,9 @@ export function isDangerousShellCall(name: string, input: Record<string, unknown
 export function leavesProjectRoot(name: string, input: Record<string, unknown>): boolean {
   if (name !== "shell") return false;
   const parts = [String(input.command ?? ""), ...(Array.isArray(input.args) ? input.args.map(String) : [])];
-  return parts.some((p) => p === ".." || p.startsWith("../") || p.startsWith("/") || p.includes("/../"));
+  // `--output=/abs` and `--file=../x` carry the path after the `=`, so check that half too.
+  const paths = parts.flatMap((p) => (p.startsWith("-") && p.includes("=") ? [p.slice(p.indexOf("=") + 1)] : [p]));
+  return paths.some((p) => p === ".." || p.startsWith("../") || p.startsWith("/") || p.includes("/../"));
 }
 
 // Binaries that talk to the network. Heuristic, not exhaustive: a false positive just costs one
@@ -1017,7 +1027,11 @@ export class Agent {
       if (again.ok) return { enforcer: [], test: [] }; // the verdict did not depend on the edits
     } finally {
       for (const c of candidates) {
-        await writeFile(safePath(this.root, c.rel), c.current).catch(() => {});
+        // A failed restore leaves the user's file at its baseline — say so loudly, never silently.
+        await writeFile(safePath(this.root, c.rel), c.current).catch((err: unknown) => {
+          const payload = `could not restore ${c.rel} after the tamper check (${err instanceof Error ? err.message : String(err)}) — it is still at its pre-task content`;
+          this.bus.publish({ agentId: this.config.id, type: "error", payload, time: Date.now() });
+        });
       }
       for (const abs of held) this.locks?.release(abs, this.config.id);
     }

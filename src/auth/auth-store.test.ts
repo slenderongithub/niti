@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -82,4 +82,12 @@ test("corrupt store is treated as empty, not fatal", () => {
   const { writeFileSync } = require("node:fs");
   writeFileSync(process.env.NITI_AUTH_FILE!, "{ not json");
   expect(listCredentials()).toEqual([]);
+});
+
+test("a write over a corrupt store keeps the old file instead of dropping its keys", () => {
+  const path = process.env.NITI_AUTH_FILE!;
+  writeFileSync(path, '{"credentials": [ {"provider":"openai","type":"api","key":"sk-1"}, ');
+  setCredential({ provider: "anthropic", type: "api", key: "sk-2" });
+  expect(existsSync(`${path}.corrupt`)).toBe(true); // the unreadable original survives for recovery
+  expect(listCredentials().map((c) => c.provider)).toEqual(["anthropic"]);
 });

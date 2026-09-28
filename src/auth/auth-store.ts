@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, rmSync, renameSync } from "node:fs";
 import { getKey as keychainKey, setKey as keychainSet, deleteKey as keychainDelete } from "../keystore/keystore.ts";
 
 // Typed, global credential store — the niti equivalent of opencode's auth.json.
@@ -20,14 +20,20 @@ interface StoreShape {
   credentials: AuthCredential[];
 }
 
-function read(): AuthCredential[] {
+// `forWrite` is set by every read-modify-write. A corrupt store still reads as empty (it shouldn't
+// brick the CLI), but a write must not then replace it with one credential and silently drop every
+// other key it held — so the unreadable file is moved aside to auth.json.corrupt first.
+function read(forWrite = false): AuthCredential[] {
   const path = authFile();
   if (!existsSync(path)) return [];
   try {
     const data = JSON.parse(readFileSync(path, "utf8")) as StoreShape;
     return Array.isArray(data.credentials) ? data.credentials.filter((c) => c && typeof c.provider === "string") : [];
   } catch {
-    // A corrupt store shouldn't brick the CLI — treat as empty and let the next write heal it.
+    if (forWrite) {
+      renameSync(path, `${path}.corrupt`);
+      console.error(`niti: ${path} was unreadable; kept it as ${path}.corrupt and started a fresh store`);
+    }
     return [];
   }
 }
@@ -36,12 +42,15 @@ function read(): AuthCredential[] {
 function write(creds: AuthCredential[]): void {
   const path = authFile();
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify({ credentials: creds }, null, 2), { mode: 0o600 });
+  // tmp + rename, so a crash mid-write leaves the old store intact instead of a truncated one.
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ credentials: creds }, null, 2), { mode: 0o600 });
   try {
-    chmodSync(path, 0o600); // enforce even if the file pre-existed with looser perms
+    chmodSync(tmp, 0o600); // enforce even if umask loosened it
   } catch {
     // best effort (e.g. Windows) — the mode option above already covers POSIX
   }
+  renameSync(tmp, path);
 }
 
 export function listCredentials(): AuthCredential[] {
@@ -56,7 +65,7 @@ export function getCredential(provider: string): AuthCredential | undefined {
 // who later runs without the file (or with `niti keys set`) still resolves. Mirroring is best
 // effort and skipped when writing to a test store, so tests never touch the real keychain.
 export function setCredential(cred: AuthCredential): void {
-  const creds = read().filter((c) => c.provider !== cred.provider);
+  const creds = read(true).filter((c) => c.provider !== cred.provider);
   creds.push(cred);
   write(creds);
   if (cred.type === "api" && !process.env.NITI_AUTH_FILE) {
@@ -69,7 +78,7 @@ export function setCredential(cred: AuthCredential): void {
 }
 
 export function removeCredential(provider: string): void {
-  const creds = read().filter((c) => c.provider !== provider);
+  const creds = read(true).filter((c) => c.provider !== provider);
   if (creds.length) write(creds);
   else {
     // last credential gone — drop the file entirely rather than leave an empty shell

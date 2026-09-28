@@ -290,13 +290,16 @@ export class Engine {
         messageBus: this.messageBus,
         onOrchestration: (e) => {
           this.hub.publish({ kind: "orchestration", event: e, time: e.time });
+          // Persisted on every board change, not only after a clean finish — a crash or kill
+          // mid-run used to leave `niti resume` reloading the board from the run before.
+          saveTasks(this.orch.all);
           this.emitUsage();
           this.emitLocks();
         },
         shouldStop: () => this.cancelled,
       });
-      saveTasks(this.orch.all); // persist so `niti resume` can reload
     } finally {
+      saveTasks(this.orch.all); // persist so `niti resume` can reload
       this.busy = false;
       if (this.worktreeEnabled) for (const a of this.agents) a.setRoot(this.root); // LSP/watcher never left the real root
       this.emitUsage();

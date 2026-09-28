@@ -13,7 +13,7 @@ export function saveTasks(tasks: readonly Task[], path = DEFAULT): void {
   // Write-then-rename: a crash or SIGKILL mid-write used to leave a truncated file that bricked
   // both `resume` and server startup. rename(2) is atomic within a filesystem, so a reader sees
   // either the old file or the new one, never half of one.
-  const tmp = `${path}.tmp`;
+  const tmp = `${path}.${process.pid}.tmp`; // per-process: the CLI, IDE and desktop cores may share .niti/
   writeFileSync(tmp, JSON.stringify({ tasks }, null, 2));
   renameSync(tmp, path);
 }

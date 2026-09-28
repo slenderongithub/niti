@@ -447,3 +447,20 @@ test("the favicon stack is public, square-sized PNGs, and both pages link it", a
     expect(html).toContain('rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"');
   }
 });
+
+test("malformed JSON is a 400, and /complete refuses a remote baseURL that would forward the stored key", async () => {
+  const { h } = setup();
+  track(h);
+  const auth = { authorization: `Bearer ${h.token}`, "content-type": "application/json" };
+  const bad = await fetch(`${h.url}/prompt`, { method: "POST", headers: auth, body: "{not json" });
+  expect(bad.status).toBe(400);
+  expect((await bad.json()).error).toContain("not valid JSON");
+
+  const remote = await fetch(`${h.url}/complete`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({ provider: "openai", model: "x", prompt: "hi", baseURL: "https://attacker.example.com/v1" }),
+  });
+  expect(remote.status).toBe(400);
+  expect((await remote.json()).error).toContain("local address");
+});

@@ -839,6 +839,20 @@ test("dangerous shell detection matches flag sets, not exact spellings", () => {
   expect(d("/bin/sh", ["-c", "rm -rf /"])).toBe(true); // opaque payload, and an absolute path
   expect(d("python3", ["-c", "import shutil"])).toBe(true);
 
+  // Auto-allowed commands whose flags run programs or write files.
+  expect(d("find", [".", "-exec", "rm", "{}", ";"])).toBe(true);
+  expect(d("find", [".", "-execdir", "sh", "{}", ";"])).toBe(true);
+  expect(d("find", [".", "-fprint", "/tmp/x"])).toBe(true);
+  expect(d("rg", ["--pre", "bash", "x", "."])).toBe(true);
+  expect(d("rg", ["--pre=bash", "x"])).toBe(true);
+  expect(d("git", ["diff", "--output=/tmp/x"])).toBe(true);
+  expect(d("git", ["branch", "-D", "main"])).toBe(true);
+  expect(d("git", ["branch", "-f", "main", "HEAD~3"])).toBe(true);
+  expect(d("find", [".", "-name", "*.ts"])).toBe(false);
+  expect(d("rg", ["--pretty", "TODO"])).toBe(false); // --pretty is not --pre
+  expect(d("git", ["branch", "-a"])).toBe(false);
+  expect(d("git", ["diff", "--stat"])).toBe(false);
+
   // Ordinary commands must still run without a prompt, including harmless rm and push.
   expect(d("rm", ["one.txt"])).toBe(false);
   expect(d("rm", ["-r", "build"])).toBe(false); // recursive but not forced
@@ -878,6 +892,9 @@ test("leavesProjectRoot spots a shell call reaching outside the project", () => 
   expect(leavesProjectRoot("shell", { command: "ls", args: ["/etc"] })).toBe(true);
   expect(leavesProjectRoot("shell", { command: "cat", args: ["src/../../x"] })).toBe(true);
   expect(leavesProjectRoot("shell", { command: "../evil.sh", args: [] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "git", args: ["diff", "--output=/etc/x"] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "git", args: ["log", "--output=../x"] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "git", args: ["log", "--format=%H"] })).toBe(false);
   // In-project work is untouched — this must not become another source of prompts.
   expect(leavesProjectRoot("shell", { command: "ls", args: ["-la"] })).toBe(false);
   expect(leavesProjectRoot("shell", { command: "cat", args: ["package.json"] })).toBe(false);

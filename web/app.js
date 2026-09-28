@@ -333,9 +333,19 @@ function renderApproval() {
     : `<div class="empty">${esc(JSON.stringify(r.input ?? {}))}</div>`;
 }
 function answerApproval(ok, scope) {
-  authedFetch("/approval", { ok, scope }).catch(() => {});
+  const answered = pendingApprovals[0];
   pendingApprovals = pendingApprovals.slice(1); // mirrors the TUI: pop locally, don't wait on the round trip
   renderApproval();
+  // …but if the answer never arrived the agent is still waiting, so put the request back and say so
+  // rather than leaving the user believing they approved.
+  authedFetch("/approval", { ok, scope })
+    .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); })
+    .catch((err) => {
+      if (!answered) return;
+      pendingApprovals = [answered, ...pendingApprovals];
+      renderApproval();
+      $("approval-head").textContent += ` — answer not delivered (${err.message}); try again`;
+    });
 }
 $("approval-yes").addEventListener("click", () => answerApproval(true));
 $("approval-always").addEventListener("click", () => answerApproval(true, "agent"));

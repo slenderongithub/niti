@@ -62,8 +62,9 @@ export const SAFE_SHELL_RULES: PermissionRules = {
     "echo *": "allow",
     "grep *": "allow",
     "rg *": "allow",
-    // `find` earns its place (agents reach for it constantly) but `find -delete`/`-exec` is caught
-    // by isDangerousShellCall, which force-asks regardless of anything decided here.
+    // `find` and `rg` earn their place (agents reach for them constantly). Their program-running
+    // and file-writing flags (`find -exec/-delete/-fprint`, `rg --pre`) and git's `--output=` /
+    // `branch -D` are caught by isDangerousShellCall, which force-asks regardless of this list.
     "find *": "allow",
   },
 };
