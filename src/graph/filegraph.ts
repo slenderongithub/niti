@@ -1,6 +1,11 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join, dirname, extname, basename } from "node:path";
+import { join, extname, basename, posix } from "node:path";
+
+// Graph ids are repo-relative and always "/"-separated (the walk builds them that way, and git
+// reports them that way). Resolving imports with node:path's platform join produced "src\\a.ts"
+// on Windows, which matched no id — every edge vanished there. Filesystem access still uses join.
+const dirname = posix.dirname;
 
 // The project's file-dependency graph: nodes are source files, edges are intra-project imports.
 // Built by scanning import statements — no build system, no AST, just the specifiers, resolved back
@@ -143,7 +148,7 @@ const JS_EXT = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 // and index-file fallbacks. Bare specifiers (npm packages) are external → dropped.
 function resolveJs(from: string, spec: string, set: Set<string>): string | undefined {
   if (!spec.startsWith(".")) return undefined;
-  const base = normalizeRel(join(dirname(from), spec));
+  const base = normalizeRel(posix.join(dirname(from), spec));
   const candidates = [
     ...JS_EXT.map((e) => base + e),
     ...JS_EXT.filter(Boolean).map((e) => `${base}/index${e}`),

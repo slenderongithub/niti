@@ -303,6 +303,7 @@ test("a headless engine denies gated tools unless --auto is set", async () => {
 test("a conflicted merge restores the tree and the worktree can be discarded", async () => {
   const repo = mkdtempSync(join(tmpdir(), "niti-conflict-"));
   execFileSync("git", ["init", "-q"], { cwd: repo });
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: repo }); // Windows git defaults to CRLF checkouts
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
   writeFileSync(join(repo, "f.txt"), "base\n");
@@ -367,7 +368,9 @@ test("/auto and /manual flip approval mode live, without restarting the team", a
     async send(): Promise<ProviderReply> {
       n++;
       // Two mutating shell calls: one under manual, one after switching to auto.
-      if (n === 1 || n === 3) return { text: "", toolCalls: [{ id: `${n}`, name: "shell", input: { command: "npm", args: ["install"] } }] };
+      // `git init`: needs approval like any mutating command, and is instant on every OS (a real
+      // `npm install` took longer than the 5s test timeout on Windows).
+      if (n === 1 || n === 3) return { text: "", toolCalls: [{ id: `${n}`, name: "shell", input: { command: "git", args: ["init", "-q"] } }] };
       return { text: "ok", toolCalls: [] };
     },
   };

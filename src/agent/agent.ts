@@ -10,12 +10,11 @@ import { MAX_ASK_DEPTH, USER } from "../messaging/message-bus.ts";
 import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
-import { resolve as resolvePermission, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
+import { resolve as resolvePermission, normalizePath, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
 import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, snippetDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
-import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
 import { StallGuard, stallNudge, recurringNudge } from "./stall.ts";
 import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
@@ -156,7 +155,7 @@ export function isEgressShellCall(name: string, input: Record<string, unknown>):
 // kind of write that should never ride through on a standing "always allow write_file" grant.
 export function isSensitiveConfigWrite(name: string, input: Record<string, unknown>): boolean {
   if (name !== "write_file" && name !== "edit") return false;
-  return normalize(String(input.path ?? "")).startsWith(".niti/");
+  return normalizePath(String(input.path ?? "")).startsWith(".niti/"); // "/" on every OS
 }
 
 export function overContextThreshold(inputTokens: number, context: number, ratio = WARN_RATIO): boolean {
