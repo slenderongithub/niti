@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -11,9 +12,18 @@ import (
 // one that only runs inside the git checkout, so pin it. os.Executable() here is the test binary
 // in go's build cache, which has no niti-core sibling — the sibling branch is covered by the
 // install smoke test, these two cover the fallbacks and the failure message.
+// The fake core on $PATH needs the name findCoreBinary looks for: Windows only resolves executables
+// with a PATHEXT extension, so there it's niti-core.exe.
+func coreBinName() string {
+	if runtime.GOOS == "windows" {
+		return "niti-core.exe"
+	}
+	return "niti-core"
+}
+
 func TestCoreCmdFindsNitiCoreOnPath(t *testing.T) {
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "niti-core")
+	bin := filepath.Join(dir, coreBinName())
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +55,7 @@ func TestCoreCmdReportsEveryCandidateWhenNothingIsFound(t *testing.T) {
 
 func TestCoreCLIForFindsNitiCoreOnPath(t *testing.T) {
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "niti-core")
+	bin := filepath.Join(dir, coreBinName())
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
