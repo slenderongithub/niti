@@ -7,31 +7,33 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'"
     />
-    <title>dashboard</title>
+    <title>niti · dashboard</title>
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header>
-      <div class="brand"><span class="dot"></span> niti</div>
-      <div class="goal" id="goal">waiting for a task…</div>
-      <div class="conn" id="conn">connecting…</div>
+    <!-- Laid out like the TUI: title bar, titled panels whose borders carry live detail, the prompt
+         panel, and a footer of the keys that work here. Every id below is one app.js reads. -->
+    <header class="titlebar">
+      <div class="brand">niti <span class="sub">dashboard</span></div>
+      <div class="where" id="goal">waiting for a task…</div>
+      <span class="chip conn" id="conn">connecting…</span>
+      <div class="theme-wrap">
+        <button class="btn" id="theme-btn"><span id="theme-dot"></span>theme</button>
+        <div id="theme-menu" class="hidden"></div>
+      </div>
     </header>
 
-    <div class="promptbar">
-      <textarea id="prompt-input" rows="1" placeholder="give the team a new goal…"></textarea>
-      <button id="prompt-send">Send</button>
-      <span class="status" id="prompt-status"></span>
-    </div>
-
-    <main>
-      <section class="graph">
+    <main class="layout">
+      <section class="box graph-box">
+        <span class="box-title">Team</span>
         <canvas id="canvas"></canvas>
         <div class="legend" id="legend"></div>
       </section>
 
-      <aside class="panel">
+      <aside class="box board">
+        <span class="box-title">Board</span>
         <nav class="tabs">
           <button data-tab="tasks" class="active">Tasks</button>
           <button data-tab="messages">Messages</button>
@@ -42,33 +44,48 @@
         <div class="tab hidden" id="tab-usage"></div>
       </aside>
 
-      <aside class="agent-panel hidden" id="agent-panel">
-        <div class="ap-head">
-          <span id="ap-title"></span>
-          <button id="ap-close" title="close">×</button>
-        </div>
+      <aside class="box agent-panel hidden" id="agent-panel">
+        <span class="box-title" id="ap-title"></span>
+        <button class="ap-close" id="ap-close" title="close (esc)">✕</button>
         <div class="ap-row">
-          <input id="ap-model-input" type="text" placeholder="provider/model" />
-          <button id="ap-model-apply">Switch</button>
+          <input class="field" id="ap-model-input" type="text" placeholder="provider/model" />
+          <button class="btn primary" id="ap-model-apply">Switch</button>
         </div>
         <div class="ap-row status" id="ap-model-status"></div>
         <div class="ap-log" id="ap-log"></div>
         <div class="ap-row">
-          <input id="ap-msg-input" type="text" placeholder="message this agent mid-task…" disabled />
-          <button id="ap-msg-send" disabled>Send</button>
+          <input class="field" id="ap-msg-input" type="text" placeholder="message this agent mid-task…" disabled />
+          <button class="btn primary" id="ap-msg-send" disabled>Send</button>
         </div>
         <div class="ap-row status" id="ap-msg-status"></div>
       </aside>
     </main>
 
+    <section class="box prompt title-left">
+      <span class="box-title">Build</span>
+      <span class="caret">▸</span>
+      <textarea id="prompt-input" rows="1" placeholder="give the team a new goal…"></textarea>
+      <button class="btn primary" id="prompt-send">Send</button>
+      <span class="box-sub" id="prompt-status"></span>
+    </section>
+
+    <footer class="keys">
+      <span><kbd>enter</kbd> Send</span>
+      <span><kbd>⇧enter</kbd> Newline</span>
+      <span><kbd>click</kbd> an agent to inspect it</span>
+      <span><kbd>y</kbd> <kbd>a</kbd> <kbd>n</kbd> answer an approval</span>
+      <span><kbd>esc</kbd> Close</span>
+    </footer>
+
     <div class="overlay hidden" id="approval-overlay">
-      <div class="overlay-box">
+      <div class="box overlay-box title-left">
+        <span class="box-title">Approval needed</span>
         <div class="overlay-head" id="approval-head"></div>
         <div class="diff" id="approval-diff"></div>
         <div class="overlay-actions">
-          <button id="approval-yes">Yes</button>
-          <button id="approval-always">Always</button>
-          <button id="approval-no">No</button>
+          <button class="btn primary" id="approval-yes"><kbd>y</kbd> Allow once</button>
+          <button class="btn" id="approval-always"><kbd>a</kbd> Allow for this agent</button>
+          <button class="btn" id="approval-no"><kbd>n</kbd> Deny</button>
         </div>
       </div>
     </div>

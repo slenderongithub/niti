@@ -11,12 +11,16 @@ const q = (id) => document.getElementById(id);
 // whatever theme the TUI/dashboard has active instead of a fixed palette. `let`, not `const` —
 // refreshGraphTheme() reassigns these on the "niti-theme" event (see boot, bottom of file).
 let PALETTE, STATUS_FILL, KIND_COLORS, ACCENT, ACCENT_RGB, INK, MUTED;
+let MUTED_RGB, INK_RGB, BG_RGB, LINE;
 function refreshGraphTheme() {
   const t = themeColors();
   PALETTE = [t.violet, t.blue, t.green, t.amber, t.pink, t.red];
   STATUS_FILL = { idle: t.muted, working: t.blue, done: t.green, failed: t.red };
   KIND_COLORS = { question: t.amber, answer: t.green, handoff: t.blue, artifact: t.blue, review: t.pink, broadcast: t.violet };
   ACCENT = t.violet; ACCENT_RGB = hexToRgbTriplet(t.violet); INK = t.ink; MUTED = t.muted;
+  // Edges, pins, label halos and the mini-map from the theme too — the fixed dark greys they used
+  // vanished (or turned into smudges) on every light theme.
+  MUTED_RGB = hexToRgbTriplet(t.muted); INK_RGB = hexToRgbTriplet(t.ink); BG_RGB = hexToRgbTriplet(t.bg); LINE = t.line;
 }
 refreshGraphTheme();
 
@@ -406,7 +410,6 @@ function render() {
   // keep classifying against the last focus while the dim fades out, so un-hovering fades instead of snapping
   const fx = focus >= 0 ? focus : dimAmt > 0.01 && lastFocus < nodes.length ? lastFocus : -1;
   const hits = searchHits;
-  const mix = (a, b) => Math.round(a + (b - a) * dimAmt);
 
   // edges: three batched paths (dim / normal / focused) — one stroke each instead of one per edge.
   // At dimAmt = 0 all three styles collapse to the same colour, so the transition is seamless.
@@ -420,10 +423,10 @@ function render() {
     if (mode === "project" && (on || (wantArrows && p === pn))) arrow(pa, s, t, t.r);
   }
   ctx.lineWidth = 1 / cam.k;
-  ctx.strokeStyle = `rgba(130,140,170,${0.22 - 0.17 * dimAmt})`; ctx.stroke(pd);
-  ctx.strokeStyle = "rgba(130,140,170,0.22)"; ctx.stroke(pn);
+  ctx.strokeStyle = `rgba(${MUTED_RGB},${0.3 - 0.22 * dimAmt})`; ctx.stroke(pd);
+  ctx.strokeStyle = `rgba(${MUTED_RGB},0.3)`; ctx.stroke(pn);
   ctx.lineWidth = (1 + 0.6 * dimAmt) / cam.k;
-  ctx.strokeStyle = `rgba(${mix(130, 167)},${mix(140, 139)},${mix(170, 250)},${0.22 + 0.33 * dimAmt})`; ctx.stroke(pf);
+  ctx.strokeStyle = `rgba(${dimAmt > 0.5 ? ACCENT_RGB : MUTED_RGB},${0.3 + 0.4 * dimAmt})`; ctx.stroke(pf);
   ctx.fillStyle = `rgba(${ACCENT_RGB},0.5)`; ctx.fill(pa);
 
   // message pulses (models mode) — keyed by id, since indices shift on every live rebuild
@@ -460,8 +463,8 @@ function render() {
     } else {
       ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7);
       ctx.fillStyle = n.color || MUTED; ctx.fill();
-      if (n.lead) { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = "#fff"; ctx.stroke(); }
-      else if (n.pinned) { ctx.lineWidth = 1 / cam.k; ctx.strokeStyle = "rgba(231,233,242,0.45)"; ctx.stroke(); }
+      if (n.lead) { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = INK; ctx.stroke(); }
+      else if (n.pinned) { ctx.lineWidth = 1 / cam.k; ctx.strokeStyle = `rgba(${INK_RGB},0.45)`; ctx.stroke(); }
     }
     if (n.status === "working") {
       const pw = (now % 1200) / 1200;
@@ -491,7 +494,7 @@ function render() {
       if (!forced && boxes.some((o) => b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0)) continue;
       boxes.push(b);
       ctx.globalAlpha = a;
-      ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillText(n.label, n.x + 0.6 / cam.k, n.y + n.r + 2.6 / cam.k);
+      ctx.fillStyle = `rgba(${BG_RGB},0.8)`; ctx.fillText(n.label, n.x + 0.6 / cam.k, n.y + n.r + 2.6 / cam.k);
       ctx.fillStyle = INK; ctx.fillText(n.label, n.x, n.y + n.r + 2 / cam.k);
     }
   }
@@ -525,8 +528,8 @@ const miniToWorld = (m, sx, sy) => ({ x: m.a + (sx - m.x - m.pad) / m.sc, y: m.b
 function drawMinimap() {
   const m = miniRect(); if (!m) return;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.fillStyle = "rgba(13,15,22,0.7)"; ctx.strokeStyle = overMini ? `rgba(${ACCENT_RGB},0.55)` : "rgba(38,43,61,1)";
-  roundRect(m.x, m.y, m.w, m.h, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = `rgba(${BG_RGB},0.85)`; ctx.strokeStyle = overMini ? `rgba(${ACCENT_RGB},0.8)` : LINE;
+  roundRect(m.x, m.y, m.w, m.h, 6); ctx.fill(); ctx.stroke();
   ctx.globalAlpha = 0.5;
   for (const n of nodes) {
     ctx.fillStyle = n.color || MUTED;
@@ -538,7 +541,7 @@ function drawMinimap() {
   const tl = toWorld(0, 0), br = toWorld(W, H);
   const vx = m.x + m.pad + (tl.x - m.a) * m.sc, vy = m.y + m.pad + (tl.y - m.b) * m.sc;
   ctx.save();
-  roundRect(m.x, m.y, m.w, m.h, 8); ctx.clip();
+  roundRect(m.x, m.y, m.w, m.h, 6); ctx.clip();
   ctx.fillStyle = `rgba(${ACCENT_RGB},0.10)`; ctx.fillRect(vx, vy, (br.x - tl.x) * m.sc, (br.y - tl.y) * m.sc);
   ctx.strokeStyle = `rgba(${ACCENT_RGB},0.8)`; ctx.lineWidth = 1; ctx.strokeRect(vx, vy, (br.x - tl.x) * m.sc, (br.y - tl.y) * m.sc);
   ctx.restore();
@@ -756,11 +759,14 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "Escape") { selected = -1; q("search").value = ""; applySearch(""); }
 });
 
+// The title goes in the panel's border (#legend-title), like every panel title in the TUI.
 function buildLegend(items, title) {
-  q("legend").innerHTML = `<div class="title">${esc(title)}</div>` +
+  const t = q("legend-title");
+  if (t) t.textContent = title;
+  q("legend").innerHTML =
     items.slice(0, 14).map((it) => `<span class="k"><i style="background:${esc(it.color)}"></i>${esc(it.label)}</span>`).join("");
 }
-function setConn(text, cls) { const c = q("conn"); c.textContent = text; c.className = cls; }
+function setConn(text, cls) { const c = q("conn"); c.textContent = text; c.className = `chip conn ${cls}`.trim(); }
 // Quotes too: buildLegend interpolates a colour into a style="…" attribute, where escaping only
 // angle brackets still lets a crafted value close the attribute. Agent ids and task text reach
 // this page from the model, and the page's URL carries the token.
