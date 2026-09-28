@@ -10,9 +10,7 @@ on:
   workflow_dispatch: # run it on any branch: gh workflow run ci.yml --ref <branch>
 
 jobs:
-  # win32-x64 ships in every release, so it gets tested. Windows starts as non-blocking
-  # (continue-on-error) because it has never run before and its first results are unknown — drop
-  # that line once the Windows legs are green, so a Windows regression fails the build.
+  # win32-x64 ships in every release, so it is tested — and a Windows failure fails the build.
   core:
     strategy:
       fail-fast: false
@@ -20,7 +18,6 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20 # a hung test fails the job in minutes instead of the 6-hour default
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -39,7 +36,6 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20 # a hung test fails the job in minutes instead of the 6-hour default
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

@@ -265,7 +265,8 @@ test("splitCommand honours quotes and escapes, and does nothing else", () => {
   expect(splitCommand('git commit -m "fix bug"')).toEqual(["git", "commit", "-m", "fix bug"]);
   expect(splitCommand("echo 'a  b' c")).toEqual(["echo", "a  b", "c"]);
   expect(splitCommand('echo "say \\"hi\\""')).toEqual(["echo", 'say "hi"']);
-  expect(splitCommand("a\\ b c")).toEqual(["a b", "c"]);
+  // An escaped space is POSIX; on Windows a backslash is a path separator and stays literal.
+  expect(splitCommand("a\\ b c")).toEqual(process.platform === "win32" ? ["a\\", "b", "c"] : ["a b", "c"]);
   expect(splitCommand('x "" y')).toEqual(["x", "", "y"]);
   expect(splitCommand("  ls   -la ")).toEqual(["ls", "-la"]);
   // No expansion, globbing or operators: what the model wrote is what spawn receives.
