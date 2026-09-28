@@ -1,25 +1,28 @@
 :root {
-  --bg: #0d0f16;
-  --panel: #151823;
-  --panel-2: #1c2030;
-  --ink: #e7e9f2;
-  --muted: #8b90a6;
-  --line: #262b3d;
-  --violet: #a78bfa;
-  --green: #4ade80;
-  --red: #f87171;
-  --amber: #fbbf24;
-  --blue: #60a5fa;
-  --pink: #f472b6;
+  /* Offline / pre-load fallback: the "graphite" palette from tui/internal/theme/palettes.json.
+     theme.js overwrites every one of these as soon as /palettes.json arrives. */
+  --bg: #16181d;
+  --panel: #232730;
+  --panel-2: #1c1f26;
+  --ink: #d8dbe2;
+  --muted: #8a909c;
+  --line: #2e333d;
+  --violet: #7aa2d6;
+  --green: #8fbf8a;
+  --red: #d47a7a;
+  --amber: #d9b26f;
+  --blue: #6fb3b8;
+  --pink: #d49ab5;
 }
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f6f7fb;
-    --panel: #ffffff;
-    --panel-2: #f0f1f7;
-    --ink: #1a1c25;
-    --muted: #6b7186;
-    --line: #e4e6ef;
+    /* …and "paper" in a light browser. */
+    --bg: #f6f4ef;
+    --panel: #e6e2d8;
+    --panel-2: #efece5;
+    --ink: #2b2a27;
+    --muted: #6f6a61;
+    --line: #d4cec1;
   }
 }
 * { box-sizing: border-box; }
@@ -42,7 +45,7 @@ header {
   background: var(--panel);
 }
 .brand { font-weight: 700; color: var(--violet); display: flex; align-items: center; gap: 8px; }
-.brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--violet); box-shadow: 0 0 10px var(--violet); }
+.brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--violet); }
 .goal { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conn { font-size: 12px; color: var(--amber); }
 .conn.live { color: var(--green); }

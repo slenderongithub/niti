@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Engine } from "../engine.ts";
-import { startServer, splitModelId, tokensMatch, type ServerHandle } from "./server.ts";
+import { startServer, splitModelId, tokensMatch, resolveTheme, type ServerHandle } from "./server.ts";
 import type { Provider, ProviderReply } from "../providers/provider.ts";
 import type { AgentConfig } from "../agent/agent.ts";
 
@@ -463,4 +463,9 @@ test("malformed JSON is a 400, and /complete refuses a remote baseURL that would
   });
   expect(remote.status).toBe(400);
   expect((await remote.json()).error).toContain("local address");
+});
+
+test("a theme saved under a former name is served under its current one", () => {
+  expect(resolveTheme("neon graveyard")).toBe("graphite");
+  expect(resolveTheme("tide")).toBe("tide");
 });

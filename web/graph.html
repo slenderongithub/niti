@@ -12,9 +12,10 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <style>
       :root {
-        --bg: #0b0d14; --bg2: #0d0f16; --panel: rgba(21,24,35,0.82); --panel-solid: #151823;
-        --ink: #e7e9f2; --muted: #8b90a6; --line: #262b3d;
-        --violet: #a78bfa; --green: #4ade80; --red: #f87171; --amber: #fbbf24; --blue: #60a5fa; --pink: #f472b6;
+        /* pre-load fallback = the "graphite" palette; theme.js overwrites these from /palettes.json */
+        --bg: #16181d; --bg2: #1c1f26; --panel: rgba(35,39,48,0.82); --panel-solid: #232730;
+        --ink: #d8dbe2; --muted: #8a909c; --line: #2e333d;
+        --violet: #7aa2d6; --green: #8fbf8a; --red: #d47a7a; --amber: #d9b26f; --blue: #6fb3b8; --pink: #d49ab5;
       }
       * { box-sizing: border-box; }
       html, body { height: 100%; margin: 0; overflow: hidden; }
@@ -33,7 +34,7 @@
       }
       #topbar { top: 14px; left: 14px; display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
       .brand { font-weight: 700; letter-spacing: 0.3px; }
-      .brand .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--violet); margin-right: 6px; box-shadow: 0 0 10px var(--violet); }
+      .brand .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--violet); margin-right: 6px; }
       #conn { color: var(--muted); font-size: 12px; }
       #conn.live { color: var(--green); }
       #conn.dead { color: var(--amber); }

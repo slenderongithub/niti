@@ -169,13 +169,13 @@ func TestPlanModeTogglesAndIsSubmitted(t *testing.T) {
 // name must not blank the UI.
 func TestThemeCommandIsLocal(t *testing.T) {
 	m := model(1)
-	if cmd := m.submit("/theme desert static"); cmd != nil || theme.Current() != "desert static" {
+	if cmd := m.submit("/theme ember"); cmd != nil || theme.Current() != "ember" {
 		t.Errorf("/theme should switch locally, current=%q cmd=%v", theme.Current(), cmd)
 	}
-	if cmd := m.submit("/theme nonsense"); cmd != nil || theme.Current() != "desert static" {
+	if cmd := m.submit("/theme nonsense"); cmd != nil || theme.Current() != "ember" {
 		t.Errorf("an unknown theme must be refused and leave the current one, got %q", theme.Current())
 	}
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 }
 
 // Slash commands are dispatched against the server's registry, not a hardcoded switch.
@@ -281,10 +281,10 @@ func TestCarouselSwitchesTheModel(t *testing.T) {
 
 	m := model(1)
 	m.client = api.New(srv.URL, "tok")
-	opened, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	opened, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlL})
 	m = opened.(Model)
 	if !m.car.open || m.car.stage != "model" || cmd == nil {
-		t.Fatalf("ctrl+p with one agent should open straight on models, open=%v stage=%q", m.car.open, m.car.stage)
+		t.Fatalf("ctrl+l with one agent should open straight on models, open=%v stage=%q", m.car.open, m.car.stage)
 	}
 	m.setCarouselModels(modelsLoadedMsg{options: []modelOption{
 		{provider: "anthropic", model: "claude-opus-4-8"},
@@ -315,7 +315,7 @@ func TestCarouselSwitchesTheModel(t *testing.T) {
 // With more than one agent the carousel asks who first, and esc closes it without switching.
 func TestCarouselPicksAnAgentFirstAndEscCloses(t *testing.T) {
 	m := model(3)
-	opened, _ := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	opened, _ := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlL})
 	m = opened.(Model)
 	if m.car.stage != "agent" || m.car.list.Len() != 3 {
 		t.Fatalf("expected an agent list of 3, stage=%q len=%d", m.car.stage, m.car.list.Len())
@@ -350,7 +350,7 @@ func TestMenuAndCarouselStayInsideTheTerminal(t *testing.T) {
 		base = sized.(Model)
 
 		withMenu := typing(base, "/")
-		opened, _ := base.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+		opened, _ := base.onKey(tea.KeyMsg{Type: tea.KeyCtrlL})
 		withCarousel := opened.(Model)
 		withCarousel.setCarouselModels(modelsLoadedMsg{options: []modelOption{{provider: "anthropic", model: "claude-opus-4-8"}}})
 
@@ -462,20 +462,23 @@ func TestUnfinishedGuardLeavesCommandsAndCleanBoardsAlone(t *testing.T) {
 	}
 }
 
-// The grey sidebar runs from the mode stripe down; the agent tab bar lives in the dark column
-// beside it, so on the tab row the sidebar's cells come first and the tabs start after them.
+// The Agents panel runs down the left; the agent tabs live inside the Transcript panel beside it,
+// so on the tab row the sidebar's frame comes first and the tabs start after it.
 func TestTabBarSitsBesideTheSidebarNotAcrossIt(t *testing.T) {
 	m := model(2)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	lines := strings.Split(ansi.Strip(m.View()), "\n")
-	tabRow := lines[headerRows]
-	col := strings.Index(tabRow, "overview")
+	if !strings.Contains(lines[headerRows], "Agents") || !strings.Contains(lines[headerRows], "Transcript") {
+		t.Fatalf("expected both panel titles on the first body row, got %q", lines[headerRows])
+	}
+	tabRow := lines[headerRows+1]
+	col := strings.Index(tabRow, "All agents")
 	if col < sidebarMin {
 		t.Fatalf("tabs start at column %d, inside the sidebar (min width %d): %q", col, sidebarMin, tabRow)
 	}
-	if !strings.Contains(tabRow[:col], "CONTEXT") {
-		t.Fatalf("the sidebar should begin on the tab row, got %q", tabRow)
+	if !strings.HasPrefix(tabRow, "│") {
+		t.Fatalf("the Agents panel should frame the left of the tab row, got %q", tabRow)
 	}
 	if got := len(lines); got > 30 {
 		t.Fatalf("layout is %d rows tall in a 30-row terminal", got)

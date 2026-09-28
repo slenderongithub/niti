@@ -5,11 +5,9 @@ import (
 	"testing"
 
 	"github.com/niti/tui/internal/api"
-	"github.com/niti/tui/internal/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
 )
 
 func sized(agents, w, h int) Model {
@@ -41,36 +39,22 @@ func TestPopupsAreSizedToTheirContent(t *testing.T) {
 	}
 }
 
-// A popup must not blank the sidebar it floats over: the overlay keeps the base line's left half,
-// so the sidebar's own background survives every row the box covers.
+// A popup must not blank the panel it floats over: the overlay keeps the base line's left half, so
+// the Agents panel's frame survives on every row the box covers.
 func TestOverlayKeepsTheSidebarPainted(t *testing.T) {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	defer lipgloss.SetColorProfile(termenv.ColorProfile())
-
 	m := sized(2, 120, 34)
 	m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
-	// Derived from the live theme rather than hardcoded, so a palette change can't silently break
-	// this test's expectation out from under it.
-	sidebarBg := strings.SplitN(lipgloss.NewStyle().Background(theme.BgPane).Render("x"), "x", 2)[0]
-
-	// The agent tab bar (when there's more than one agent) is a full-width strip like the header —
-	// it never carries the sidebar background, same reason tasksRows/feedRows strips wouldn't either.
-	skipRows := headerRows
-	if len(m.order) > 1 {
-		skipRows++
-	}
-
-	frame := strings.Split(m.View(), "\n")
+	frame := strings.Split(ansi.Strip(m.View()), "\n")
 	covered := 0
 	for i, line := range frame {
-		if i < skipRows || i >= len(frame)-2 {
+		if i < headerRows || i >= len(frame)-4 { // header; prompt panel + footer
 			continue
 		}
-		if strings.Contains(ansi.Strip(line), "│") { // a row the box covers
+		if strings.Count(line, "│") > 2 { // a row the box covers: frame + box sides
 			covered++
 		}
-		if !strings.HasPrefix(line, sidebarBg) {
-			t.Fatalf("row %d lost the sidebar background: %q", i, ansi.Strip(line)[:20])
+		if r := []rune(line); len(r) == 0 || !strings.ContainsRune("│╭╰", r[0]) {
+			t.Fatalf("row %d lost the Agents panel frame: %q", i, line[:min(20, len(line))])
 		}
 	}
 	if covered == 0 {

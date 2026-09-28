@@ -16,13 +16,11 @@
 
   const $ = (id) => document.getElementById(id);
 
-  // The shared palette shape has one "panel" shade (matching the TUI's single BgPane); --panel-2
-  // reuses it rather than inventing a second computed shade the TUI has no equivalent for.
   function applyPalette(p) {
     const root = document.documentElement.style;
     root.setProperty("--bg", p.bg);
     root.setProperty("--panel", p.panel);
-    root.setProperty("--panel-2", p.panel);
+    root.setProperty("--panel-2", p.surface || p.panel); // surface: one step between bg and panel
     root.setProperty("--ink", p.fg);
     root.setProperty("--muted", p.muted);
     root.setProperty("--line", p.line);
@@ -78,6 +76,12 @@
     }).catch(() => {}); // best-effort — the local preview above already applied
   }
 
+  // By current name or a former one (palettes.json `aliases`) — a browser that remembered
+  // "neon graveyard" before the rename lands on its successor instead of palettes[0].
+  function byName(name) {
+    return palettes.find((p) => p.name === name || (p.aliases || []).includes(name));
+  }
+
   function esc(s) {
     return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   }
@@ -96,7 +100,7 @@
         return;
       }
       if (e.kind !== "theme") return;
-      const p = palettes.find((x) => x.name === e.theme);
+      const p = byName(e.theme);
       if (!p) return;
       applyPalette(p);
       localStorage.setItem(STORAGE_KEY, p.name);
@@ -119,12 +123,12 @@
     // browser that has never opened this page before always fell back to palettes[0] and stayed
     // there — the dashboard/graph looked stuck in a fixed theme no matter what the TUI was set to.
     const saved = localStorage.getItem(STORAGE_KEY);
-    const guess = palettes.find((p) => p.name === saved) || palettes[0];
+    const guess = byName(saved) || palettes[0];
     applyPalette(guess);
     renderMenu(guess.name);
     try {
       const s = await fetch(`/session?token=${encodeURIComponent(TOKEN)}`, { method: "POST" }).then((r) => r.json());
-      const active = palettes.find((p) => p.name === s.theme);
+      const active = byName(s.theme);
       if (active && active.name !== guess.name) {
         applyPalette(active);
         localStorage.setItem(STORAGE_KEY, active.name);

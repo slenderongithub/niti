@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// The carousel is the ctrl+p model switcher: a popup in the middle of the screen that picks a
+// The carousel is the ctrl+l model switcher: a popup in the middle of the screen that picks a
 // teammate, then a model for it. It replaces having to type `/model <agentId> <provider/model>`
 // from memory — the same thing opencode's model dialog does, and the reason the slash command
 // still exists is scripting, not daily use.
@@ -113,7 +113,7 @@ func (m *Model) setCarouselModels(msg modelsLoadedMsg) {
 // prompt underneath never sees it.
 func (m *Model) carouselKey(k tea.KeyMsg) tea.Cmd {
 	switch k.String() {
-	case "esc", "ctrl+p":
+	case "esc", "ctrl+l":
 		m.car = carousel{}
 		return nil
 	case "up", "shift+tab":

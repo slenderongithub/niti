@@ -121,14 +121,21 @@ type Model struct {
 	commands  []api.Command // fetched from the server registry; drives dispatch and the footer hints
 	menu      ui.List       // slash-command suggestions shown over the prompt while typing "/…"
 	menuOpen  bool
-	car       carousel    // the ctrl+p model switcher, when open
+	car       carousel    // the ctrl+l model switcher, when open
 	sett      settings    // the /settings · /status · /config · /usage · /stats overlay, when open
 	out       output      // the pager a multi-line command result opens, when open
 	diffv     diffview    // full-screen state for the diff-viewing approval (edit/write_file only)
 	tp        themePicker // the ctrl+t theme swatch picker, when open
 	ap        agentPicker // the ctrl+g "switch agent window" quick-picker, when open
+	pal       palette     // the ctrl+p command palette, when open
 	view      string      // "panes" | "usage"
 	focus     string      // agent id currently maximized in the work pane, or "" for the stacked overview
+	// Keyboard focus on the main screen: "" or regionPrompt (typing), regionTranscript (scrolling),
+	// regionAgents (picking an agent). Distinct from `focus` above, which is which agent is shown.
+	region      string
+	agentCursor int // highlighted row in the Agents panel while it has focus
+	scrollBack  int // transcript lines scrolled up from the newest; 0 = following the output
+	unseen      int // lines that arrived while scrolled up — shown in the transcript's border
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
 	root string
@@ -365,8 +372,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apply(api.Event(msg))
 		return m, waitFor(m.events) // keep listening
 	case eventsMsg:
+		before := m.transcriptLen()
 		for _, e := range msg {
 			m.apply(e)
+		}
+		// Scrolled up: hold the view on what the user is reading and count what arrived below it.
+		if m.scrollBack > 0 {
+			if grew := m.transcriptLen() - before; grew > 0 {
+				m.scrollBack += grew
+				m.unseen += grew
+			}
 		}
 		if !m.ticking && m.anyRunning() && !m.prefs["reduceMotion"] {
 			m.ticking = true
@@ -418,128 +433,30 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.tp.open {
 		return m, m.themePickerKey(k)
 	}
-	// Approval gate takes priority. A diff on the head of the queue gets the full-screen viewer
-	// (its own key handler, y/a/n plus scroll/edit/batch-preview); anything else (e.g. a bare shell
-	// call) keeps the one-line bar below.
+	if m.pal.open {
+		return m, m.paletteKey(k)
+	}
+	// A diff on the head of the approval queue gets the full-screen viewer (its own keys: y/a/n
+	// plus scroll/edit/batch-preview); anything else (e.g. a bare shell call) is answered through
+	// the approval bindings in keys.go.
 	if len(m.approvals) > 0 {
 		if _, ok := approvalDiff(m.approvals[0]); ok {
 			return m, m.diffViewKey(k)
 		}
-		var ok bool
-		var scope string
-		switch k.String() {
-		case "y", "Y":
-			ok, scope = true, ""
-		case "a", "A":
-			ok, scope = true, "agent"
-		case "n", "N", "esc":
-			ok, scope = false, ""
-		default:
-			return m, nil
-		}
-		// Pop the answered request locally right away — the next `approval_request` snapshot from
-		// the server won't arrive until the round trip completes, and a stray extra keypress in
-		// that window must not re-answer a request that's already been resolved (or answer the
-		// wrong, now-shifted, one).
-		m.approvals = m.approvals[1:]
-		client := m.client
-		return m, func() tea.Msg { return actionResultMsg{action: "approval", err: client.Approve(ok, scope, nil)} }
 	}
-
-	// While the slash menu is up it owns the arrow keys, tab and enter — the same keys the rest of
-	// the view uses, which is why this runs before the general switch below.
-	if m.menuOpen && m.menu.Len() > 0 {
-		switch k.String() {
-		case "up", "shift+tab":
-			m.menu.Move(-1)
-			return m, nil
-		case "down":
-			m.menu.Move(1)
-			return m, nil
-		case "tab": // complete without running, so arguments can be typed after it
-			if it, ok := m.menu.Selected(); ok {
-				m.input.SetValue(it.Value + " ")
-				m.input.CursorEnd()
-				m.refreshMenu()
-			}
-			return m, nil
-		case "enter":
-			if it, ok := m.menu.Selected(); ok {
-				m.input.SetValue("")
-				m.menuOpen = false
-				return m, m.submit(it.Value)
-			}
-		case "esc":
-			m.input.SetValue("")
-			m.refreshMenu()
-			return m, nil
-		}
+	if cmd, ok := m.dispatch(k); ok {
+		return m, cmd
 	}
-
-	switch k.String() {
-	case "tab":
-		m.view = map[string]string{"panes": "usage", "usage": "panes"}[m.view]
-		return m, nil
-	case "ctrl+p":
-		return m, m.openCarousel()
-	case "ctrl+g":
-		return m, m.openAgentPicker()
-	case "esc":
-		if m.focus != "" {
-			m.focus = ""
+	if len(m.approvals) > 0 {
+		return m, nil // an unanswered approval swallows everything else
+	}
+	// Typing while the transcript or the agents panel has focus goes to the prompt — nobody should
+	// have to press tab back before they can type the next message.
+	if m.context() != regionPrompt {
+		if k.Type != tea.KeyRunes {
+			return m, nil
 		}
-		return m, nil
-	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9":
-		if i := int(k.String()[len(k.String())-1] - '1'); i < len(m.order) {
-			id := m.order[i]
-			if m.focus == id {
-				m.focus = "" // pressing the same agent's key again returns to the overview
-			} else {
-				m.focus = id
-			}
-		}
-		return m, nil
-	case "shift+tab":
-		m.mode = map[string]string{"build": "plan", "plan": "build"}[m.mode]
-		m.status = m.mode + " mode"
-		// Coming back to BUILD with the planned goal still in the prompt: say what enter does now,
-		// since the whole point of keeping the text there is that it runs the plan as reviewed.
-		if m.mode == "build" && strings.TrimSpace(m.input.Value()) != "" && len(m.tasks) > 0 {
-			m.status = "build mode — enter runs the plan on the board"
-		}
-		return m, nil
-	case "ctrl+t":
-		m.openThemePicker()
-		return m, nil
-	case "alt+enter", "shift+enter", "ctrl+j":
-		// A newline, not a submit. The prompt is a single-line textinput, which strips real
-		// newlines, so the break is held as a visible ⏎ and turned back into "\n" on send.
-		m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(newlineMark)})
-		m.refreshMenu()
-		return m, nil
-	case "enter":
-		text := strings.TrimSpace(strings.ReplaceAll(m.input.Value(), newlineMark, "\n"))
-		// Every plain message is a BRAND NEW goal to the core: the planner only ever sees the text
-		// just typed, never the previous run's. So a follow-up sent while a half-finished plan is
-		// still on the board silently throws that plan away and re-plans from a sentence that was
-		// never meant to stand on its own — which is exactly how a detailed spec turned into two
-		// generic tasks. Hold the first press and say so; /resume continues the real plan instead.
-		if text != "" && !strings.HasPrefix(text, "/") && m.status != "running" && m.unfinishedTasks() > 0 {
-			if m.resubmitArm.IsZero() || time.Since(m.resubmitArm) > resubmitGrace {
-				m.resubmitArm = time.Now()
-				m.status = fmt.Sprintf("%d unfinished task(s) on the board — /resume continues them; press enter again to start a new goal instead (abandons the plan)", m.unfinishedTasks())
-				return m, nil // input deliberately left intact, nothing submitted
-			}
-		}
-		m.resubmitArm = time.Time{}
-		// A goal sent in PLAN mode stays in the prompt: shift+tab then enter is how you run the
-		// plan you just read, and the core matches the goal by text to skip a second planning
-		// call (see runProject's takeApprovedPlan). Commands and BUILD goals clear as before.
-		if !(m.mode == "plan" && text != "" && !strings.HasPrefix(text, "/")) {
-			m.input.SetValue("")
-		}
-		m.refreshMenu()
-		return m, m.submit(text)
+		m.region = regionPrompt
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(k)
@@ -564,18 +481,48 @@ func (m Model) unfinishedTasks() int {
 	return n
 }
 
-// scroll moves whichever list has the screen by one row. Nothing open means nothing to scroll —
-// the transcript follows the agents, not the wheel.
+// scroll moves whichever list has the screen by one row; with nothing open, the wheel scrolls the
+// transcript (it used to do nothing, and old output was only reachable through /transcript).
 func (m *Model) scroll(delta int) {
 	switch {
 	case m.out.open:
 		m.out.top = clamp(m.out.top+delta, 0, m.outputMaxTop())
 	case m.car.open:
 		m.car.list.Move(delta)
+	case m.pal.open:
+		m.pal.list.Move(delta)
+		m.preview()
 	case m.menuOpen:
 		m.menu.Move(delta)
+	default:
+		m.scrollTranscript(-delta * 3) // wheel up = back in time
 	}
 }
+
+// scrollTranscript moves the transcript view `delta` lines back in time (negative: forward). Zero
+// means following the newest output; any other value holds the view still while output arrives.
+func (m *Model) scrollTranscript(delta int) {
+	m.scrollBack = clamp(m.scrollBack+delta, 0, m.transcriptLen())
+	if m.scrollBack == 0 {
+		m.unseen = 0
+	}
+}
+
+func (m *Model) follow() { m.scrollBack, m.unseen = 0, 0 }
+
+// transcriptLen is the length of the longest log on screen — what scrolling is bounded by.
+func (m Model) transcriptLen() int {
+	n := 0
+	for _, id := range m.order {
+		if m.focus != "" && id != m.focus {
+			continue
+		}
+		n = max(n, len(m.agents[id].log))
+	}
+	return n
+}
+
+func (m Model) pageRows() int { return max(m.height/2, 5) }
 
 // menuItems is every command the user can type: the server registry plus the two that can only be
 // handled here (quitting tears down this process; the theme is a property of this terminal).
@@ -617,8 +564,7 @@ func (m Model) helpLines() []string {
 	for _, it := range items {
 		lines = append(lines, fmt.Sprintf("%-*s  %s", w, it.Label, it.Desc))
 	}
-	return append(lines, "",
-		"keys — tab: usage · shift+tab: plan mode · ctrl+p: models · ctrl+t: theme")
+	return append(lines, "", "Keys: press f1 anywhere for the keys that apply there, and ^p to search everything.")
 }
 
 // refreshMenu decides whether the suggestion window is up, and what it's filtered to. It opens on
@@ -661,7 +607,7 @@ func (m *Model) submit(text string) tea.Cmd {
 		}
 		return nil
 	}
-	// The settings overlay is a pure client surface (it paints over the whole TUI, like the ctrl+p
+	// The settings overlay is a pure client surface (it paints over the whole TUI, like the ctrl+l
 	// carousel), so its commands are handled here rather than round-tripped to the server. This
 	// supersedes the plain-text /status and /usage the registry still offers — richer, same data.
 	if name, args, _ := strings.Cut(strings.TrimPrefix(text, "/"), " "); strings.HasPrefix(text, "/") {
@@ -676,7 +622,7 @@ func (m *Model) submit(text string) tea.Cmd {
 			m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
 			return nil
 		case "model":
-			// Bare /model opens the same centred picker ctrl+p does; with arguments it's the scriptable
+			// Bare /model opens the same centred picker ctrl+l does; with arguments it's the scriptable
 			// form and goes to the server. Nobody should have to type an agent id from memory.
 			if strings.TrimSpace(args) == "" {
 				return m.openCarousel()
@@ -745,6 +691,12 @@ func (m *Model) submit(text string) tea.Cmd {
 
 func (m *Model) apply(e api.Event) {
 	switch e.Kind {
+	// Picked in the web dashboard (or another TUI) and persisted by the core: follow it, unless the
+	// theme picker is open — its live preview is the user's own choice in progress.
+	case "theme":
+		if !m.tp.open {
+			theme.Use(e.Theme)
+		}
 	// Synthesized client-side by streamWithReconnect — the core never sends these. Without them a
 	// dead core looked exactly like an idle one: agents "working", progress frozen, status stale.
 	case "connection":

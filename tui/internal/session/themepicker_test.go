@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -12,16 +13,16 @@ import (
 // esc must leave the palette exactly as it was before the picker opened, even after previewing
 // several other themes — the whole point of a live preview is that looking isn't committing.
 func TestThemePickerEscRevertsLivePreview(t *testing.T) {
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 	m := sized(1, 120, 40)
 	m.openThemePicker()
-	if !m.tp.open || theme.Current() != "neon graveyard" {
+	if !m.tp.open || theme.Current() != "graphite" {
 		t.Fatalf("opening the picker must not change the theme yet, got %q", theme.Current())
 	}
 
 	next, _ := m.onKey(tea.KeyMsg{Type: tea.KeyDown})
 	m = next.(Model)
-	if theme.Current() == "neon graveyard" {
+	if theme.Current() == "graphite" {
 		t.Fatal("moving the cursor must live-preview a different theme")
 	}
 
@@ -30,14 +31,14 @@ func TestThemePickerEscRevertsLivePreview(t *testing.T) {
 	if m.tp.open {
 		t.Error("esc must close the picker")
 	}
-	if theme.Current() != "neon graveyard" {
+	if theme.Current() != "graphite" {
 		t.Errorf("esc must revert to the theme active before the picker opened, got %q", theme.Current())
 	}
 }
 
 // enter commits whatever is currently previewed and closes the picker.
 func TestThemePickerEnterCommits(t *testing.T) {
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 	m := sized(1, 120, 40)
 	m.openThemePicker()
 
@@ -53,7 +54,7 @@ func TestThemePickerEnterCommits(t *testing.T) {
 	if theme.Current() != previewed {
 		t.Errorf("enter must keep the previewed theme, got %q want %q", theme.Current(), previewed)
 	}
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 }
 
 // The cursor opens on whatever theme is currently active, not always index 0.
@@ -65,12 +66,12 @@ func TestThemePickerOpensOnTheCurrentTheme(t *testing.T) {
 	if m.tp.names[m.tp.cursor] != names[2] {
 		t.Errorf("picker should open on the active theme %q, cursor is on %q", names[2], m.tp.names[m.tp.cursor])
 	}
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 }
 
 // left/right are carousel-equivalent to up/down — either direction should preview the same way.
 func TestThemePickerLeftRightNavigate(t *testing.T) {
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 	m := sized(1, 120, 40)
 	m.openThemePicker()
 	start := m.tp.cursor
@@ -89,13 +90,13 @@ func TestThemePickerLeftRightNavigate(t *testing.T) {
 	if m.tp.cursor != start {
 		t.Errorf("left should undo the right move, cursor is %d want %d", m.tp.cursor, start)
 	}
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 }
 
 // The carousel shows more than just the current theme's name — its neighbors are visible too, so
 // there's something to scroll toward.
 func TestThemePickerViewShowsNeighbors(t *testing.T) {
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 	m := sized(1, 120, 40)
 	m.openThemePicker()
 
@@ -108,5 +109,22 @@ func TestThemePickerViewShowsNeighbors(t *testing.T) {
 	if !strings.Contains(view, next) {
 		t.Errorf("carousel should show the next theme %q", next)
 	}
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
+}
+
+// A theme picked in the web dashboard reaches the TUI through the core's theme event — but never
+// overrides a preview the user is scrolling through in the picker right now.
+func TestThemeEventFromAnotherClientIsApplied(t *testing.T) {
+	m := model(1)
+	theme.Use("graphite")
+	m.apply(api.Event{Kind: "theme", Theme: "tide"})
+	if theme.Current() != "tide" {
+		t.Errorf("theme event not applied, got %q", theme.Current())
+	}
+	m.tp.open = true
+	m.apply(api.Event{Kind: "theme", Theme: "ember"})
+	if theme.Current() != "tide" {
+		t.Errorf("theme event must not clobber an open picker's preview, got %q", theme.Current())
+	}
+	theme.Use("graphite")
 }
