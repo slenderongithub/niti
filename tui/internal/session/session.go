@@ -3,6 +3,9 @@
 package session
 
 import (
+	"sort"
+	"slices"
+	"encoding/json"
 	"context"
 	"fmt"
 	"net/url"
@@ -145,6 +148,15 @@ type Model struct {
 	history     []string   // sent prompts, oldest first (.niti/history)
 	histPos     int        // ↑/↓ browsing: steps back from the newest; 0 = not browsing
 	active      bool       // a run is going (session started, not yet ended or cancelled)
+	// The Files panel (files.go).
+	files       []string                // project files, sorted, from GET /files
+	touched     map[string]byte         // what agents did this session: 'M' edited, 'A' created, 'R' read
+	changed     map[string]map[int]bool // per file, the line numbers this session added or changed
+	openDirs    map[string]bool         // folders the user opened/closed in the tree
+	fileCursor  int
+	changedOnly bool
+	viewer      *fileView // a file open read-only in the main panel
+	menuFiles   bool      // the prompt menu is offering files for an @-mention, not commands
 	unseen      int // lines that arrived while scrolled up — shown in the transcript's border
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
@@ -228,7 +240,7 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitFor(m.events), fetchCommands(m.client)}
+	cmds := []tea.Cmd{waitFor(m.events), fetchCommands(m.client), fetchFiles(m.client)}
 	if m.sett.open { // launched as `niti status` / `niti config`: the panels need their data
 		cmds = append(cmds, fetchStats(m.client), fetchCreds(m.client))
 	}
@@ -338,6 +350,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = msg.err.Error()
 		return m, nil
 
+	case filesMsg:
+		if msg.err == nil {
+			for f := range m.touched { // a file an agent just created may not be in the listing yet
+				msg.files = append(msg.files, f)
+			}
+			sort.Strings(msg.files)
+			m.files = slices.Compact(msg.files)
+		}
+		return m, nil
+
+	case fileLoadedMsg:
+		m.onFileLoaded(msg)
+		return m, nil
+
+	case editorDoneMsg:
+		if msg.err != nil {
+			m.status = "editor: " + msg.err.Error()
+		}
+		return m, m.openFile(msg.path) // show what the edit left
+
 	case steerResultMsg:
 		if msg.err != nil {
 			m.status = "couldn't reach " + msg.to + ": " + msg.err.Error()
@@ -409,6 +441,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		cmds := []tea.Cmd{waitFor(m.events)} // one View for the whole batch
+		for _, e := range msg {
+			if e.Kind == "session" && e.State != "started" {
+				cmds = append(cmds, fetchFiles(m.client)) // a finished run may have added files
+				break
+			}
+		}
 		if m.notify != "" {
 			cmds = append(cmds, notifyCmd(m.notify))
 			m.notify = ""
@@ -602,6 +640,20 @@ func (m Model) helpLines() []string {
 // being typed, and the list has nothing left to offer).
 func (m *Model) refreshMenu() {
 	text := m.input.Value()
+	// "@src/ca" — offer project files, fuzzy-matched, to mention in the prompt.
+	if q, ok := mentionQuery(text); ok && len(m.files) > 0 && !strings.HasPrefix(text, "/") {
+		if !m.menuFiles {
+			m.menu.Set(m.fileItems())
+			m.menuFiles = true
+		}
+		m.menuOpen = true
+		m.menu.SetQuery(q)
+		return
+	}
+	if m.menuFiles {
+		m.menu.Set(m.menuItems())
+		m.menuFiles = false
+	}
 	m.menuOpen = strings.HasPrefix(text, "/") && !strings.Contains(text, " ")
 	if !m.menuOpen {
 		return
@@ -826,7 +878,23 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 		return
 	case ae.Phase == "start" && ae.Tool == "todo":
 		return // the checklist itself is the news, not "⏺ Plan …"
-	case ae.Phase == "end" && ae.Type != "error" && st.onToolEnd(ae):
+	case ae.Phase == "start" && ae.Tool == "read_file":
+		var in struct {
+			Path string `json:"path"`
+		}
+		if _, rest, ok := strings.Cut(ae.Payload, " "); ok && json.Unmarshal([]byte(rest), &in) == nil {
+			m.markTouched(strings.TrimPrefix(in.Path, "./"), 'R')
+		}
+	}
+	if ae.Type == "file_edit" && ae.Phase == "end" && ae.Path != "" {
+		kind := byte('M')
+		if ae.Removed == 0 && len(ae.Hunks) > 0 && len(ae.Hunks[0].Lines) > 0 && ae.Hunks[0].Lines[0].O == 0 && ae.Hunks[0].Lines[0].K == "+" {
+			kind = 'A'
+		}
+		m.markTouched(ae.Path, kind)
+		m.noteChangedLines(ae)
+	}
+	if ae.Phase == "end" && ae.Type != "error" && st.onToolEnd(ae) {
 		return
 	}
 	switch ae.Type {

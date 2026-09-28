@@ -1,5 +1,5 @@
 import { dirname, join, normalize } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 // Embedded, not read from disk: this is also the Go TUI's //go:embed source, and a compiled
@@ -9,7 +9,9 @@ import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "./events.ts";
 import { CATALOG, contextWindow, providersByCategory, splitModelId, type Category } from "../providers/catalog.ts";
 import { costOf } from "../providers/pricing.ts";
-import { buildFileGraph, trackedFiles } from "../graph/filegraph.ts";
+import { buildFileGraph, trackedFiles, projectFiles, ignored } from "../graph/filegraph.ts";
+import { safePath } from "../tools/tools.ts";
+import { normalizePath } from "../permissions.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
 import { saveAgents, setTheme, setAuto, setOption, PREF_DEFAULTS, type PrefKey } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
@@ -540,6 +542,29 @@ export function startServer(
         if (!text?.trim()) return json({ error: "empty message" }, 400);
         const err = engine.messageAgent(agentId, text);
         return err ? json({ error: err }, 409) : json({ ok: true });
+      }
+
+      // The Files panel and @-mentions: the project's files, bounded by the same IGNORE set as /graph.
+      if (p === "/files" && method === "GET") {
+        return json(projectFiles(engine.root));
+      }
+
+      // The TUI's read-only file viewer. Jailed to the project (safePath), held to IGNORE, and
+      // text only: a binary or a huge file is refused rather than streamed into a terminal.
+      if (p === "/file" && method === "GET") {
+        const rel = u.searchParams.get("path") ?? "";
+        if (!rel || ignored(normalizePath(rel))) return json({ error: "not a project file" }, 400);
+        try {
+          const abs = safePath(engine.root, rel);
+          const st = statSync(abs);
+          if (!st.isFile()) return json({ error: "not a file" }, 400);
+          if (st.size > 1_000_000) return json({ error: `too large to view here (${Math.round(st.size / 1024)} KB) — open it in your editor` }, 413);
+          const content = readFileSync(abs, "utf8");
+          if (content.includes("\u0000")) return json({ error: "binary file" }, 415);
+          return json({ path: normalizePath(rel), content });
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 404);
+        }
       }
 
       if (p === "/approval" && method === "POST") {

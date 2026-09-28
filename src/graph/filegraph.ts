@@ -55,6 +55,34 @@ export function trackedFiles(root: string, includeUntracked = false): string[] |
   }
 }
 
+// Every file in the project a person would browse — the TUI's Files panel and @-mentions. git's
+// list when there is one (tracked + untracked, .gitignore honoured), else a walk; either way held
+// to IGNORE (rule 3 in CLAUDE.md: ide/, desktop/, node_modules… never appear) and bounded.
+export function projectFiles(root: string, max = 5000): { files: string[]; truncated: boolean } {
+  let files = trackedFiles(root, true);
+  if (!files) {
+    files = [];
+    const walkAll = (rel: string) => {
+      if (files!.length > max) return;
+      let entries;
+      try {
+        entries = readdirSync(join(root, rel), { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (e.name === ".git" || IGNORE.has(e.name)) continue;
+        const child = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) walkAll(child);
+        else files!.push(child);
+      }
+    };
+    walkAll("");
+  }
+  const kept = files.filter((f) => !ignored(f)).sort();
+  return { files: kept.slice(0, max), truncated: kept.length > max };
+}
+
 // What the graph reads: source files, plus go.mod (needed to resolve Go imports, never a node).
 export const isGraphFile = (f: string): boolean =>
   f === "go.mod" || f.endsWith("/go.mod") || (SRC_EXT.has(extname(f)) && !f.endsWith(".d.ts"));

@@ -308,6 +308,24 @@ type CommandResult struct {
 	Error   string `json:"error"`
 }
 
+// Files lists the project's files (GET /files) — bounded by the same IGNORE set as /graph.
+func (c *Client) Files() ([]string, error) {
+	var out struct {
+		Files []string `json:"files"`
+	}
+	err := c.do("GET", "/files", nil, &out)
+	return out.Files, err
+}
+
+// File reads one project file for the viewer (GET /file) — text only, size-capped by the core.
+func (c *Client) File(path string) (string, error) {
+	var out struct {
+		Content string `json:"content"`
+	}
+	err := c.do("GET", "/file?path="+url.QueryEscape(path), nil, &out)
+	return out.Content, err
+}
+
 func (c *Client) Commands() ([]Command, error) {
 	var r struct {
 		Commands []Command `json:"commands"`

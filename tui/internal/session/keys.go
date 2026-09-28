@@ -53,6 +53,7 @@ var contextTitles = map[string]string{
 	regionPrompt:     "Prompt",
 	regionTranscript: "Transcript",
 	regionAgents:     "Agents",
+	regionFiles:      "Files",
 }
 
 // keymap is the binding set for the current context: its own keys first, then the global ones.
@@ -81,7 +82,35 @@ func (m Model) keymap() []binding {
 			{keys: []string{"enter"}, label: "enter", desc: "Run", help: "run the highlighted command", footer: true, run: (*Model).runMenu},
 			{keys: []string{"esc"}, label: "esc", desc: "Clear", help: "clear the prompt", footer: true, run: func(m *Model) tea.Cmd { m.input.SetValue(""); m.refreshMenu(); return nil }},
 		}
+	case regionFiles:
+		local = []binding{
+			{keys: []string{"up", "k"}, label: "↑↓", desc: "Move", help: "move through the tree", footer: true, run: func(m *Model) tea.Cmd { m.fileCursor = wrap(m.fileCursor-1, len(m.treeRows())); return nil }},
+			{keys: []string{"down", "j"}, run: func(m *Model) tea.Cmd { m.fileCursor = wrap(m.fileCursor+1, len(m.treeRows())); return nil }},
+			{keys: []string{"enter", "right", "l"}, label: "enter", desc: "Open", help: "open a folder, or view a file (read-only) in the main panel", footer: true, run: (*Model).openAtCursor},
+			{keys: []string{"left", "h"}, label: "←", desc: "Close", help: "close the folder", run: (*Model).closeAtCursor},
+			{keys: []string{"c"}, label: "c", desc: "Changed only", help: "show only the files agents touched this session (again: all files)", footer: true, run: func(m *Model) tea.Cmd { m.changedOnly = !m.changedOnly; m.fileCursor = 0; return nil }},
+			{keys: []string{"e"}, label: "e", desc: "Edit", help: "open the file in $EDITOR", run: func(m *Model) tea.Cmd {
+				if r, ok := m.fileAtCursor(); ok && !r.dir {
+					return m.editFile(r.path)
+				}
+				return nil
+			}},
+			{keys: []string{"esc"}, label: "esc", desc: "Prompt", help: "back to the prompt", footer: true, run: func(m *Model) tea.Cmd { m.region = regionPrompt; return nil }},
+		}
 	case regionTranscript:
+		if m.viewer != nil {
+			local = []binding{
+				{keys: []string{"up", "k"}, label: "↑↓", desc: "Scroll", help: "scroll the file", footer: true, run: func(m *Model) tea.Cmd { m.scrollViewer(-1); return nil }},
+				{keys: []string{"down", "j"}, run: func(m *Model) tea.Cmd { m.scrollViewer(1); return nil }},
+				{keys: []string{"pgup", "ctrl+u"}, label: "pgup", desc: "Page", help: "a page up (pgdn: down)", run: func(m *Model) tea.Cmd { m.scrollViewer(-m.pageRows()); return nil }},
+				{keys: []string{"pgdown", "ctrl+d", " "}, run: func(m *Model) tea.Cmd { m.scrollViewer(m.pageRows()); return nil }},
+				{keys: []string{"g", "home"}, label: "g", desc: "Top", help: "first line (G: last)", run: func(m *Model) tea.Cmd { m.viewer.top = 0; return nil }},
+				{keys: []string{"G", "end"}, run: func(m *Model) tea.Cmd { m.scrollViewer(len(m.viewer.lines)); return nil }},
+				{keys: []string{"e"}, label: "e", desc: "Edit", help: "open it in $EDITOR; the view reloads when you're back", footer: true, run: func(m *Model) tea.Cmd { return m.editFile(m.viewer.path) }},
+				{keys: []string{"esc"}, label: "esc", desc: "Close", help: "close the file, back to the transcript", footer: true, run: func(m *Model) tea.Cmd { m.viewer = nil; return nil }},
+			}
+			break
+		}
 		local = []binding{
 			{keys: []string{"up", "k"}, label: "↑↓", desc: "Scroll", help: "scroll the transcript one line (the mouse wheel works from anywhere)", footer: true, run: func(m *Model) tea.Cmd { m.scrollTranscript(1); return nil }},
 			{keys: []string{"down", "j"}, run: func(m *Model) tea.Cmd { m.scrollTranscript(-1); return nil }},
@@ -128,7 +157,7 @@ func (m Model) keymap() []binding {
 func (m Model) globalBindings() []binding {
 	g := []binding{
 		{keys: []string{"ctrl+p"}, label: "^p", desc: "Commands", help: "command palette: every command, theme, view and agent, fuzzy-searchable", footer: true, run: (*Model).openPalette},
-		{keys: []string{"tab"}, label: "tab", desc: "Focus", help: "move focus: prompt → transcript → agents", footer: true, run: (*Model).cycleFocus},
+		{keys: []string{"tab"}, label: "tab", desc: "Focus", help: "move focus: prompt → transcript → agents → files", footer: true, run: (*Model).cycleFocus},
 		{keys: []string{"ctrl+l"}, label: "^l", desc: "Models", help: "switch an agent's model", footer: true, run: (*Model).openCarousel},
 		{keys: []string{"ctrl+g"}, label: "^g", desc: "Agents", help: "jump to one agent's view (alt+1…9 directly)", run: (*Model).openAgentPicker},
 		{keys: []string{"alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9"}, label: "alt+1…9", desc: "Agent N", help: "show only agent N (same key again: all agents)", run: nil},
@@ -236,6 +265,7 @@ func (m Model) helpDoc() (string, []string) {
 		"  ⚠  a warning                        ▸  a task or plan step",
 		"  ·  an agent's thinking aloud        ⠋  still working",
 		"  ●  done   ◐  in progress   ○  waiting   ★  lead agent",
+		"  Files: M edited · A created · · read (this session)   ▎ a changed line in the viewer",
 		"",
 		"Type / for commands, or press ^p to search them.")
 	return title, lines
@@ -261,6 +291,10 @@ func answer(ok bool, scope string) func(m *Model) tea.Cmd {
 }
 
 func (m *Model) completeMenu() tea.Cmd {
+	if it, ok := m.menu.Selected(); ok && m.menuFiles {
+		m.completeMention(it.Value)
+		return nil
+	}
 	if it, ok := m.menu.Selected(); ok {
 		m.input.SetValue(it.Value + " ")
 		m.input.CursorEnd()
@@ -270,6 +304,9 @@ func (m *Model) completeMenu() tea.Cmd {
 }
 
 func (m *Model) runMenu() tea.Cmd {
+	if m.menuFiles {
+		return m.completeMenu() // enter on a file puts it in the prompt; it doesn't send yet
+	}
 	if it, ok := m.menu.Selected(); ok {
 		m.input.SetValue("")
 		m.menuOpen = false
@@ -279,14 +316,17 @@ func (m *Model) runMenu() tea.Cmd {
 }
 
 func (m *Model) cycleFocus() tea.Cmd {
-	next := map[string]string{regionPrompt: regionTranscript, regionTranscript: regionAgents, regionAgents: regionPrompt}
+	next := map[string]string{regionPrompt: regionTranscript, regionTranscript: regionAgents, regionAgents: regionFiles, regionFiles: regionPrompt}
 	r := m.context()
-	if r != regionPrompt && r != regionTranscript && r != regionAgents {
+	if _, ok := next[r]; !ok {
 		r = regionPrompt
 	}
 	m.region = next[r]
 	if m.region == regionAgents && (len(m.order) == 0 || !m.sidebarShown()) {
-		m.region = regionPrompt // no Agents panel on screen to focus
+		m.region = regionFiles // no Agents panel on screen to focus
+	}
+	if m.region == regionFiles && !m.filesShown() {
+		m.region = regionPrompt // nor a Files panel
 	}
 	return nil
 }

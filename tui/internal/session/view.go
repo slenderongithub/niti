@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -333,7 +334,29 @@ func (m Model) sidebar(sw, h int, compact bool) string {
 	if compact {
 		return lipgloss.NewStyle().Width(sw).Height(h).MaxHeight(h).Padding(0, 1).Background(theme.BgPane).Render(exactly(lines, h))
 	}
-	return ui.Panel{Title: "Agents", Subtitle: subtitle, Focused: focused}.Render(strings.Join(lines, "\n"), sw, h)
+	// The Files panel takes what the Agents panel doesn't need — the roster is a few lines, and the
+	// space under it used to sit empty.
+	agentsH, filesH := m.sidebarSplit(len(lines), h)
+	agents := ui.Panel{Title: "Agents", Subtitle: subtitle, Focused: focused}.Render(strings.Join(lines, "\n"), sw, agentsH)
+	if filesH == 0 {
+		return agents
+	}
+	return agents + "\n" + m.filesPanel(sw, filesH)
+}
+
+// sidebarSplit sizes the Agents panel to its content (at most half the column) and gives the rest
+// to Files — or everything to Agents when there'd be too little left for a useful tree.
+func (m Model) sidebarSplit(agentLines, h int) (int, int) {
+	agentsH := clamp(agentLines+2, 4, max(h/2, 4))
+	if len(m.files) == 0 || h-agentsH < 6 {
+		return h, 0
+	}
+	return agentsH, h - agentsH
+}
+
+// filesShown reports whether a Files panel is on screen to take focus.
+func (m Model) filesShown() bool {
+	return m.sidebarShown() && !m.compact() && len(m.files) > 0
 }
 
 func (s *agentState) id() string { return s.cfg.ID }
@@ -407,6 +430,8 @@ func (m Model) mainPane(mw, h int, compact bool) string {
 	switch {
 	case m.view == "usage":
 		rows = append(rows, m.usageView(iw, ch))
+	case m.viewer != nil:
+		rows = append(rows, m.viewerBody(iw, ch))
 	case m.agents[m.focus] != nil:
 		// A focused agent gets the whole pane via the same agentBlock renderer workView uses per
 		// agent — no new rendering path, just a share of 1 instead of len(shown).
@@ -426,12 +451,18 @@ func (m Model) mainPane(mw, h int, compact bool) string {
 	switch st := m.agents[m.focus]; {
 	case m.view == "usage":
 		title, sub = "Usage", fmt.Sprintf("%d calls · %s", m.totals.Calls, m.spend())
+	case m.viewer != nil:
+		title = m.viewer.path
+		sub = fmt.Sprintf("%d lines · read-only · e edit · esc close", len(m.viewer.lines))
+		if n := len(m.changed[m.viewer.path]); n > 0 {
+			sub = fmt.Sprintf("%d lines · ▎%d changed this session · e edit · esc close", len(m.viewer.lines), n)
+		}
 	case st != nil:
 		title, sub = st.avatar+" "+st.cfg.Role, fmt.Sprintf("%s/%s · %s tok", st.cfg.Provider, st.cfg.Model, fmtTok(st.tokens))
 	default:
 		sub = fmt.Sprintf("%d agents · %s tok", len(m.order), fmtTok(m.totals.InputTokens+m.totals.OutputTokens))
 	}
-	if r := m.runningLine(); r != "" {
+	if r := m.runningLine(); r != "" && m.viewer == nil {
 		sub = r
 	}
 	if m.scrollBack > 0 {
@@ -450,10 +481,13 @@ func (m Model) tabBar(w int) string {
 		}
 		return txt(theme.Muted, bg).Render(label + "   ")
 	}
-	segs := []string{tab("≡ All agents", m.focus == "", theme.Fg)}
+	segs := []string{tab("≡ All agents", m.focus == "" && m.viewer == nil, theme.Fg)}
 	for _, id := range m.order {
 		st := m.agents[id]
-		segs = append(segs, tab(st.avatar+" "+st.cfg.Role, id == m.focus, st.color))
+		segs = append(segs, tab(st.avatar+" "+st.cfg.Role, id == m.focus && m.viewer == nil, st.color))
+	}
+	if m.viewer != nil {
+		segs = append(segs, tab("▤ "+filepath.Base(m.viewer.path), true, theme.Accent))
 	}
 	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).Render(truncate(strings.Join(segs, ""), w))
 }

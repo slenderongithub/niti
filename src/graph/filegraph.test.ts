@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildFileGraph } from "./filegraph.ts";
+import { buildFileGraph, projectFiles } from "./filegraph.ts";
 
 function scaffold(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "fg-"));
@@ -83,4 +83,19 @@ test("a caller-supplied file list is held to the same boundary as the walk", () 
   expect(ids).not.toContain("desktop/main.ts");
   expect(ids).not.toContain("old-tech/ink-tui/theme.ts");
   expect(ids).not.toContain("node_modules/pkg/index.js");
+});
+
+// The Files panel and @-mentions list project files too, so they are held to the same IGNORE set
+// (CLAUDE.md rule 3): ide/, desktop/, old-tech/ and dependency trees never show.
+test("projectFiles honours the same IGNORE boundary as the graph", () => {
+  const root = scaffold({
+    "src/a.ts": "",
+    "README.md": "",
+    "ide/vscodium/x.ts": "",
+    "desktop/main.js": "",
+    "old-tech/y.ts": "",
+    "node_modules/z/index.js": "",
+  });
+  const { files } = projectFiles(root);
+  expect(files).toEqual(["README.md", "src/a.ts"]);
 });

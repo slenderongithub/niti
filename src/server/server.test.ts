@@ -469,3 +469,24 @@ test("a theme saved under a former name is served under its current one", () => 
   expect(resolveTheme("neon graveyard")).toBe("graphite");
   expect(resolveTheme("tide")).toBe("tide");
 });
+
+test("GET /files lists the project within the /graph boundary; GET /file reads one, jailed and text-only", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-files-"));
+  const { mkdirSync } = await import("node:fs");
+  for (const d of ["src", "node_modules/x", "ide", ".niti"]) mkdirSync(join(root, d), { recursive: true });
+  writeFileSync(join(root, "src/a.ts"), "export const a = 1;\n");
+  writeFileSync(join(root, "node_modules/x/i.js"), "x");
+  writeFileSync(join(root, "ide/big.ts"), "x");
+  writeFileSync(join(root, ".niti/agents.yaml"), "agents: []");
+  writeFileSync(join(root, "bin.dat"), "a\u0000b");
+  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false, root, repoMap: false });
+  const h = track(startServer(engine));
+  const get = (path: string) => fetch(`${h.url}${path}`, { headers: { authorization: `Bearer ${h.token}` } });
+  const { files } = await (await get("/files")).json();
+  expect(files).toContain("src/a.ts");
+  for (const f of files) expect(f).not.toMatch(/^(node_modules|ide|\.niti)\//); // same boundary as /graph
+  expect((await (await get("/file?path=src/a.ts")).json()).content).toBe("export const a = 1;\n");
+  expect((await get("/file?path=../../etc/passwd")).status).toBe(404); // jailed
+  expect((await get("/file?path=.niti/agents.yaml")).status).toBe(400); // ignored set
+  expect((await get("/file?path=bin.dat")).status).toBe(415); // binary
+});
