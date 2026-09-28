@@ -41,6 +41,7 @@ export interface AgentEvent {
   lines?: number; // end: how many lines of output there were in total
   head?: string[]; // end: the first few output lines, for the collapsed view
   tail?: string[]; // end: the last few
+  body?: string[]; // end (shell): up to 60 lines — what the live view shows when expanded
   hunks?: { lines: { k: "+" | "-" | " "; t: string; o?: number; n?: number }[] }[]; // file_edit: the change, numbered
   added?: number;
   removed?: number;

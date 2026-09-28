@@ -71,6 +71,45 @@ type AgentEvent struct {
 	Payload string `json:"payload"`
 	Time    int64  `json:"time"`
 	Diff    string `json:"diff"` // file_edit only: unified snippet of the change
+	Path    string `json:"path"`
+
+	// The live view (see src/events/bus.ts). All optional: an older core sends none of them.
+	CallID     string   `json:"callId"`
+	Phase      string   `json:"phase"` // "start" | "end"
+	Tool       string   `json:"tool"`
+	Ok         *bool    `json:"ok"`
+	DurationMs int64    `json:"durationMs"`
+	ExitCode   *int     `json:"exitCode"`
+	Outcome    string   `json:"outcome"`
+	Lines      int      `json:"lines"`
+	Body       []string `json:"body"`
+	Hunks      []Hunk   `json:"hunks"`
+	Added      int      `json:"added"`
+	Removed    int      `json:"removed"`
+	More       int      `json:"more"`
+	Todos      []Todo   `json:"todos"`
+}
+
+// Hunk is one numbered piece of a file change: K is "+", "-" or " ", O/N the old/new line numbers.
+type Hunk struct {
+	Lines []struct {
+		K string `json:"k"`
+		T string `json:"t"`
+		O int    `json:"o"`
+		N int    `json:"n"`
+	} `json:"lines"`
+}
+
+type Todo struct {
+	Text   string `json:"text"`
+	Status string `json:"status"` // pending | doing | done
+}
+
+// FileChange is one file a run touched, for the end-of-run card.
+type FileChange struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added"`
+	Removed int    `json:"removed"`
 }
 
 type AgentMessage struct {
@@ -156,6 +195,15 @@ type Event struct {
 	Goal     string          `json:"goal"`
 	Theme    string          `json:"theme"`  // theme events: the palette another client just picked
 	Missed   int             `json:"missed"` // resync events: how many events were lost while disconnected
+
+	// turn_summary events: the end-of-run card.
+	Summary    string       `json:"summary"`
+	Next       []string     `json:"next"`
+	Files      []FileChange `json:"files"`
+	DurationMs int64        `json:"durationMs"`
+	Tokens     int          `json:"tokens"`
+	Ok         bool         `json:"ok"`
+	Cancelled  bool         `json:"cancelled"`
 	// usage events only: session spend so far. CostKnown is false when some agent's model has no
 	// published price, so the UI can show "$0.42+" instead of implying the total is complete.
 	Cost      float64 `json:"cost"`

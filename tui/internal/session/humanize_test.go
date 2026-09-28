@@ -1,6 +1,9 @@
 package session
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestHumanize(t *testing.T) {
 	for _, c := range []struct{ kind, in, want string }{
@@ -18,7 +21,9 @@ func TestHumanize(t *testing.T) {
 			t.Errorf("humanize(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
-	if got := cleanMarkdown("- **Bold** `x`"); got != "• Bold x" {
+	// Styled, not stripped: the text reads "• Bold x", with bold and code spans marked for renderLine.
+	got := cleanMarkdown("- **Bold** `x`")
+	if plainLine(got) != "• Bold x" || !strings.ContainsRune(got, mkBold) || !strings.ContainsRune(got, mkCode) {
 		t.Errorf("cleanMarkdown = %q", got)
 	}
 }

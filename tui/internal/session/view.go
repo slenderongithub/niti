@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
@@ -487,26 +488,44 @@ func (m Model) workView(w, h int) string {
 func (m Model) agentBlock(st *agentState, w, per int) string {
 	bg := theme.BgDeep
 	lines := []string{agentHeader(st, w, bg)}
+	// The checklist stays pinned under the header while steps remain — it's the one thing that says
+	// how far along the agent is, so it shouldn't scroll away.
+	lines = append(lines, todoLines(st.todos, w, bg)...)
 
-	body := st.log
+	body := make([]string, 0, len(st.log)+8)
+	for _, l := range st.log {
+		if visible(l, m.expanded) {
+			body = append(body, l)
+		}
+	}
 	if st.pending != "" {
-		body = append(append([]string{}, body...), st.pending) // the line still being streamed
+		body = append(body, st.pending) // the line still being streamed
 	}
 	if st.running != "" {
-		body = append(append([]string{}, body...), spinner(m.prefs["reduceMotion"])+" "+st.running+"…")
+		elapsed := ""
+		if !st.runStart.IsZero() {
+			elapsed = " · " + fmtDur(time.Since(st.runStart))
+		}
+		body = append(body, spinner(m.prefs["reduceMotion"])+" "+st.running+"…"+elapsed)
+		// A running command's latest output, live — what makes a long test run watchable.
+		for _, o := range st.runOut {
+			if strings.TrimSpace(o) != "" {
+				body = append(body, string(mkOut)+"    "+o)
+			}
+		}
 	}
 	if len(body) == 0 {
 		body = []string{"—"}
 	}
 	gutter := txt(st.color, bg).Render("│ ")
-	rows := max(per-2, 1) // -2: the header, plus a blank row separating this block from the next
-	end := max(len(body)-m.scrollBack, min(rows, len(body)))  // scrolled back: stop short of the newest
+	rows := max(per-2-len(st.todos), 1) // -2: the header, plus a blank row separating this block from the next
+	end := max(len(body)-m.scrollBack, min(rows, len(body))) // scrolled back: stop short of the newest
 	for i := max(end-rows, 0); i < end; i++ {
-		style := lineStyle(body[i], bg)
-		if st.pending != "" && i == len(body)-1 {
-			style = txt(theme.Muted, bg) // dimmed: this line hasn't finished arriving
+		line := renderLine(body[i], max(w-2, 0), bg)
+		if st.pending != "" && body[i] == st.pending && i == len(body)-1 && st.running == "" {
+			line = txt(theme.Muted, bg).Render(truncate(plainLine(body[i]), max(w-2, 0))) // dimmed: still arriving
 		}
-		lines = append(lines, gutter+style.Render(truncate(body[i], max(w-2, 0))))
+		lines = append(lines, gutter+line)
 	}
 	return exactly(lines, min(len(lines)+1, per)) // +1 for the separating blank row
 }

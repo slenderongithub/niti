@@ -1280,7 +1280,7 @@ export class Agent {
         path: writeRel,
         diff: after === undefined ? undefined : snippetDiff(writeRel!, before ?? null, after) || undefined,
         ...this.endOf(call, started, !shellFailed),
-        ...(after === undefined ? { outcome: result.outcome, lines: result.lines, head: result.head, tail: result.tail, exitCode: result.exitCode } : diffHunks(before ?? null, after)),
+        ...(after === undefined ? { outcome: result.outcome, lines: result.lines, head: result.head, tail: result.tail, body: call.name === "shell" ? result.body : undefined, exitCode: result.exitCode } : diffHunks(before ?? null, after)),
       });
       return this.admit(call, output, ctx);
     } catch (err) {

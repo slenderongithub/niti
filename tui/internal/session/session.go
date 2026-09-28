@@ -55,6 +55,8 @@ type agentState struct {
 	running  string     // tool call in flight, e.g. "Run npm test"; see toolfeed.go
 	group    *toolGroup // the collapsed line at the tail of log, if any
 	pending  string // partial line being streamed by `delta` events, shown live under the log
+	runOut   []string   // the in-flight command's latest output lines (tool_output), under its spinner
+	todos    []api.Todo // the agent's checklist while steps remain, pinned under its header
 	color    lipgloss.Color
 	avatar   string
 }
@@ -134,7 +136,8 @@ type Model struct {
 	// regionAgents (picking an agent). Distinct from `focus` above, which is which agent is shown.
 	region      string
 	agentCursor int // highlighted row in the Agents panel while it has focus
-	scrollBack  int // transcript lines scrolled up from the newest; 0 = following the output
+	scrollBack  int  // transcript lines scrolled up from the newest; 0 = following the output
+	expanded    bool // ctrl+o: show full command output and whole diffs instead of their folded form
 	unseen      int // lines that arrived while scrolled up — shown in the transcript's border
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
@@ -640,7 +643,10 @@ func (m *Model) submit(text string) tea.Cmd {
 				m.status = "unknown agent: " + id + " — try /transcript <agentId>"
 				return nil
 			}
-			lines := append([]string{}, st.log...)
+			lines := make([]string, 0, len(st.log)+1)
+			for _, l := range st.log {
+				lines = append(lines, plainLine(l)) // the pager shows text, not the live view's markers
+			}
 			if st.pending != "" {
 				lines = append(lines, st.pending)
 			}
@@ -766,6 +772,23 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 	}
 	st := m.agents[ae.AgentID]
 	if st == nil {
+		return
+	}
+	// The live view's events (see live.go). Handled first: they carry their own detail, and none of
+	// them means "the agent moved on" the way the older events below do.
+	switch {
+	case ae.Type == "tool_output":
+		st.runOut = strings.Split(ae.Payload, "\n")
+		return
+	case ae.Type == "todo":
+		st.onTodo(ae.Todos)
+		return
+	case ae.Type == "tool_end":
+		st.toolEnd(false)
+		return
+	case ae.Phase == "start" && ae.Tool == "todo":
+		return // the checklist itself is the news, not "⏺ Plan …"
+	case ae.Phase == "end" && ae.Type != "error" && st.onToolEnd(ae):
 		return
 	}
 	switch ae.Type {

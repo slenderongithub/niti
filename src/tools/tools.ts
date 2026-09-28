@@ -650,7 +650,7 @@ export function diffHunks(before: string | null, after: string, ctx = 2, maxLine
 
 // The one-line result a finished tool call leaves in the transcript, plus a few lines of its
 // output for the collapsed view: "48 passed, 0 failed", "exit 1", "12 matches", "340 lines".
-export function summarizeResult(tool: string, output: string): { outcome: string; lines: number; head: string[]; tail: string[]; exitCode?: number } {
+export function summarizeResult(tool: string, output: string): { outcome: string; lines: number; head: string[]; tail: string[]; body: string[]; exitCode?: number } {
   let body = output;
   let exitCode: number | undefined;
   if (tool === "shell") {
@@ -671,7 +671,9 @@ export function summarizeResult(tool: string, output: string): { outcome: string
   } else if (tool === "grep") outcome = `${lines} match${lines === 1 ? "" : "es"}`;
   else if (tool === "glob" || tool === "list_dir") outcome = `${lines} entr${lines === 1 ? "y" : "ies"}`;
   else outcome = `${lines} line${lines === 1 ? "" : "s"}`;
-  return { outcome, lines, head: lines ? head : [], tail, exitCode };
+  // What "expand" shows: all of it up to 60 lines, else the first and last 30 around a gap marker.
+  const shown = !lines ? [] : lines <= 60 ? all : [...all.slice(0, 30), `… ${lines - 60} lines …`, ...all.slice(-30)];
+  return { outcome, lines, head: lines ? head : [], tail, body: shown, exitCode };
 }
 
 // Tool definitions exposed to the model, keyed by allowedTools name. (No additionalProperties —

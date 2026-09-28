@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -76,6 +77,17 @@ func describeCall(name, args string) string {
 		verb = strings.ReplaceAll(name, "_", " ")
 		verb = strings.ToUpper(verb[:1]) + verb[1:]
 	}
+	// A command reads as the whole line — "Run npm test", not "Run npm". The payload is cut at 180
+	// characters, so an unparseable (truncated) one falls through to the regexes below.
+	if verb == "Run" {
+		var in struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		}
+		if json.Unmarshal([]byte(args), &in) == nil && in.Command != "" {
+			return verb + " " + truncate(strings.TrimSpace(in.Command+" "+strings.Join(in.Args, " ")), 70)
+		}
+	}
 	for _, re := range []*regexp.Regexp{rePath, reCmd, reQ, reKey} {
 		if m := re.FindStringSubmatch(args); m != nil {
 			return verb + " " + m[1]
@@ -84,16 +96,29 @@ func describeCall(name, args string) string {
 	return verb
 }
 
-// cleanMarkdown strips the syntax that is noise in a terminal: heading hashes, bold markers and
-// list bullets become plain text with indentation kept.
+// cleanMarkdown turns an agent's markdown into a styled transcript line: headings and **bold**
+// become bold, `code` takes the accent (via live.go's inline markers), list bullets become •.
 func cleanMarkdown(s string) string {
 	t := strings.TrimLeft(s, " ")
 	indent := s[:len(s)-len(t)]
+	heading := false
 	switch {
 	case strings.HasPrefix(t, "#"):
 		t = strings.TrimLeft(t, "# ")
+		heading = true
 	case strings.HasPrefix(t, "- "), strings.HasPrefix(t, "* "):
 		t = "• " + t[2:]
 	}
-	return indent + strings.NewReplacer("**", "", "`", "").Replace(t)
+	t = reBold.ReplaceAllString(t, string(mkBold)+"$1"+string(mkBoldEnd))
+	t = reCode.ReplaceAllString(t, string(mkCode)+"$1"+string(mkCodeEnd))
+	t = strings.ReplaceAll(t, "**", "") // an unpaired marker is noise
+	if heading {
+		t = string(mkBold) + t + string(mkBoldEnd)
+	}
+	return indent + t
 }
+
+var (
+	reBold = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	reCode = regexp.MustCompile("`([^`]+)`")
+)

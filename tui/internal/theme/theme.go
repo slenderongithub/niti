@@ -327,6 +327,9 @@ func StatusColor(status string) lipgloss.Color {
 // saturated color marks a small area without shouting across a large one (Textual's `$x-muted`).
 func Tint(c lipgloss.Color) lipgloss.Color { return blend(c, BgDeep, 0.3) }
 
+// Blend mixes a over b at weight w (1 = all a).
+func Blend(a, b lipgloss.Color, w float64) lipgloss.Color { return blend(a, b, w) }
+
 // blend mixes a over b at weight w (1 = all a). Non-hex input is returned unchanged.
 func blend(a, b lipgloss.Color, w float64) lipgloss.Color {
 	var ar, ag, ab, br, bg, bb int
