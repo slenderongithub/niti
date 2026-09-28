@@ -67,7 +67,7 @@ export function startServer(
   const makeCompletionProvider = opts.makeProvider ?? makeProvider;
   // Mutable, unlike the rest of `opts` — POST /theme updates this in place so /session reflects a
   // theme changed mid-session (by the TUI carousel or the web dropdown) without a server restart.
-  let currentTheme = opts.theme ?? "";
+  let currentTheme = resolveTheme(opts.theme ?? "");
   // TUI-facing flags, not engine settings: the core doesn't read them, they just have to survive a
   // restart and reach the next TUI launch via /session (projectInstructions is read at boot).
   // Only the known keys, and only real booleans: callers hand over the whole parsed agents.yaml
@@ -551,6 +551,12 @@ export function startServer(
     port,
     stop: () => server.stop(true),
   };
+}
+
+// A theme saved under a former name (palettes.json `aliases`) is served under its current one, so
+// the web dashboard — which looks palettes up by name — finds it.
+export function resolveTheme(name: string): string {
+  return (palettes as { name: string; aliases?: string[] }[]).find((p) => p.aliases?.includes(name))?.name ?? name;
 }
 
 // Where the dashboard's static files are. Four shapes have to work: a repo checkout, a compiled

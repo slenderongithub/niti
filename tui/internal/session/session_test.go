@@ -169,13 +169,13 @@ func TestPlanModeTogglesAndIsSubmitted(t *testing.T) {
 // name must not blank the UI.
 func TestThemeCommandIsLocal(t *testing.T) {
 	m := model(1)
-	if cmd := m.submit("/theme desert static"); cmd != nil || theme.Current() != "desert static" {
+	if cmd := m.submit("/theme ember"); cmd != nil || theme.Current() != "ember" {
 		t.Errorf("/theme should switch locally, current=%q cmd=%v", theme.Current(), cmd)
 	}
-	if cmd := m.submit("/theme nonsense"); cmd != nil || theme.Current() != "desert static" {
+	if cmd := m.submit("/theme nonsense"); cmd != nil || theme.Current() != "ember" {
 		t.Errorf("an unknown theme must be refused and leave the current one, got %q", theme.Current())
 	}
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 }
 
 // Slash commands are dispatched against the server's registry, not a hardcoded switch.

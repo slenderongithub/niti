@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Engine } from "../engine.ts";
-import { startServer, splitModelId, tokensMatch, type ServerHandle } from "./server.ts";
+import { startServer, splitModelId, tokensMatch, resolveTheme, type ServerHandle } from "./server.ts";
 import type { Provider, ProviderReply } from "../providers/provider.ts";
 import type { AgentConfig } from "../agent/agent.ts";
 
@@ -446,4 +446,9 @@ test("the favicon stack is public, square-sized PNGs, and both pages link it", a
     expect(html).toContain('rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"');
     expect(html).toContain('rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"');
   }
+});
+
+test("a theme saved under a former name is served under its current one", () => {
+  expect(resolveTheme("neon graveyard")).toBe("graphite");
+  expect(resolveTheme("tide")).toBe("tide");
 });

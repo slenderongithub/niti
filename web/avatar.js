@@ -12,9 +12,9 @@
 // the same file the Go TUI embeds) so canvas fills match whatever theme the TUI has active, instead
 // of a fixed palette baked in here. Lives in this file rather than theme.js because avatar.js is the
 // one both app.js and graph.js already load first and call into directly.
-const THEME_DEFAULTS = {
-  ink: "#e7e9f2", muted: "#8b90a6", violet: "#a78bfa", green: "#4ade80",
-  red: "#f87171", amber: "#fbbf24", blue: "#60a5fa", pink: "#f472b6",
+const THEME_DEFAULTS = { // the "graphite" palette — only used where there is no DOM to read vars from
+  ink: "#d8dbe2", muted: "#8a909c", violet: "#7aa2d6", green: "#8fbf8a",
+  red: "#d47a7a", amber: "#d9b26f", blue: "#6fb3b8", pink: "#d49ab5",
 };
 function themeColors() {
   // No real DOM (unit tests, or any other non-browser load) — fall back rather than throw.

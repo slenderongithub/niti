@@ -745,6 +745,12 @@ func (m *Model) submit(text string) tea.Cmd {
 
 func (m *Model) apply(e api.Event) {
 	switch e.Kind {
+	// Picked in the web dashboard (or another TUI) and persisted by the core: follow it, unless the
+	// theme picker is open — its live preview is the user's own choice in progress.
+	case "theme":
+		if !m.tp.open {
+			theme.Use(e.Theme)
+		}
 	// Synthesized client-side by streamWithReconnect — the core never sends these. Without them a
 	// dead core looked exactly like an idle one: agents "working", progress frozen, status stale.
 	case "connection":
