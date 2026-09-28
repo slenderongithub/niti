@@ -207,7 +207,7 @@ async function listFiles(root: string, dir: string): Promise<string[]> {
       if (e.isDirectory()) {
         if (!IGNORED_DIRS.has(e.name)) stack.push(abs);
       } else if (e.isFile()) {
-        out.push(relative(root, abs));
+        out.push(relative(root, abs).split(sep).join("/")); // "/" on every OS — it's what the model and the globs speak
         if (out.length >= MAX_WALK_FILES) break;
       }
     }
@@ -700,7 +700,10 @@ export function splitCommand(line: string): string[] {
       else cur += c;
     } else if (quote === '"') {
       if (c === '"') quote = null;
-      else if (posix && c === "\\" && i + 1 < line.length && '"\\$`'.includes(line[i + 1]!)) cur += line[++i]!;
+      // \" is a literal quote on both platforms (Windows' CommandLineToArgvW agrees); the other
+      // POSIX escapes (\\ \$ \`) stay POSIX-only, where a backslash is not a path separator.
+      else if (c === "\\" && line[i + 1] === '"') cur += line[++i]!;
+      else if (posix && c === "\\" && i + 1 < line.length && "\\$`".includes(line[i + 1]!)) cur += line[++i]!;
       else cur += c;
     } else if (c === "'" || c === '"') {
       quote = c;

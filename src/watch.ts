@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from "node:fs";
-import { normalize, sep } from "node:path";
+import { normalizePath } from "./permissions.ts";
 
 // Watch the project for edits made outside niti (a human in their editor, a git checkout, a
 // formatter). Emits paths only — nothing is stuffed into any agent's context automatically, which
@@ -15,7 +15,7 @@ const IGNORED_SEGMENTS = new Set([".git", "node_modules", ".niti", "dist", "buil
 const SELF_WRITE_TTL_MS = 2_000;
 
 export function isIgnored(relPath: string): boolean {
-  return relPath.split(sep).some((segment) => IGNORED_SEGMENTS.has(segment));
+  return relPath.split(/[\\/]/).some((segment) => IGNORED_SEGMENTS.has(segment));
 }
 
 export interface ProjectWatcher {
@@ -29,7 +29,7 @@ export function watchProject(root: string, onChange: (relPath: string) => void):
   try {
     watcher = watch(root, { recursive: true }, (_event, filename) => {
       if (!filename) return;
-      const rel = String(filename);
+      const rel = normalizePath(String(filename)); // fs.watch reports "src\\a.ts" on Windows; markSelfWrite keys on "/"
       if (isIgnored(rel)) return;
       const at = selfWrites.get(rel);
       if (at !== undefined && Date.now() - at < SELF_WRITE_TTL_MS) return; // our own write, echoing back
@@ -45,7 +45,7 @@ export function watchProject(root: string, onChange: (relPath: string) => void):
       // Normalized on the way in, because the caller passes the model's own spelling of the path
       // ("./src/a.ts", "src/../src/a.ts") while fs.watch reports a clean relative one. Any mismatch
       // meant the agent's own write was announced back to it as an external change.
-      selfWrites.set(normalize(relPath), now);
+      selfWrites.set(normalizePath(relPath), now);
       for (const [path, at] of selfWrites) if (now - at > SELF_WRITE_TTL_MS) selfWrites.delete(path); // bounded without a timer
     },
     close() {

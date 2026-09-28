@@ -63,7 +63,9 @@ test("remove deletes a credential and prunes the file when empty", () => {
   expect(existsSync(process.env.NITI_AUTH_FILE!)).toBe(false);
 });
 
-test("store file is written with 0600 permissions", () => {
+// Windows has no POSIX mode bits (stat reports 0o666/0o444 whatever was requested); the file is
+// protected by the user profile's ACL there instead.
+test.skipIf(process.platform === "win32")("store file is written with 0600 permissions", () => {
   setCredential({ provider: "openai", type: "api", key: "sk" });
   const mode = statSync(process.env.NITI_AUTH_FILE!).mode & 0o777;
   expect(mode).toBe(0o600);
