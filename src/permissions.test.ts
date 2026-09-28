@@ -113,3 +113,9 @@ test("resolve() judges each segment of a multi-command line on its own — an al
   // A genuinely single command is completely unaffected — same result as before this change.
   expect(resolve(layers, "shell", { command: "git", args: ["status"] })).toBe("allow");
 });
+
+test("Windows-style paths match forward-slash rules (a src/secrets/** deny must hold on every OS)", () => {
+  const rules = [{ write_file: { "src/secrets/**": "deny" as const } }];
+  expect(resolve(rules, "write_file", { path: "src\\secrets\\key.pem" })).toBe("deny");
+  expect(subject("write_file", { path: "src\\a\\..\\b.ts" })).toBe("src/b.ts");
+});
