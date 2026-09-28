@@ -37,6 +37,10 @@ func (m *Model) openPalette() tea.Cmd {
 		entries = append(entries, e)
 	}
 
+	for _, sgt := range m.suggestions {
+		sgt := sgt
+		add("suggest: "+sgt, paletteEntry{desc: "Suggested next step — puts it in the prompt", run: func(m *Model) tea.Cmd { m.input.SetValue(sgt); m.input.CursorEnd(); return nil }})
+	}
 	if m.mode == "build" {
 		add("mode: Plan", paletteEntry{desc: "The lead plans the work; nothing runs until you switch back", run: (*Model).toggleMode})
 	} else {

@@ -114,6 +114,7 @@ export const PREF_DEFAULTS = {
   showTurnDuration: false,
   openAgentsView: false,
   projectInstructions: true,
+  notifyOnDone: true, // bell (and a desktop notification on macOS) when a long run finishes
 } as const;
 export type PrefKey = keyof typeof PREF_DEFAULTS;
 

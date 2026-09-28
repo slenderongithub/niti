@@ -104,6 +104,7 @@ var prefRows = []struct{ Label, Key, Hint string }{
 	{"Show turn duration", "showTurnDuration", "append how long each tool call took"},
 	{"Open agents view by default", "openAgentsView", "start on the lead agent's tab, not the overview (next launch)"},
 	{"Project instructions", "projectInstructions", "read .niti.md / AGENTS.md into every agent's prompt (next launch)"},
+	{"Notify when done", "notifyOnDone", "ring the bell (and notify on macOS) when a run that took 20s+ finishes"},
 }
 
 func (m Model) configItems() []cfgItem {
@@ -156,13 +157,15 @@ func (m *Model) toggle(label string) tea.Cmd {
 		*field = !*field
 		on, client := *field, m.client
 		return func() tea.Msg { return actionResultMsg{action: key, err: client.SetSetting(key, on)} }
-	case "Light mode", "Reduce motion", "Show turn duration", "Open agents view by default", "Project instructions":
-		return m.togglePref(label)
 	case "Collapse tool calls":
 		m.verbose = !m.verbose
 		for _, st := range m.agents {
 			st.verbose = m.verbose
 		}
+	default:
+		// Any preference row. Looked up in prefRows rather than listed here too — a hand-kept copy
+		// of the labels meant a new preference row showed in the Config tab and did nothing.
+		return m.togglePref(label)
 	}
 	return nil
 }

@@ -138,6 +138,9 @@ type Model struct {
 	agentCursor int // highlighted row in the Agents panel while it has focus
 	scrollBack  int  // transcript lines scrolled up from the newest; 0 = following the output
 	expanded    bool // ctrl+o: show full command output and whole diffs instead of their folded form
+	card        *api.Event // the last run's summary card (turn_summary), shown until the next goal
+	suggestions []string   // next prompts the lead suggested; the first is the prompt's ghost text
+	notify      string     // a notification to send once this batch of events is applied (notifyCmd)
 	unseen      int // lines that arrived while scrolled up — shown in the transcript's border
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
@@ -176,7 +179,7 @@ const resubmitGrace = 6 * time.Second
 // New builds the model. `events` is the already-open SSE channel; `cancel` tears down the stream.
 func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, cancel context.CancelFunc) Model {
 	ti := textinput.New()
-	ti.Placeholder = "describe the project…"
+	ti.Placeholder = defaultPlaceholder
 	ti.Prompt = ""
 	ti.Focus()
 	// A pasted spec or stack trace is routinely longer than a few thousand characters, and the old
@@ -386,11 +389,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.unseen += grew
 			}
 		}
+		cmds := []tea.Cmd{waitFor(m.events)} // one View for the whole batch
+		if m.notify != "" {
+			cmds = append(cmds, notifyCmd(m.notify))
+			m.notify = ""
+		}
 		if !m.ticking && m.anyRunning() && !m.prefs["reduceMotion"] {
 			m.ticking = true
-			return m, tea.Batch(waitFor(m.events), tick())
+			cmds = append(cmds, tick())
 		}
-		return m, waitFor(m.events) // one View for the whole batch
+		return m, tea.Batch(cmds...)
 	case tickMsg:
 		if m.ticking = m.anyRunning() && !m.prefs["reduceMotion"]; m.ticking {
 			return m, tick()
@@ -699,6 +707,14 @@ func (m *Model) apply(e api.Event) {
 	switch e.Kind {
 	// Picked in the web dashboard (or another TUI) and persisted by the core: follow it, unless the
 	// theme picker is open — its live preview is the user's own choice in progress.
+	case "turn_summary":
+		e := e
+		m.card = &e
+		m.suggestions = e.Next
+		m.refreshPlaceholder()
+		if m.prefs["notifyOnDone"] && e.DurationMs >= 20_000 {
+			m.notify = "done: " + truncate(m.goal, 60)
+		}
 	case "theme":
 		if !m.tp.open {
 			theme.Use(e.Theme)

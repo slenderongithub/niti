@@ -103,3 +103,34 @@ func TestPlainLineStripsTheMarkersForThePager(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestRunEndsWithACardAndASuggestionTabTakes(t *testing.T) {
+	m := sized(1, 120, 40)
+	m.goal = "fix the cart"
+	m.apply(api.Event{Kind: "turn_summary", Ok: true, Summary: "• Fixed total() in src/cart.ts\n• Tests pass", Next: []string{"add a test for empty carts"},
+		Files: []api.FileChange{{Path: "src/cart.ts", Added: 2, Removed: 1}}, DurationMs: 134_000, Tokens: 12_400, Cost: 0.04})
+	v := screen(m)
+	for _, want := range []string{"Done · 2m14s · 12.4k tok · $0.04", "Fixed total() in src/cart.ts", "src/cart.ts  +2 −1", "next: add a test for empty carts", "add a test for empty carts   (tab to use)", "tab Use suggestion"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("missing %q in:\n%s", want, v)
+		}
+	}
+	next, _ := m.onKey(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+	if m.input.Value() != "add a test for empty carts" {
+		t.Fatalf("tab should take the suggestion, got %q", m.input.Value())
+	}
+	m.clearTurn()
+	if m.card != nil || m.input.Placeholder != defaultPlaceholder {
+		t.Error("a new turn clears the card and the ghost text")
+	}
+}
+
+func TestFailedRunCardSaysSo(t *testing.T) {
+	m := sized(1, 120, 40)
+	m.goal = "x"
+	m.apply(api.Event{Kind: "turn_summary", Ok: false, Summary: "• t2 failed", DurationMs: 5000})
+	if v := screen(m); !strings.Contains(v, "Finished with failures · 5.0s") {
+		t.Errorf("card title should say the run had failures:\n%s", v)
+	}
+}

@@ -102,12 +102,16 @@ func (m Model) keymap() []binding {
 		if m.mode == "plan" {
 			other = "Build mode"
 		}
-		local = []binding{
+		local = []binding{}
+		if len(m.suggestions) > 0 && m.input.Value() == "" {
+			local = append(local, binding{keys: []string{"tab"}, label: "tab", desc: "Use suggestion", help: "put the suggested next prompt in the prompt (edit it, or enter to send)", footer: true, run: (*Model).acceptSuggestion})
+		}
+		local = append(local, []binding{
 			{keys: []string{"enter"}, label: "enter", desc: "Send", help: "send the prompt (a goal, or a /command)", run: (*Model).enter},
 			{keys: []string{"shift+tab"}, label: "⇧tab", desc: other, help: "switch between BUILD (agents act) and PLAN (the lead only plans)", footer: true, run: (*Model).toggleMode},
 			{keys: []string{"alt+enter", "shift+enter", "ctrl+j"}, label: "alt+enter", desc: "Newline", help: "a line break inside the prompt (also shift+enter, ^j)", run: (*Model).newline},
 			{keys: []string{"esc"}, label: "esc", desc: "All agents", help: "leave a single agent's view for the stacked overview", run: func(m *Model) tea.Cmd { m.focus = ""; return nil }},
-		}
+		}...)
 	}
 	return append(local, m.globalBindings()...)
 }
@@ -319,6 +323,9 @@ func (m *Model) enter() tea.Cmd {
 	}
 	m.refreshMenu()
 	m.follow() // a new goal means new output; stop holding an old scroll position
+	if text != "" && !strings.HasPrefix(text, "/") {
+		m.clearTurn() // a new goal is a new turn: last run's card and suggestions go
+	}
 	return m.submit(text)
 }
 

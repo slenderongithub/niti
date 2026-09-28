@@ -417,7 +417,7 @@ test("POST /settings persists the Config-tab prefs and /session reports them", a
     const post = (path: string, body?: unknown) => fetch(`${h.url}${path}`, { method: "POST", headers, body: JSON.stringify(body ?? {}) });
     expect((await (await post("/settings", { lightMode: true, reduceMotion: true })).json()).lightMode).toBe(true);
     const session = await (await post("/session")).json();
-    expect(session.prefs).toEqual({ lightMode: true, reduceMotion: true, showTurnDuration: false, openAgentsView: false, projectInstructions: true });
+    expect(session.prefs).toEqual({ lightMode: true, reduceMotion: true, showTurnDuration: false, openAgentsView: false, projectInstructions: true, notifyOnDone: true });
     expect(session.auto).toBe(false);
     expect((await post("/settings", { lightMode: "yes" })).status).toBe(400);
     expect(readFileSync(join(dir, ".niti/agents.yaml"), "utf8")).toContain("reduceMotion: true");
@@ -431,7 +431,7 @@ test("/session prefs contains only the boolean flags, even when handed the whole
   const engine = new Engine({ configs, makeProvider: () => fake, interactive: false });
   const h = track(startServer(engine, { prefs: { theme: "x", auto: true, reduceMotion: true, lightMode: undefined } as any }));
   const res = await fetch(`${h.url}/session`, { method: "POST", headers: { authorization: `Bearer ${h.token}` } });
-  expect((await res.json()).prefs).toEqual({ lightMode: false, reduceMotion: true, showTurnDuration: false, openAgentsView: false, projectInstructions: true });
+  expect((await res.json()).prefs).toEqual({ lightMode: false, reduceMotion: true, showTurnDuration: false, openAgentsView: false, projectInstructions: true, notifyOnDone: true });
 });
 
 test("the favicon stack is public, square-sized PNGs, and both pages link it", async () => {

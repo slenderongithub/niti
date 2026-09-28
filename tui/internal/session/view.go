@@ -398,6 +398,12 @@ func (m Model) mainPane(mw, h int, compact bool) string {
 		rows = append(rows, m.tabBar(iw))
 	}
 	ch := max(ih-len(rows), 1)
+	// The last run's card sits at the bottom of the transcript, where the eye lands when work ends.
+	card := ""
+	if cr := m.cardRows(); cr > 0 && m.view != "usage" && ch-cr >= 6 {
+		card = m.cardView(iw)
+		ch -= cr
+	}
 	switch {
 	case m.view == "usage":
 		rows = append(rows, m.usageView(iw, ch))
@@ -407,6 +413,9 @@ func (m Model) mainPane(mw, h int, compact bool) string {
 		rows = append(rows, m.agentBlock(m.agents[m.focus], iw, ch))
 	default:
 		rows = append(rows, m.workView(iw, ch))
+	}
+	if card != "" {
+		rows = append(rows, card)
 	}
 	content := strings.Join(rows, "\n")
 	if compact {
