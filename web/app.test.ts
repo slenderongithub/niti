@@ -72,7 +72,7 @@ function load() {
   const exported = new Function(
     "window", "document", "location", "requestAnimationFrame", "fetch", "EventSource", "performance", "URLSearchParams", "ResizeObserver",
     `${avatarSrc}\n${src}\nreturn { handle, onAgentEvent, ensureNode, nodes, renderApproval, answerApproval, onOrch,
-       openAgentPanel, sendAgentMessage, esc, submitPrompt,
+       openAgentPanel, sendAgentMessage, esc, submitPrompt, describeCall, renderTasks, renderMessages,
        getPending: () => pendingApprovals, getRunning: () => running, setPromptEnabled };`,
   )(win, doc, win.location, win.requestAnimationFrame, win.fetch, win.EventSource, performance, URLSearchParams, class { observe() {} });
   return { ...exported, elFor: el, calls };
@@ -261,4 +261,23 @@ test("Enter submits the prompt; Shift+Enter is left alone so the textarea insert
   await settled();
   expect(prevented).toBe(true);
   expect(g.calls.find((c: any) => c.path.startsWith("/prompt"))?.body.text).toBe("line one");
+});
+
+test("an approval headline says the call in words, like the TUI's banner", () => {
+  const g = load();
+  expect(g.describeCall("edit", { path: "src/a.ts" })).toBe("edit on src/a.ts");
+  expect(g.describeCall("shell", { command: "git", args: ["commit", "-m", "fix bug"] })).toBe('shell: git commit -m "fix bug"');
+  expect(g.describeCall("recall", {})).toBe("recall");
+});
+
+test("tasks use the TUI's status glyphs, and an empty board is a hatched empty state", async () => {
+  const g = load();
+  await settled();
+  g.renderTasks();
+  expect(g.elFor("tab-tasks").innerHTML).toContain('class="empty"');
+  g.onOrch({ type: "plan", goal: "g", tasks: [{ id: "t1", description: "Add login", role: "coder", dependsOn: [] }] });
+  const html = g.elFor("tab-tasks").innerHTML;
+  expect(html).toContain("○"); // pending
+  expect(html).toContain("Add login");
+  expect(html).toContain("t1 → coder");
 });

@@ -15,6 +15,7 @@
 const THEME_DEFAULTS = { // the "graphite" palette — only used where there is no DOM to read vars from
   ink: "#d8dbe2", muted: "#8a909c", violet: "#7aa2d6", green: "#8fbf8a",
   red: "#d47a7a", amber: "#d9b26f", blue: "#6fb3b8", pink: "#d49ab5",
+  bg: "#16181d", line: "#2e333d",
 };
 function themeColors() {
   // No real DOM (unit tests, or any other non-browser load) — fall back rather than throw.
@@ -25,6 +26,7 @@ function themeColors() {
     ink: v("--ink", THEME_DEFAULTS.ink), muted: v("--muted", THEME_DEFAULTS.muted),
     violet: v("--violet", THEME_DEFAULTS.violet), green: v("--green", THEME_DEFAULTS.green), red: v("--red", THEME_DEFAULTS.red),
     amber: v("--amber", THEME_DEFAULTS.amber), blue: v("--blue", THEME_DEFAULTS.blue), pink: v("--pink", THEME_DEFAULTS.pink),
+    bg: v("--bg", THEME_DEFAULTS.bg), line: v("--line", THEME_DEFAULTS.line),
   };
 }
 // For building rgba(r,g,b,alpha) strings from a theme hex color (canvas glow/highlight fills).

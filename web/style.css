@@ -25,103 +25,157 @@
     --line: #cdd2da;
   }
 }
+/* Derived the way the TUI derives them (theme.Tint): a color laid 30% over the canvas. Saturated
+   color only ever fills small things — chips, the selected tab's underline, a focused border. */
+:root {
+  --tint-accent: color-mix(in srgb, var(--violet) 30%, var(--bg));
+  --tint-green: color-mix(in srgb, var(--green) 30%, var(--bg));
+  --tint-amber: color-mix(in srgb, var(--amber) 30%, var(--bg));
+  --tint-red: color-mix(in srgb, var(--red) 30%, var(--bg));
+  --tint-blue: color-mix(in srgb, var(--blue) 30%, var(--bg));
+  --radius: 6px;
+}
+
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
-  font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font: 13px/1.55 ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   background: var(--bg);
   color: var(--ink);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
+.hidden { display: none !important; }
+button, input, textarea { font: inherit; color: inherit; }
 
-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
+/* ---------- title bar: name + version left, where-am-I right (the TUI header) ---------- */
+.titlebar { display: flex; align-items: center; gap: 14px; padding: 8px 14px 2px; }
+.brand { font-weight: 700; color: var(--violet); white-space: nowrap; }
+.brand .sub { color: var(--muted); font-weight: 400; }
+.titlebar .where { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.chip { display: inline-block; padding: 0 8px; border-radius: 3px; font-weight: 700; background: var(--tint-accent); color: var(--violet); white-space: nowrap; }
+.conn { color: var(--amber); background: var(--tint-amber); }
+.conn.live { color: var(--green); background: var(--tint-green); }
+.conn.dead { color: var(--red); background: var(--tint-red); }
+
+/* ---------- box: a bordered region with its name in the top border and live detail in the bottom
+   one — the TUI's ui.Panel. Only the focused box's border takes the accent. ---------- */
+.box { position: relative; border: 1px solid var(--line); border-radius: var(--radius); margin: 12px 8px 8px; padding: 12px 12px 10px; min-height: 0; background: var(--bg); }
+.box:focus-within { border-color: var(--violet); }
+.box > .box-title, .box > .box-sub {
+  position: absolute; padding: 0 6px; background: var(--bg); line-height: 1; white-space: nowrap;
+  max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis;
 }
-.brand { font-weight: 700; color: var(--violet); display: flex; align-items: center; gap: 8px; }
-.brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--violet); }
-.goal { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conn { font-size: 12px; color: var(--amber); }
-.conn.live { color: var(--green); }
-.conn.dead { color: var(--red); }
+.box > .box-title { top: -0.5em; right: 12px; color: var(--muted); }
+.box.title-left > .box-title { left: 12px; right: auto; }
+.box:focus-within > .box-title { color: var(--ink); font-weight: 700; }
+.box > .box-sub { bottom: -0.5em; left: 12px; color: var(--muted); font-size: 12px; }
+.box > .box-sub:empty { display: none; }
 
+/* ---------- buttons, inputs ---------- */
+.btn { background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; color: var(--ink); }
+.btn:hover { border-color: var(--violet); color: var(--violet); }
+.btn.primary { background: var(--tint-accent); border-color: transparent; color: var(--violet); font-weight: 700; }
+.btn.primary:hover { border-color: var(--violet); }
+.btn:disabled { opacity: 0.4; cursor: default; }
+.field { background: var(--panel-2); border: 1px solid transparent; border-left: 2px solid var(--line); border-radius: 0; padding: 5px 9px; outline: none; }
+.field:focus { border-left-color: var(--violet); }
+kbd { font: inherit; font-weight: 700; color: var(--violet); }
 
-main { flex: 1; display: flex; min-height: 0; }
-.graph { flex: 1; position: relative; min-width: 0; }
-#canvas { width: 100%; height: 100%; display: block; }
-.legend { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
-.legend .k { display: inline-flex; align-items: center; gap: 5px; }
-.legend .k i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+/* ---------- empty state: hatched, the message on clear ground (the TUI's ui.Hatch) ---------- */
+.empty {
+  display: flex; align-items: center; justify-content: center; min-height: 90px; height: 100%;
+  background: repeating-linear-gradient(135deg, var(--line) 0 1px, transparent 1px 8px);
+  color: var(--muted); font-size: 12px;
+}
+.empty span { background: var(--bg); padding: 2px 8px; }
 
-.panel { width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
-.tabs { display: flex; border-bottom: 1px solid var(--line); }
-.tabs button { flex: 1; background: none; border: none; color: var(--muted); padding: 10px; cursor: pointer; font: inherit; }
-.tabs button.active { color: var(--ink); border-bottom: 2px solid var(--violet); }
-.tab { flex: 1; overflow-y: auto; padding: 12px; }
-.tab.hidden { display: none; }
+/* ---------- footer: the keys that work here ---------- */
+.keys { display: flex; gap: 18px; padding: 2px 14px 8px; color: var(--ink); white-space: nowrap; overflow: hidden; }
+.keys span { color: var(--ink); }
 
-.task { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; background: var(--panel-2); }
-.task .row { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
-.task .id { color: var(--violet); font-weight: 700; }
-.task .who { color: var(--muted); font-size: 12px; }
-.task .st { font-size: 11px; padding: 1px 7px; border-radius: 10px; }
-.st.pending { background: #3a3f52; color: var(--muted); }
-.st.in_progress { background: rgba(96,165,250,.18); color: var(--blue); }
-.st.done { background: rgba(74,222,128,.16); color: var(--green); }
-.st.failed { background: rgba(248,113,113,.16); color: var(--red); }
-.task .desc { margin-top: 4px; font-size: 12px; color: var(--ink); }
-.task .deps { margin-top: 3px; font-size: 11px; color: var(--muted); }
+/* ================= dashboard ================= */
+.layout { flex: 1; display: flex; min-height: 0; }
+.layout > .box { display: flex; flex-direction: column; }
+.graph-box { flex: 1; min-width: 0; padding: 0; }
+#canvas { width: 100%; height: 100%; display: block; border-radius: var(--radius); }
+.legend { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+.legend .k { display: inline-flex; align-items: center; gap: 6px; }
+.legend .k i { width: 12px; height: 2px; display: inline-block; }
 
-.msg { padding: 7px 9px; border-left: 3px solid var(--line); margin-bottom: 7px; font-size: 12px; }
-.msg .h { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+.board { width: 360px; margin-left: 0; }
+.tabs { display: flex; gap: 18px; padding: 0 2px 8px; border-bottom: 1px solid var(--line); }
+.tabs button { background: none; border: none; color: var(--muted); padding: 2px 0 6px; cursor: pointer; }
+.tabs button.active { color: var(--ink); font-weight: 700; box-shadow: inset 0 -2px var(--violet); }
+.tab { flex: 1; overflow-y: auto; padding-top: 8px; min-height: 0; }
+
+/* tasks: the TUI's glyphs — ● done ◐ in progress ○ waiting ✖ failed */
+.task { display: flex; gap: 8px; padding: 5px 2px; }
+.task .g { width: 1ch; flex: none; }
+.task.pending .g { color: var(--muted); }
+.task.in_progress .g { color: var(--blue); }
+.task.done .g { color: var(--green); }
+.task.failed .g { color: var(--red); }
+.task .desc { color: var(--ink); }
+.task .meta { color: var(--muted); font-size: 12px; }
+
+/* messages: the TUI's feed — from ─kind→ to, the edge in the kind's color */
+.msg { padding: 4px 2px; font-size: 12px; }
+.msg .edge { color: var(--muted); }
+.msg .edge b { font-weight: 400; }
+.msg.kind-question .edge b { color: var(--amber); }
+.msg.kind-answer .edge b { color: var(--green); }
+.msg.kind-handoff .edge b, .msg.kind-artifact .edge b { color: var(--blue); }
+.msg.kind-review .edge b { color: var(--pink); }
+.msg.kind-broadcast .edge b, .msg.kind-note .edge b { color: var(--violet); }
 .msg .sub { color: var(--ink); }
-.msg.kind-question { border-color: var(--amber); }
-.msg.kind-answer { border-color: var(--green); }
-.msg.kind-handoff, .msg.kind-artifact { border-color: var(--blue); }
-.msg.kind-review { border-color: var(--pink); }
-.msg.kind-broadcast { border-color: var(--violet); }
 
-.urow { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
-.urow .n { color: var(--muted); }
-.utotal { margin-top: 10px; font-weight: 700; }
-.empty { color: var(--muted); font-size: 12px; padding: 8px; }
+.urow { display: flex; justify-content: space-between; gap: 10px; padding: 4px 2px; font-size: 12px; }
+.urow .n { color: var(--ink); }
+.urow span:last-child { color: var(--muted); }
+.utotal { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+.utotal span { color: var(--violet) !important; font-weight: 700; }
 
-/* prompt bar: submit a whole-team goal, uses the same /prompt route the TUI does */
-.promptbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.promptbar input, .promptbar textarea { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); padding: 6px 10px; font: inherit; resize: none; max-height: 8em; }
-.promptbar button, .ap-row button { background: var(--violet); border: none; border-radius: 6px; color: var(--bg); padding: 6px 12px; font: inherit; font-weight: 700; cursor: pointer; }
-.promptbar button:disabled, .ap-row button:disabled { opacity: 0.4; cursor: default; }
-.status { color: var(--muted); font-size: 12px; min-height: 1em; }
+/* prompt: the TUI's prompt panel — the border names the mode, the bottom edge carries the status */
+.prompt { display: flex; align-items: flex-start; gap: 10px; margin-top: 4px; }
+.prompt .caret { color: var(--violet); font-weight: 700; padding-top: 1px; }
+.prompt textarea { flex: 1; background: transparent; border: none; outline: none; resize: none; max-height: 8em; padding: 0; }
+.prompt > .box-title { color: var(--violet); }
 
-/* per-agent detail panel: opens on a graph-node click */
-.agent-panel { width: 340px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
-.agent-panel.hidden { display: none; }
-.ap-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); font-weight: 700; }
-.ap-head button { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; }
-.ap-row { display: flex; gap: 6px; padding: 8px 12px; align-items: center; }
-.ap-row input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); padding: 5px 8px; font: inherit; font-size: 12px; }
-.ap-row.status { padding-top: 0; }
-.ap-log { flex: 1; overflow-y: auto; padding: 8px 12px; font-size: 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+/* per-agent panel (click a node) */
+.agent-panel { width: 340px; margin-left: 0; gap: 8px; }
+.ap-row { display: flex; gap: 6px; align-items: center; }
+.ap-row .field { flex: 1; min-width: 0; font-size: 12px; }
+.ap-row.status { color: var(--muted); font-size: 12px; min-height: 1em; }
+.ap-close { position: absolute; top: -0.65em; left: 10px; background: var(--bg); border: none; color: var(--muted); cursor: pointer; padding: 0 6px; line-height: 1; }
+.ap-close:hover { color: var(--red); }
+.ap-log { flex: 1; overflow-y: auto; font-size: 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 6px 0; min-height: 0; }
 .ap-log div { padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
 
-/* tool-approval popup: blocks until answered, same FIFO queue the TUI answers from */
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 10; }
-.overlay.hidden { display: none; }
-.overlay-box { width: min(720px, 90vw); max-height: 80vh; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.overlay-head { padding: 12px 16px; font-weight: 700; color: var(--amber); border-bottom: 1px solid var(--line); }
-.diff { flex: 1; overflow: auto; padding: 10px 16px; font-size: 12px; }
+/* approval: the TUI's banner — amber frame, the call in words, y / a / n */
+.overlay { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 70%, transparent); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.overlay-box { width: min(760px, 92vw); max-height: 80vh; display: flex; flex-direction: column; gap: 10px; border-color: var(--amber) !important; }
+.overlay-box > .box-title { color: var(--amber) !important; font-weight: 700; }
+.overlay-head { color: var(--ink); }
+.diff { flex: 1; overflow: auto; font-size: 12px; background: var(--panel-2); padding: 8px 10px; }
 .diff div { white-space: pre-wrap; word-break: break-word; }
 .diff .plus { color: var(--green); }
 .diff .minus { color: var(--red); }
 .diff .hunk { color: var(--muted); }
-.overlay-actions { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
-.overlay-actions button { flex: 1; padding: 8px; border-radius: 6px; border: none; font: inherit; font-weight: 700; cursor: pointer; }
-#approval-yes { background: var(--green); color: #06240f; }
-#approval-always { background: var(--blue); color: #05203f; }
-#approval-no { background: var(--red); color: #350707; }
+.diff .empty { min-height: 0; background: none; justify-content: flex-start; }
+.overlay-actions { display: flex; gap: 10px; }
+.overlay-actions .btn { flex: none; }
+
+/* theme picker (theme.js) */
+.theme-wrap { position: relative; }
+#theme-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--violet); margin-right: 6px; }
+#theme-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 240px; max-height: 60vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--violet); border-radius: var(--radius); padding: 4px; }
+.theme-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 8px; cursor: pointer; }
+.theme-row:hover { background: var(--tint-accent); }
+.theme-row .dots i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 3px; }
+
+@media (max-width: 900px) {
+  .layout { flex-direction: column; }
+  .board, .agent-panel { width: auto; margin-left: 8px; max-height: 40vh; }
+}
