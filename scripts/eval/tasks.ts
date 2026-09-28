@@ -26,7 +26,35 @@ export interface Task {
 // check, and it ships a hermetic one.
 const PKG = JSON.stringify({ name: "fixture", version: "1.0.0" }, null, 2);
 
+// A 40-module service, big enough that the repo map is generated and a wandering agent piles up
+// enough tool output for observation masking to engage — the token machinery the six small
+// fixtures never reach. One pricing rule is wrong; the agent is told the symptom, not the file.
+const SERVICE: Record<string, string> = { "package.json": PKG };
+for (const area of ["billing", "catalog", "orders", "users", "shipping"]) {
+  for (let i = 0; i < 8; i++) {
+    SERVICE[`src/${area}/${area}-${i}.ts`] =
+      `// ${area} module ${i}\nexport function ${area}Step${i}(input: number): number {\n  return input + ${i};\n}\n`;
+  }
+}
+SERVICE["src/billing/discounts.ts"] =
+  "export const MEMBER_TIERS = ['basic', 'silver', 'gold'] as const;\n\n" +
+  "export function discountFor(tier: string): number {\n  if (tier === 'gold') return 0.15;\n  if (tier === 'silver') return 0.05;\n  return 0;\n}\n";
+
 export const TASKS: Task[] = [
+  {
+    name: "fix-a-rule-in-a-larger-service",
+    tests: "navigate",
+    files: SERVICE,
+    prompt: "Gold members are getting a 15% discount, but it should be 10%. Fix it. Do not change anything else.",
+    check: (read) => {
+      const d = read("src/billing/discounts.ts");
+      if (!d) return "src/billing/discounts.ts is gone";
+      if (!/tier === 'gold'\) return 0\.1;/.test(d.replace(/0\.10\b/, "0.1"))) return "gold discount is not 0.1";
+      if (!d.includes("if (tier === 'silver') return 0.05;")) return "changed the silver rule, which it was told not to touch";
+      if (read("src/billing/billing-0.ts") !== SERVICE["src/billing/billing-0.ts"]) return "edited an unrelated module";
+      return null;
+    },
+  },
   {
     name: "find-and-change-a-constant",
     tests: "navigate",

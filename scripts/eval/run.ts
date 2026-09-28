@@ -4,6 +4,7 @@
 //   bun run scripts/eval/run.ts --provider google --model gemini-flash-latest
 //   bun run scripts/eval/run.ts --provider google --model gemini-flash-lite-latest --repeat 3
 //   bun run scripts/eval/run.ts --only navigate --keep
+//   bun run scripts/eval/run.ts --repeat 3 --save-tokens base.json   (then --gate-tokens base.json after a change)
 //
 // Use --repeat 3 or more for any comparison you intend to act on. A single pass is a smoke test:
 // the same fixture on an unchanged harness scored 4/5 across five runs, so one run of the suite
@@ -25,6 +26,7 @@ import type { Provider } from "../../src/providers/provider.ts";
 import { detectChecks } from "../../src/agent/verify.ts";
 import { TOOL_GUIDANCE } from "../../src/tools/tools.ts";
 import { steeringFor } from "../../src/agent/steering.ts";
+import { repoMapSection } from "../../src/agent/repomap.ts";
 import { costOf, inputIncludesCache } from "../../src/providers/pricing.ts";
 import { TASKS, type Task } from "./tasks.ts";
 
@@ -40,6 +42,11 @@ const repeat = Math.max(1, Number(flag("repeat", "1")));
 const only = flag("only", "");
 const keep = args.includes("--keep");
 const verbose = args.includes("--verbose");
+// --save-tokens out.json writes this run's tokens-per-pass; --gate-tokens base.json fails the run
+// when tokens-per-pass regress more than 15% against a saved baseline. Pass rate alone missed a
+// harness change that kept every task passing while doubling what each pass cost.
+const saveTokens = flag("save-tokens", "");
+const gateTokens = flag("gate-tokens", "");
 const trace = args.includes("--trace"); // per-call table under every run: where the tokens go, turn by turn
 
 const SYSTEM_PROMPT =
@@ -157,10 +164,10 @@ async function runOne(task: Task): Promise<Attempt> {
     provider,
     model,
     role: "Engineer",
-    // Same prompt the Engine assembles, minus the project map (these fixtures are far below the
-    // size where one is generated). Leaving the per-model steering out would measure a harness
-    // nobody runs.
-    systemPrompt: SYSTEM_PROMPT + TOOL_GUIDANCE + steeringFor(provider, model),
+    // Same prompt the Engine assembles. repoMapSection is empty below its file threshold, so the
+    // small fixtures run map-less exactly as they would under the Engine, and the larger one gets
+    // the map. Leaving the per-model steering out would measure a harness nobody runs.
+    systemPrompt: SYSTEM_PROMPT + repoMapSection(dir) + TOOL_GUIDANCE + steeringFor(provider, model),
     allowedTools: ["read_file", "write_file", "edit", "shell"],
   };
   const bus = new Bus();
@@ -267,7 +274,9 @@ for (const task of selected) {
 }
 
 const pct = scored > 0 ? Math.round((passed / scored) * 100) : 0;
-console.log(`\n  ${passed}/${scored} passed (${pct}%)  ·  ${tokens.toLocaleString()} tokens  ·  $${cost.toFixed(4)}`);
+// Cost of the harness per unit of success — what a token optimization is actually trying to move.
+const perPass = passed > 0 ? Math.round(tokens / passed) : 0;
+console.log(`\n  ${passed}/${scored} passed (${pct}%)  ·  ${tokens.toLocaleString()} tokens  ·  ${perPass.toLocaleString()} tokens/pass  ·  $${cost.toFixed(4)}`);
 if (allUncached + allCached > 0) {
   console.log(`  cache: ${allCached.toLocaleString()} of ${(allUncached + allCached).toLocaleString()} input tokens served from cache (${Math.round((allCached / (allUncached + allCached)) * 100)}%)`);
 }
@@ -282,6 +291,14 @@ if (repeat === 1 && passed < scored) {
 for (const [kind, s] of [...byKind].sort()) console.log(`    ${kind.padEnd(10)} ${s.pass}/${s.total}`);
 console.log();
 
+if (saveTokens) writeFileSync(saveTokens, JSON.stringify({ provider, model, perPass, passed, scored }, null, 2));
+let tokenRegression = false;
+if (gateTokens) {
+  const base = JSON.parse(readFileSync(gateTokens, "utf8")) as { perPass: number };
+  tokenRegression = perPass > base.perPass * 1.15;
+  console.log(`  tokens/pass ${perPass.toLocaleString()} vs baseline ${base.perPass.toLocaleString()}${tokenRegression ? "  — REGRESSED >15%" : ""}`);
+}
+
 // Non-zero on a regression, so this can gate a change rather than merely describe one. An
 // unscored run counts against it too: a suite that could not be measured has not passed.
-process.exit(scored > 0 && passed === scored && errors === 0 ? 0 : 1);
+process.exit(scored > 0 && passed === scored && errors === 0 && !tokenRegression ? 0 : 1);

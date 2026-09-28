@@ -735,7 +735,7 @@ test("ask() records its tokens — the orchestrator's plan/integrate turns are n
   };
   await new Agent(cfg, stub, new Bus(), { usageTracker: usage }).ask("plan this");
   expect(usage.snapshot()).toEqual([
-    { agentId: "a", usage: { inputTokens: 100, outputTokens: 20, calls: 1, lastInput: 100, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    { agentId: "a", usage: { inputTokens: 100, outputTokens: 20, calls: 1, lastInput: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 } },
   ]);
 });
 

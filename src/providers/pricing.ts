@@ -11,17 +11,28 @@ import { CATALOG } from "./catalog.ts";
 export interface Price {
   input: number; // USD per 1M input tokens
   output: number; // USD per 1M output tokens
+  cacheRead?: number; // USD per 1M cached input tokens; unset → the provider's usual discount below
 }
 
 // Prefix → price. Longest matching prefix wins, so "claude-opus" beats "claude".
 const PRICES: Record<string, Price> = {
-  "claude-opus": { input: 15, output: 75 },
+  // Opus 4.5 onward is $5/$25; only 4.1 and earlier kept the old $15/$75.
+  "claude-opus": { input: 5, output: 25 },
+  "claude-opus-4-1": { input: 15, output: 75 },
+  "claude-opus-4-0": { input: 15, output: 75 },
+  "claude-opus-4-2": { input: 15, output: 75 },
+  "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2 },
+  "claude-fable": { input: 10, output: 50 },
+  "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25 },
   "claude-sonnet": { input: 3, output: 15 },
-  "claude-haiku": { input: 0.8, output: 4 },
+  "claude-sonnet-5": { input: 2, output: 10 },
+  "claude-haiku": { input: 1, output: 5 },
+  "claude-3-5-haiku": { input: 0.8, output: 4 },
   "claude-3.7-sonnet": { input: 3, output: 15 },
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
   "gpt-4o": { input: 2.5, output: 10 },
-  "gpt-4.1": { input: 2, output: 8 },
+  "gpt-4.1": { input: 2, output: 8, cacheRead: 0.5 },
+  "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125 },
   "o3-mini": { input: 1.1, output: 4.4 },
   o3: { input: 2, output: 8 },
   o1: { input: 15, output: 60 },
@@ -75,13 +86,21 @@ export function priceFor(provider: string, model: string): Price | undefined {
   return best;
 }
 
-// Anthropic's standard ephemeral cache multipliers, applied against the model's own input price: a
-// cache write costs slightly more than a fresh input token (writing the cache costs something),
-// a cache read costs a small fraction of one. OpenAI's own auto-caching only ever reports reads
-// (no write-side token count exists to bill), so cacheWriteTokens is simply 0 there — same formula
-// still applies correctly.
+// Cache pricing, as a fraction of the model's own input price, when the price table has no exact
+// cacheRead. Writes are Anthropic's 5-minute ephemeral rate; OpenAI and Gemini only ever report
+// reads (no write-side count exists to bill), so cacheWriteTokens is 0 there. Reads differ by
+// vendor: Anthropic bills 0.1×, Gemini's implicit cache 0.25×, and OpenAI-compatible vendors range
+// from 0.1× (GPT-5) to 0.5× (GPT-4o) — 0.5× is the conservative default, overstating rather than
+// understating a bill.
 const CACHE_WRITE_MULTIPLIER = 1.25;
-const CACHE_READ_MULTIPLIER = 0.1;
+const CACHE_READ_MULTIPLIER: Record<string, number> = { anthropic: 0.1, gemini: 0.25 };
+const DEFAULT_CACHE_READ_MULTIPLIER = 0.5;
+
+function cacheReadPrice(provider: string, p: Price): number {
+  if (p.cacheRead !== undefined) return p.cacheRead;
+  const client = Object.hasOwn(CATALOG, provider) ? CATALOG[provider]!.client : undefined;
+  return p.input * (CACHE_READ_MULTIPLIER[client ?? ""] ?? DEFAULT_CACHE_READ_MULTIPLIER);
+}
 
 // Whether a provider's reported input count already contains its cache reads. Anthropic's
 // `input_tokens` is only the uncached tail, with reads and writes reported beside it. OpenAI
@@ -109,7 +128,7 @@ export function costOf(
   const usd =
     (uncachedInput * p.input +
       outputTokens * p.output +
-      cacheReadTokens * p.input * CACHE_READ_MULTIPLIER +
+      cacheReadTokens * cacheReadPrice(provider, p) +
       cacheWriteTokens * p.input * CACHE_WRITE_MULTIPLIER) /
     1_000_000;
   return { usd, priced: true };

@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, RateLimit, Reasoning } from "./provider.ts";
-import { parseRateLimit } from "./provider.ts";
+import { parseRateLimit, cacheBreakpoints } from "./provider.ts";
 
 function parseArgs(s: string | undefined): Record<string, unknown> {
   if (!s) return {};
@@ -9,6 +9,12 @@ function parseArgs(s: string | undefined): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+export interface OpenAIOptions {
+  vendor?: string; // catalog key ("openai", "openrouter", "deepseek", …) — picks the per-vendor dialect
+  cacheKey?: string; // OpenAI prompt_cache_key: requests sharing it are routed to the same prefix cache
+  maxOutput?: number;
 }
 
 export class OpenAIProvider implements Provider {
@@ -26,6 +32,7 @@ export class OpenAIProvider implements Provider {
     baseURL?: string, // set for OpenAI-compatible providers (DeepSeek, Groq, OpenRouter, Ollama, …)
     headers?: Record<string, string>, // extra default headers (e.g. Copilot's editor headers)
     private reasoning?: Reasoning,
+    private opts: OpenAIOptions = {},
   ) {
     this.supportsUsageOption = !/localhost|127\.0\.0\.1|\[::1\]/.test(baseURL ?? "");
     const trackedFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -75,10 +82,20 @@ export class OpenAIProvider implements Provider {
       }
     }
 
+    const { vendor, cacheKey, maxOutput } = this.opts;
+    // OpenRouter forwards Anthropic's cache_control to Claude models, which cache nothing without it
+    // (OpenAI and DeepSeek cache automatically; Claude does not). Same breakpoints as anthropic.ts.
+    const openrouterClaude = vendor === "openrouter" && this.model.startsWith("anthropic/");
+    const sent = openrouterClaude ? [markOpenAI(messages[0]!), ...cacheBreakpoints(messages.slice(1), markOpenAI)] : messages;
+
     const params = {
       model: this.model,
-      messages,
-      ...reasoningEffort(this.thinking ? this.reasoning : undefined),
+      messages: sent,
+      ...reasoningEffort(this.thinking ? this.reasoning : undefined, vendor, this.model),
+      ...(vendor === "openai" && cacheKey ? { prompt_cache_key: cacheKey } : {}),
+      ...(maxOutput ? (vendor === "openai" ? { max_completion_tokens: maxOutput } : { max_tokens: maxOutput }) : {}),
+      // OpenRouter reports cached and reasoning tokens (and the real cost) only when asked.
+      ...(vendor === "openrouter" ? { usage: { include: true } } : {}),
       ...(tools.length
         ? {
             tools: tools.map((t) => ({
@@ -132,24 +149,54 @@ export class OpenAIProvider implements Provider {
   }
 }
 
-function mapUsage(
-  u: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } | undefined,
+// Puts an Anthropic-style cache_control on a Chat Completions message's last text part (see the
+// OpenRouter note in send). Assistant turns that are pure tool calls have no text to mark.
+function markOpenAI<M>(m: M): M {
+  const msg = m as { content?: unknown };
+  const cc = { type: "ephemeral" };
+  if (typeof msg.content === "string" && msg.content) return { ...msg, content: [{ type: "text", text: msg.content, cache_control: cc }] } as M;
+  if (Array.isArray(msg.content) && msg.content.length) {
+    const content = [...msg.content];
+    content[content.length - 1] = { ...content[content.length - 1], cache_control: cc };
+    return { ...msg, content } as M;
+  }
+  return m;
+}
+
+export function mapUsage(
+  u:
+    | {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number } | null;
+        completion_tokens_details?: { reasoning_tokens?: number } | null;
+        prompt_cache_hit_tokens?: number; // DeepSeek's own field; it does not fill prompt_tokens_details
+      }
+    | undefined,
 ) {
   if (!u) return undefined;
   return {
     inputTokens: u.prompt_tokens ?? 0,
+    // completion_tokens already includes reasoning tokens (billed as output) — reasoningTokens below
+    // is a breakdown of it, not an addition.
     outputTokens: u.completion_tokens ?? 0,
-    // OpenAI auto-caches identical prompt prefixes with zero code required on our side — this only
-    // surfaces the savings that already exist, it doesn't create them. No write-side count exists
-    // to report (there's no separate "cache write" action, unlike Anthropic's explicit markers).
-    cacheReadTokens: u.prompt_tokens_details?.cached_tokens ?? undefined,
+    // OpenAI and DeepSeek auto-cache identical prompt prefixes — this only surfaces savings that
+    // already exist. No write-side count exists to report (no explicit cache writes, unlike Anthropic).
+    cacheReadTokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? undefined,
+    reasoningTokens: u.completion_tokens_details?.reasoning_tokens || undefined,
   };
 }
 
 // o-series and GPT-5 models take reasoning_effort; everything else 400s on it. Sent only when the
 // user opted in, for the same reason as Gemini's thinkingConfig — this catalog covers 29 providers
 // and most of their models have no reasoning mode to configure.
-export function reasoningEffort(r?: Reasoning): Record<string, unknown> {
+//
+// The encoding is per vendor: OpenRouter normalises reasoning under its own `reasoning` object, and
+// "minimal" exists only on OpenAI's GPT-5 family — Groq, xAI and the rest reject it, so "off" maps
+// to the lowest level every vendor accepts.
+export function reasoningEffort(r?: Reasoning, vendor?: string, model = ""): Record<string, unknown> {
   if (!r || r === "auto") return {}; // auto = whatever the model does on its own
-  return { reasoning_effort: r === "off" ? "minimal" : r };
+  const level = r === "off" ? (vendor === "openai" && /gpt-5/.test(model) ? "minimal" : "low") : r;
+  if (vendor === "openrouter") return { reasoning: { effort: level } };
+  return { reasoning_effort: level };
 }

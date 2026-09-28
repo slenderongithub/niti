@@ -29,19 +29,22 @@ test("tool_use blocks translate both ways, and tool results go back as a user tu
 
   // The system prompt is cache_control-marked (see the dedicated caching tests below); its text is
   // otherwise unchanged.
-  expect(seen.params.system).toEqual([{ type: "text", text: "SYS", cache_control: { type: "ephemeral" } }]);
-  // The second-to-last message (index 1 of 3) is the prompt-caching breakpoint for the growing
-  // conversation prefix — its LAST content block carries cache_control, nothing else does.
+  const cc = { type: "ephemeral" };
+  expect(seen.params.system).toEqual([{ type: "text", text: "SYS", cache_control: cc }]);
+  // The assistant turn in the middle is neither the newest message nor the previous call's newest,
+  // so it carries no breakpoint.
   expect(seen.params.messages[1].content).toEqual([
     { type: "text", text: "checking" },
-    { type: "tool_use", id: "tu_0", name: "read_file", input: { path: "a.ts" }, cache_control: { type: "ephemeral" } },
+    { type: "tool_use", id: "tu_0", name: "read_file", input: { path: "a.ts" } },
   ]);
   // A tool result is a *user* message carrying tool_result blocks — not a "tool" role. It's the
-  // newest message, so it's deliberately NOT cache-marked (see caching tests).
+  // newest message, so it IS the breakpoint: written once now, read on every later call.
   expect(seen.params.messages[2]).toEqual({
     role: "user",
-    content: [{ type: "tool_result", tool_use_id: "tu_0", content: "contents" }],
+    content: [{ type: "tool_result", tool_use_id: "tu_0", content: "contents", cache_control: cc }],
   });
+  // …and the previous call's newest message is marked too, so this call reads what that one wrote.
+  expect(seen.params.messages[0]).toEqual({ role: "user", content: [{ type: "text", text: "look around", cache_control: cc }] });
   expect(out.toolCalls).toEqual([{ id: "tu_1", name: "shell", input: { command: "ls" } }]);
 });
 
@@ -110,15 +113,36 @@ test("a plain string user message becomes a one-block array when it's the cache 
   const p = new AnthropicProvider("claude-opus-4-8", "k");
   const seen = withStub(p, reply([{ type: "text", text: "hi" }]));
   const turns: Turn[] = [
-    { role: "user", text: "first message" }, // second-to-last → gets marked
-    { role: "user", text: "second message" }, // newest → left alone
+    { role: "user", text: "first message" },
+    { role: "user", text: "second message" }, // newest → the breakpoint
   ];
   await p.send("s", turns, []);
-  expect(seen.params.messages[0]).toEqual({
+  expect(seen.params.messages[0]).toEqual({ role: "user", content: "first message" });
+  expect(seen.params.messages[1]).toEqual({
     role: "user",
-    content: [{ type: "text", text: "first message", cache_control: { type: "ephemeral" } }],
+    content: [{ type: "text", text: "second message", cache_control: { type: "ephemeral" } }],
   });
-  expect(seen.params.messages[1]).toEqual({ role: "user", content: "second message" });
+});
+
+test("reasoning maps to effort; thinking off asks for low effort and never sends type:disabled", async () => {
+  const p = new AnthropicProvider("claude-opus-5", "k", undefined, 16000, "medium");
+  const seen = withStub(p, reply([{ type: "text", text: "" }]));
+  await p.send("s", [{ role: "user", text: "x" }], []);
+  expect(seen.params.thinking).toEqual({ type: "adaptive" });
+  expect(seen.params.output_config).toEqual({ effort: "medium" });
+
+  p.setThinking(false);
+  await p.send("s", [{ role: "user", text: "x" }], []);
+  expect(seen.params.thinking).toBeUndefined(); // disabled would 400 on Opus 5.5
+  expect(seen.params.output_config).toEqual({ effort: "low" });
+});
+
+test("pre-4.6 models get neither adaptive thinking nor effort — both 400 there", async () => {
+  const p = new AnthropicProvider("claude-haiku-4-5", "k", undefined, 16000, "high");
+  const seen = withStub(p, reply([{ type: "text", text: "" }]));
+  await p.send("s", [{ role: "user", text: "x" }], []);
+  expect(seen.params.thinking).toBeUndefined();
+  expect(seen.params.output_config).toBeUndefined();
 });
 
 test("a replayed assistant turn ending in a thinking block is left unmarked rather than sending an invalid cache_control", async () => {

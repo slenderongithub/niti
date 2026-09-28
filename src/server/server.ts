@@ -260,7 +260,7 @@ export function startServer(
           root: engine.root,
           lsp: engine.lsp?.list() ?? [],
           mcp: engine.mcp?.servers?.() ?? [],
-          contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider)])),
+          contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider, c.model)])),
           settings: engine.settings, // live toggles; change with POST /settings
           prefs,
           auto: engine.auto, // default permission mode: true = auto-approve

@@ -13,7 +13,7 @@ interface RawModel {
   limit?: { context?: number };
   tool_call?: boolean; // niti is a tool-use loop; a model without this cannot run an agent at all
   modalities?: { output?: string[] };
-  cost?: { input?: number; output?: number }; // $ per 1M tokens, same unit as pricing.ts
+  cost?: { input?: number; output?: number; cache_read?: number }; // $ per 1M tokens, same unit as pricing.ts
 }
 interface RawProvider {
   id: string;
@@ -75,6 +75,7 @@ async function main() {
 
   const entries: string[] = [];
   const prices: string[] = [];
+  const contexts: string[] = [];
   const hostsById: [string, string][] = []; // id → host, for the duplicate-vendor check below
   let skipped = 0;
   let generated = 0;
@@ -132,7 +133,13 @@ async function main() {
     // real number, and it stays in step with the catalog because it is regenerated with it.
     for (const [id, m] of usable.slice(0, 8)) {
       if (typeof m.cost?.input === "number" && typeof m.cost?.output === "number") {
-        prices.push(`  ${JSON.stringify(`${p.id}/${id}`)}: { input: ${m.cost.input}, output: ${m.cost.output} },`);
+        const cacheRead = typeof m.cost.cache_read === "number" ? `, cacheRead: ${m.cost.cache_read}` : "";
+        prices.push(`  ${JSON.stringify(`${p.id}/${id}`)}: { input: ${m.cost.input}, output: ${m.cost.output}${cacheRead} },`);
+      }
+      // The real window per model: compaction triggers at 95% of it, so a provider-wide guess lets a
+      // small-window model overflow before compacting (or compacts a large one far too early).
+      if (typeof m.limit?.context === "number" && m.limit.context > 0) {
+        contexts.push(`  ${JSON.stringify(`${p.id}/${id}`)}: ${m.limit.context},`);
       }
     }
     const label = JSON.stringify(p.name || p.id);
@@ -164,8 +171,14 @@ ${entries.join("\n")}
 
 // Exact "provider/model" → USD per 1M tokens, straight from models.dev. pricing.ts consults this
 // before its hand-maintained prefix table.
-export const GENERATED_PRICES: Record<string, { input: number; output: number }> = {
+export const GENERATED_PRICES: Record<string, { input: number; output: number; cacheRead?: number }> = {
 ${prices.join("\n")}
+};
+
+// Exact "provider/model" → context window in tokens, from models.dev. catalog.ts consults this
+// before its hand-maintained prefix table.
+export const GENERATED_CONTEXT: Record<string, number> = {
+${contexts.join("\n")}
 };
 `;
   await Bun.write("src/providers/catalog.generated.ts", out);
