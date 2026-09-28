@@ -68,6 +68,7 @@ func (m Model) keymap() []binding {
 			{keys: []string{"y", "Y"}, label: "y", desc: "Allow once", help: "run this one call", footer: true, run: answer(true, "")},
 			{keys: []string{"a", "A"}, label: "a", desc: "Allow for " + who, help: "run it, and stop asking " + who + " for this tool this session", footer: true, run: answer(true, "agent")},
 			{keys: []string{"n", "N", "esc"}, label: "n", desc: "Deny", help: "refuse it; the agent is told and carries on", footer: true, run: answer(false, "")},
+			{keys: []string{"t", "T"}, label: "t", desc: "Deny & tell", help: "refuse it and type what " + who + " should do instead", footer: true, run: (*Model).denyAndTell},
 		}
 		// While a decision is pending nothing else may fire — a stray ctrl+p mid-approval used to
 		// open a popup over the question it was supposed to answer.
@@ -106,8 +107,16 @@ func (m Model) keymap() []binding {
 		if len(m.suggestions) > 0 && m.input.Value() == "" {
 			local = append(local, binding{keys: []string{"tab"}, label: "tab", desc: "Use suggestion", help: "put the suggested next prompt in the prompt (edit it, or enter to send)", footer: true, run: (*Model).acceptSuggestion})
 		}
+		if m.running() {
+			local = append(local, binding{keys: []string{"esc"}, label: "esc", desc: "Interrupt", help: "stop the run — agents finish the step they're on", footer: true, run: (*Model).interrupt})
+		}
+		if len(m.history) > 0 && (m.input.Value() == "" || m.histPos > 0) {
+			local = append(local,
+				binding{keys: []string{"up"}, label: "↑↓", desc: "History", help: "earlier prompts (↓ back toward the newest)", run: func(m *Model) tea.Cmd { return m.historyStep(1) }},
+				binding{keys: []string{"down"}, run: func(m *Model) tea.Cmd { return m.historyStep(-1) }})
+		}
 		local = append(local, []binding{
-			{keys: []string{"enter"}, label: "enter", desc: "Send", help: "send the prompt (a goal, or a /command)", run: (*Model).enter},
+			{keys: []string{"enter"}, label: "enter", desc: "Send", help: "send the prompt: a goal, a question, a /command, or !cmd to run a command here; mid-run it steers the working agent", run: (*Model).enter},
 			{keys: []string{"shift+tab"}, label: "⇧tab", desc: other, help: "switch between BUILD (agents act) and PLAN (the lead only plans)", footer: true, run: (*Model).toggleMode},
 			{keys: []string{"alt+enter", "shift+enter", "ctrl+j"}, label: "alt+enter", desc: "Newline", help: "a line break inside the prompt (also shift+enter, ^j)", run: (*Model).newline},
 			{keys: []string{"esc"}, label: "esc", desc: "All agents", help: "leave a single agent's view for the stacked overview", run: func(m *Model) tea.Cmd { m.focus = ""; return nil }},
@@ -303,11 +312,31 @@ func (m *Model) newline() tea.Cmd {
 
 func (m *Model) enter() tea.Cmd {
 	text := strings.TrimSpace(strings.ReplaceAll(m.input.Value(), newlineMark, "\n"))
+	if text != "" {
+		m.remember(text)
+	}
+	// !cmd runs a command here, on the user's own authority, and shows its output.
+	if cmd, ok := strings.CutPrefix(text, "!"); ok {
+		m.input.SetValue("")
+		return m.bang(cmd)
+	}
+	// After "deny & tell": this message is the what-to-do-instead, for that agent.
+	if m.steerTo != "" && text != "" && !strings.HasPrefix(text, "/") {
+		to := m.steerTo
+		m.steerTo = ""
+		m.input.SetValue("")
+		return m.steer(to, text)
+	}
+	// Mid-run, a message steers the agent that's working instead of replacing the whole plan.
+	if m.running() && text != "" && !strings.HasPrefix(text, "/") {
+		m.input.SetValue("")
+		return m.steer(m.steerTarget(), text)
+	}
 	// Every plain message is a BRAND NEW goal to the core: the planner only ever sees the text just
 	// typed, never the previous run's. So a follow-up sent while a half-finished plan is still on
 	// the board silently throws that plan away and re-plans from a sentence that was never meant to
 	// stand on its own. Hold the first press and say so; /resume continues the real plan instead.
-	if text != "" && !strings.HasPrefix(text, "/") && m.status != "running" && m.unfinishedTasks() > 0 {
+	if text != "" && !strings.HasPrefix(text, "/") && !m.running() && m.unfinishedTasks() > 0 {
 		if m.resubmitArm.IsZero() || time.Since(m.resubmitArm) > resubmitGrace {
 			m.resubmitArm = time.Now()
 			m.status = fmt.Sprintf("%d unfinished task(s) — /resume continues them; enter again starts a new goal and drops the plan", m.unfinishedTasks())

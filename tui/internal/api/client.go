@@ -286,6 +286,12 @@ func (c *Client) Prompt(text, mode string) error {
 
 func (c *Client) Cancel() error { return c.do("POST", "/cancel", nil, nil) }
 
+// MessageAgent drops a note into a running agent's inbox — read at its next turn, so it steers the
+// work in progress instead of starting a new goal.
+func (c *Client) MessageAgent(agentID, text string) error {
+	return c.do("POST", "/agents/"+url.PathEscape(agentID)+"/message", map[string]string{"text": text}, nil)
+}
+
 // Command mirrors one entry of the server-side slash-command registry (src/commands/registry.ts).
 // The TUI renders this list rather than hardcoding a switch, so the TUI and the web dashboard stay
 // in step as commands are added.

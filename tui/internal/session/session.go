@@ -141,6 +141,10 @@ type Model struct {
 	card        *api.Event // the last run's summary card (turn_summary), shown until the next goal
 	suggestions []string   // next prompts the lead suggested; the first is the prompt's ghost text
 	notify      string     // a notification to send once this batch of events is applied (notifyCmd)
+	steerTo     string     // after "deny & tell": the agent the next message goes to
+	history     []string   // sent prompts, oldest first (.niti/history)
+	histPos     int        // ↑/↓ browsing: steps back from the newest; 0 = not browsing
+	active      bool       // a run is going (session started, not yet ended or cancelled)
 	unseen      int // lines that arrived while scrolled up — shown in the transcript's border
 	totals    api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
@@ -205,6 +209,7 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 			ctxLimit: sess.ContextLimits[c.ID], showDur: m.prefs["showTurnDuration"],
 		}
 	}
+	m.history = loadHistory(sess.Root)
 	// "Open agents view by default": start on the lead's tab (or the first agent) rather than the
 	// stacked overview. Same field ctrl+g / alt+1..9 set, so esc still returns to the overview.
 	if m.prefs["openAgentsView"] && len(m.order) > 1 {
@@ -331,6 +336,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.status = msg.err.Error()
+		return m, nil
+
+	case steerResultMsg:
+		if msg.err != nil {
+			m.status = "couldn't reach " + msg.to + ": " + msg.err.Error()
+		} else {
+			m.status = "→ " + msg.to + " will read that at its next step"
+		}
+		return m, nil
+
+	case bangResultMsg:
+		m.status = ""
+		m.out = output{open: true, title: "! " + truncate(msg.cmd, 50), lines: strings.Split(msg.out, "\n")}
+		m.out.top = m.outputMaxTop()
 		return m, nil
 
 	case actionResultMsg:
@@ -738,6 +757,9 @@ func (m *Model) apply(e api.Event) {
 			m.status = "the core exited — see .niti/core.log; restart niti"
 		}
 	case "session":
+		// A real flag, not the status text: the status line carries every message ("→ Coder: …"),
+		// and deciding "is a run going?" by comparing it to "running" broke on the first one.
+		m.active = e.State == "started"
 		if e.State == "started" {
 			m.goal = e.Goal
 			m.progress = 0

@@ -431,6 +431,9 @@ func (m Model) mainPane(mw, h int, compact bool) string {
 	default:
 		sub = fmt.Sprintf("%d agents · %s tok", len(m.order), fmtTok(m.totals.InputTokens+m.totals.OutputTokens))
 	}
+	if r := m.runningLine(); r != "" {
+		sub = r
+	}
 	if m.scrollBack > 0 {
 		sub = fmt.Sprintf("scrolled back · %d new below · G follows", m.unseen)
 	}
