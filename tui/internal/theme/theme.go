@@ -203,28 +203,35 @@ func Use(name string) bool {
 
 func Current() string { return current }
 
-// SetLight is the Settings "light mode" switch. Light palettes are authored, not derived — scaling
-// dark-theme accents toward black gave muddy colors — so on switches to the first light theme and
-// off returns to the dark theme it came from. Off does nothing when light mode didn't make the
-// switch: a light theme picked directly in the theme picker stays picked.
+// SetLight is the Settings "light mode" switch. Every dark theme has an authored light sibling
+// named "<theme> light" — same hue identity, its own values, not an inversion — and the switch
+// moves between the two. A theme with no sibling (a user theme) falls back to the first light
+// theme, and switching off returns to whatever dark theme that replaced.
 func SetLight(on bool) {
 	if on == IsLight() {
 		return
 	}
-	if !on {
-		if lightFrom != "" {
-			Use(lightFrom)
-			lightFrom = ""
+	if on {
+		if Use(current + " light") {
+			return
+		}
+		for _, n := range Names() {
+			if Themes[n].Light {
+				lightFrom = current
+				Use(n)
+				return
+			}
 		}
 		return
 	}
-	for _, n := range Names() {
-		if Themes[n].Light {
-			lightFrom = current
-			Use(n)
-			return
-		}
+	switch {
+	case lightFrom != "":
+		Use(lightFrom)
+	case Use(strings.TrimSuffix(current, " light")):
+	default:
+		Use("graphite")
 	}
+	lightFrom = ""
 }
 
 func IsLight() bool { return Themes[current].Light }

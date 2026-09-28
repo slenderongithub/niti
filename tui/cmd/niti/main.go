@@ -419,7 +419,11 @@ func applyTheme(sess api.SessionInfo) {
 	if sess.Theme != "" && !theme.Use(sess.Theme) {
 		fmt.Fprintf(os.Stderr, "niti: unknown theme %q — using %s\n", sess.Theme, theme.Current())
 	}
-	theme.SetLight(sess.Prefs["lightMode"])
+	// Only ever switches *to* light at startup: with the pref off, a light theme the user picked
+	// directly in the theme picker must stay picked, not be flipped back to its dark sibling.
+	if sess.Prefs["lightMode"] {
+		theme.SetLight(true)
+	}
 }
 
 func main() {

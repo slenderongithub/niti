@@ -16,13 +16,13 @@
 }
 @media (prefers-color-scheme: light) {
   :root {
-    /* …and "paper" in a light browser. */
-    --bg: #f6f4ef;
-    --panel: #e6e2d8;
-    --panel-2: #efece5;
-    --ink: #2b2a27;
-    --muted: #6f6a61;
-    --line: #d4cec1;
+    /* …and "graphite light" in a light browser. */
+    --bg: #f5f6f8;
+    --panel: #e2e5ea;
+    --panel-2: #eceef2;
+    --ink: #1f2329;
+    --muted: #5b6270;
+    --line: #cdd2da;
   }
 }
 * { box-sizing: border-box; }
