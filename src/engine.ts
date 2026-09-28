@@ -204,6 +204,7 @@ export class Engine {
         maxTurns: opts.maxTurns,
         verify: checks,
         shouldStop: () => this.cancelled,
+        abortSignal: () => this.abortCtl?.signal,
       });
       this.agents.push(agent);
       this.byId.set(c.id, agent);
@@ -268,6 +269,7 @@ export class Engine {
 
   // Conversation memory for the planner (see Exchange). /clear empties it along with the board.
   readonly history: Exchange[] = [];
+  private abortCtl?: AbortController; // the current run's; cancel() aborts it
   private lastSummary?: string; // the lead's integrate summary for the run in progress
   private lastNext: string[] = []; // …and its suggested next prompts
 
@@ -303,6 +305,7 @@ export class Engine {
     }
     this.busy = true;
     this.cancelled = false;
+    this.abortCtl = new AbortController();
     this.lastGoal = goal;
     this.lastNext = [];
     this.hub.publish({ kind: "session", state: "started", goal });
@@ -446,6 +449,7 @@ export class Engine {
 
   cancel(): void {
     this.cancelled = true;
+    this.abortCtl?.abort(); // and stop the model calls in flight, not just the next turn
     // An agent parked on an approval is not "in flight" in any useful sense — it is waiting on a
     // human who has just said stop. Without this the promise never settles: the agent never
     // returns, `busy` stays true, and no further submit() is ever possible.

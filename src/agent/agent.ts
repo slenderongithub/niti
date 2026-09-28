@@ -1,4 +1,4 @@
-import type { Provider, Turn, ToolResult, ToolSpec, ToolCall, Usage, Reasoning } from "../providers/provider.ts";
+import type { Provider, Turn, ToolResult, ToolSpec, ToolCall, Usage, Reasoning, ProviderReply, OnDelta } from "../providers/provider.ts";
 import { summarizeError } from "../providers/provider.ts";
 import type { Bus } from "../events/bus.ts";
 import type { Approve } from "../approval.ts";
@@ -249,6 +249,9 @@ export interface AgentDeps {
   // tasks, so an agent mid-task kept paying for every remaining turn — up to 12 more billed calls
   // per agent, each of which could still write files.
   shouldStop?: () => boolean;
+  // The current run's abort signal (the user pressed esc). Aborts the model call in flight, where
+  // shouldStop only takes effect between turns.
+  abortSignal?: () => AbortSignal | undefined;
 }
 
 export interface RunOptions {
@@ -293,6 +296,7 @@ export class Agent {
   private lsp?: LspRegistry;
   private onWrite?: (relPath: string) => void;
   private shouldStop?: () => boolean;
+  private abortSignal?: () => AbortSignal | undefined;
   private maxTurns: number;
   private verify: Check[];
   // Rebuilt when the root moves (worktree mode repoints it mid-session) — resolving a package
@@ -336,6 +340,7 @@ export class Agent {
     this.lsp = deps.lsp;
     this.onWrite = deps.onWrite;
     this.shouldStop = deps.shouldStop;
+    this.abortSignal = deps.abortSignal;
   }
 
   // Final assistant text of the most recent run/respond — the scheduler uses it for hand-offs.
@@ -414,7 +419,7 @@ export class Agent {
         this.maskOldObservations(turns, ctx);
         const tools = this.buildTools(allowed, ctx);
         this.provider.setThinking?.(this.settings.thinkingMode);
-        const reply = await this.provider.send(this.config.systemPrompt, turns, tools, onDelta);
+        const reply = await this.send(turns, tools, onDelta);
         if (reply.text) {
           finalText = reply.text; // per-call, unlike lastText, which every concurrent loop shares
           this.lastText = reply.text;
@@ -556,6 +561,13 @@ export class Agent {
       this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
       return { outcome: "exhausted", text: finalText, error: this.lastError };
     } catch (err) {
+      if (this.abortSignal?.()?.aborted) {
+        // The user interrupted: say so plainly, not as a provider failure with a stack of details.
+        this.lastError = "interrupted";
+        if (sessionId) this.store?.setStatus(sessionId, "failed");
+        this.bus.publish({ agentId: id, type: "warning", payload: "interrupted", time: Date.now() });
+        return { outcome: "failed", text: finalText, error: this.lastError };
+      }
       const outcome: RunOutcome = isExhaustion(err) ? "exhausted" : "failed";
       this.lastError = summarizeError(err);
       if (sessionId) this.store?.setStatus(sessionId, outcome);
@@ -564,6 +576,20 @@ export class Agent {
     } finally {
       this.inFlightCount--;
     }
+  }
+
+  // One model call, abortable. The signal goes to the provider (which cancels the HTTP request) and
+  // the call is also raced against it, so an interrupt lands at once even with a provider (or a
+  // compatible shim) that ignores the signal.
+  private async send(turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
+    const signal = this.abortSignal?.();
+    if (signal?.aborted) throw new Error("interrupted");
+    const call = this.provider.send(this.config.systemPrompt, turns, tools, onDelta, signal);
+    if (!signal) return call;
+    return Promise.race([
+      call,
+      new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("interrupted")), { once: true })),
+    ]);
   }
 
   // Answer a teammate's question. A bounded agentic loop (can read files / call tools to ground the
@@ -632,7 +658,7 @@ export class Agent {
         this.injectNotes(turns, sessionId);
         this.maskOldObservations(turns, ctx);
         this.provider.setThinking?.(this.settings.thinkingMode);
-        const reply = await this.provider.send(this.config.systemPrompt, turns, this.buildTools(allowed, ctx), onDelta);
+        const reply = await this.send(turns, this.buildTools(allowed, ctx), onDelta);
         if (reply.text) text = reply.text;
         if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
         // run() warns at 85% and compacts at 95%; this loop had neither, so a fork doing real work
@@ -679,7 +705,7 @@ export class Agent {
 
   // Raw single call, no tools/events — used by the orchestrator to plan and to integrate.
   async ask(prompt: string): Promise<string> {
-    const reply = await this.provider.send(this.config.systemPrompt, [{ role: "user", text: prompt }], []);
+    const reply = await this.send([{ role: "user", text: prompt }], []);
     // Every other model call in this file records its usage; this one did not, so the lead's
     // planning, replanning, integrate and /debate turns were spent off the books — /usage, /cost,
     // the TUI sidebar and the dashboard all under-reported the run by the orchestrator's whole

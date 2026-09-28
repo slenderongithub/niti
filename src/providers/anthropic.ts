@@ -92,7 +92,7 @@ export class AnthropicProvider implements Provider {
     };
   }
 
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply> {
     let messages: Anthropic.MessageParam[] = turns.map((t) => {
       if (t.role === "user") return { role: "user", content: t.text };
       if (t.role === "assistant") {
@@ -145,11 +145,11 @@ export class AnthropicProvider implements Provider {
 
     const msg = onDelta
       ? await (() => {
-          const stream = this.client.messages.stream(params);
+          const stream = this.client.messages.stream(params, { signal });
           stream.on("text", (delta) => onDelta(delta));
           return stream.finalMessage();
         })()
-      : await this.client.messages.create(params);
+      : await this.client.messages.create(params, { signal });
 
     return {
       ...blocksToReply(msg.content),

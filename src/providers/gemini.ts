@@ -27,7 +27,7 @@ export class GeminiProvider implements Provider {
     this.thinking = on;
   }
 
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply> {
     // Gemini roles are "user"/"model"; tool results are functionResponse parts paired by name.
     const contents = turns.map((t) => {
       if (t.role === "user") return { role: "user", parts: [{ text: t.text }] };
@@ -57,6 +57,7 @@ export class GeminiProvider implements Provider {
       contents: contents as any,
       config: {
         systemInstruction: sysPrompt,
+        ...(signal ? { abortSignal: signal } : {}),
         ...thinkingConfig(this.thinking ? this.reasoning : undefined, this.model),
         ...(this.maxOutput ? { maxOutputTokens: this.maxOutput } : {}),
         ...(tools.length

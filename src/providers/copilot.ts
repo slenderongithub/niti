@@ -116,7 +116,7 @@ export class CopilotProvider implements Provider {
     return this.inner;
   }
 
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
-    return (await this.client()).send(sysPrompt, turns, tools, onDelta);
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply> {
+    return (await this.client()).send(sysPrompt, turns, tools, onDelta, signal);
   }
 }

@@ -54,7 +54,7 @@ export class OpenAIProvider implements Provider {
     this.thinking = on;
   }
 
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply> {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: "system", content: sysPrompt },
     ];
@@ -107,7 +107,7 @@ export class OpenAIProvider implements Provider {
     };
 
     if (!onDelta) {
-      const res = await this.client.chat.completions.create(params);
+      const res = await this.client.chat.completions.create(params, { signal });
       const msg = res.choices[0]?.message;
       const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).flatMap((tc) =>
         tc.type === "function" ? [{ id: tc.id, name: tc.function.name, input: parseArgs(tc.function.arguments) }] : [],
@@ -124,7 +124,7 @@ export class OpenAIProvider implements Provider {
       // runtimes (llama.cpp servers, some vLLM builds) 400 on an unknown parameter, which turned
       // "no token accounting" into "streaming does not work at all" for offline users.
       ...(this.supportsUsageOption ? { stream_options: { include_usage: true } } : {}),
-    });
+    }, { signal });
     let text = "";
     let usage: ReturnType<typeof mapUsage>;
     const acc: Record<number, { id?: string; name?: string; args: string }> = {};
