@@ -9,8 +9,16 @@ on:
   pull_request:
 
 jobs:
+  # win32-x64 ships in every release, so it gets tested. Windows starts as non-blocking
+  # (continue-on-error) because it has never run before and its first results are unknown — drop
+  # that line once the Windows legs are green, so a Windows regression fails the build.
   core:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -23,7 +31,12 @@ jobs:
       - run: bun test src web
 
   tui:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

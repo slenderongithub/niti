@@ -699,6 +699,10 @@ func (m *Model) apply(e api.Event) {
 		}
 	// Synthesized client-side by streamWithReconnect — the core never sends these. Without them a
 	// dead core looked exactly like an idle one: agents "working", progress frozen, status stale.
+	// The core's replay buffer no longer held everything since our last event: say so, rather than
+	// let a partial transcript pass for the whole one after a long disconnect.
+	case "resync":
+		m.status = fmt.Sprintf("reconnected, but %d events were lost while away — output above may be incomplete (/transcript has what's left)", e.Missed)
 	case "connection":
 		switch e.State {
 		case "lost":

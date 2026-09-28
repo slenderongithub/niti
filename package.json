@@ -22,7 +22,8 @@
     "build:release": "bun run scripts/build-release.ts",
     "test": "bun test ./src ./web",
     "typecheck": "tsc --noEmit",
-    "gen:catalog": "bun run scripts/gen-catalog.ts"
+    "gen:catalog": "bun run scripts/gen-catalog.ts",
+    "bump": "bun run scripts/bump-version.ts"
   },
   "engines": {
     "node": ">=18"

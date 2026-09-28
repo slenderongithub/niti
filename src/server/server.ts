@@ -163,6 +163,10 @@ export function startServer(
           // replay from Last-Event-ID.
           if (controller.desiredSize !== null && controller.desiredSize < -1_000_000) close();
         };
+        // A client that was away longer than the ring buffer covers can't be backfilled completely.
+        // Tell it (seq = fromSeq, so its resume position doesn't move) before the partial backfill.
+        const missed = engine.hub.missedSince(fromSeq);
+        if (missed > 0) send({ kind: "resync", missed, seq: fromSeq, time: Date.now() });
         for (const e of engine.hub.replay(fromSeq)) send(e); // backfill so late joiners are consistent
         unsub = engine.hub.subscribe(send);
         ping = setInterval(() => {
