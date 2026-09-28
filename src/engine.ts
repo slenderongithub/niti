@@ -254,9 +254,13 @@ export class Engine {
     // it does get the recent exchanges, so "now add tests" knows what "it" was.
     this.lastSummary = undefined;
     let result: RunResult | undefined;
-    await this.runSession(goal, async (deps) => {
-      result = await runProject(goal, this.agents, this.orch, this.bus, { ...deps, planOnly: opts.planOnly, history: this.history });
-    });
+    await this.runSession(
+      goal,
+      async (deps) => {
+        result = await runProject(goal, this.agents, this.orch, this.bus, { ...deps, planOnly: opts.planOnly, history: this.history });
+      },
+      () => result?.kind === "work" && !opts.planOnly, // a chat reply or an answer gets no summary card
+    );
     const outcome = result?.text ?? this.lastSummary ?? `${this.orch.all.filter((t) => t.status === "done").length} of ${this.orch.all.length} tasks done`;
     this.history.push({ goal, outcome });
     if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
@@ -265,11 +269,13 @@ export class Engine {
   // Conversation memory for the planner (see Exchange). /clear empties it along with the board.
   readonly history: Exchange[] = [];
   private lastSummary?: string; // the lead's integrate summary for the run in progress
+  private lastNext: string[] = []; // …and its suggested next prompts
 
   // Continue the tasks a previous session left unfinished, each agent seeded with that task's
   // stored conversation. Requires a store — without one there is no history to resume from.
   async resume(): Promise<void> {
     const store = this.store;
+    this.lastSummary = undefined;
     await this.runSession("(resumed session)", (deps) =>
       resumeProject(this.agents, this.orch, this.bus, {
         ...deps,
@@ -282,7 +288,7 @@ export class Engine {
     );
   }
 
-  private async runSession(goal: string, run: (deps: RunnerDeps) => Promise<unknown>): Promise<void> {
+  private async runSession(goal: string, run: (deps: RunnerDeps) => Promise<unknown>, summarize: () => boolean = () => true): Promise<void> {
     if (this.busy) throw new Error("a task is already running");
     if (this.worktreeEnabled) {
       if (this.worktreeHandle) {
@@ -298,13 +304,28 @@ export class Engine {
     this.busy = true;
     this.cancelled = false;
     this.lastGoal = goal;
+    this.lastNext = [];
     this.hub.publish({ kind: "session", state: "started", goal });
+    // What this run changed, for the summary card: +/- per file, summed over every edit to it.
+    const started = Date.now();
+    const before = { tokens: this.totalTokens(), cost: this.cost().cost };
+    const files = new Map<string, { added: number; removed: number }>();
+    const stopWatching = this.bus.subscribe((e) => {
+      if (e.type !== "file_edit" || !e.path || e.phase !== "end") return;
+      const f = files.get(e.path) ?? { added: 0, removed: 0 };
+      f.added += e.added ?? 0;
+      f.removed += e.removed ?? 0;
+      files.set(e.path, f);
+    });
     try {
       await run({
         messageBus: this.messageBus,
         onOrchestration: (e) => {
           this.hub.publish({ kind: "orchestration", event: e, time: e.time });
-          if (e.type === "integrate") this.lastSummary = e.summary;
+          if (e.type === "integrate") {
+            this.lastSummary = e.summary;
+            this.lastNext = e.next ?? [];
+          }
           // Persisted on every board change, not only after a clean finish — a crash or kill
           // mid-run used to leave `niti resume` reloading the board from the run before.
           saveTasks(this.orch.all);
@@ -314,10 +335,27 @@ export class Engine {
         shouldStop: () => this.cancelled,
       });
     } finally {
+      stopWatching();
       saveTasks(this.orch.all); // persist so `niti resume` can reload
       this.busy = false;
       if (this.worktreeEnabled) for (const a of this.agents) a.setRoot(this.root); // LSP/watcher never left the real root
       this.emitUsage();
+      if (summarize()) {
+        const cost = this.cost();
+        this.hub.publish({
+          kind: "turn_summary",
+          goal,
+          ok: this.orch.all.length > 0 && this.orch.all.every((t) => t.status === "done"),
+          cancelled: this.cancelled,
+          summary: this.lastSummary ?? "",
+          next: this.lastNext,
+          files: [...files].map(([path, f]) => ({ path, ...f })),
+          durationMs: Date.now() - started,
+          tokens: this.totalTokens() - before.tokens,
+          cost: cost.cost - before.cost,
+          costKnown: cost.costKnown,
+        });
+      }
       this.hub.publish({ kind: "session", state: this.cancelled ? "cancelled" : "ended" });
     }
   }
@@ -537,6 +575,11 @@ export class Engine {
   close(): void {
     this.watcher?.close();
     this.lsp?.close();
+  }
+
+  private totalTokens(): number {
+    const t = this.usage.totals();
+    return t.inputTokens + t.outputTokens;
   }
 
   emitUsage(): void {

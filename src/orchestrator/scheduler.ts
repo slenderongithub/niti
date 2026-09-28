@@ -3,7 +3,7 @@ import type { Bus } from "../events/bus.ts";
 import type { TaskNode } from "./task.ts";
 import type { MessageBus } from "../messaging/message-bus.ts";
 import type { Turn } from "../providers/provider.ts";
-import { replan, normalizePlan, type RoleInfo } from "./planner.ts";
+import { replan, normalizePlan, extractJson, type RoleInfo } from "./planner.ts";
 
 // Orchestration lifecycle events — a higher-level stream than per-agent AgentEvents. The server
 // forwards these over SSE so the TUI/dashboard can draw DAG progress and a completion percentage.
@@ -16,7 +16,7 @@ export type OrchestrationEvent =
   | { type: "replan"; taskId: string; role: string; action: "retry" | "redirect" | "inject" | "accept"; reason?: string; time: number }
   | { type: "review"; taskId: string; reviewer: string; phase: "requested" | "approved" | "changes_requested"; time: number }
   | { type: "reassign"; taskId: string; role: string; time: number }
-  | { type: "integrate"; summary: string; time: number }
+  | { type: "integrate"; summary: string; next?: string[]; time: number }
   | { type: "complete"; completed: number; total: number; cancelled?: boolean; time: number };
 
 export interface SchedulerDeps {
@@ -378,12 +378,15 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
         .filter((t) => t.output)
         .map((t) => `### ${t.id} — ${t.description} (${t.assignedTo})\n${t.output}`)
         .join("\n\n");
-      const summary = await lead.ask(
-        `As the orchestrator, review the finished project.\n\nTasks:\n${board}\n\nOutputs:\n${outputs}\n\n` +
-          `Summarize what was built, how the pieces fit together, and any gaps or follow-ups (3-6 sentences).`,
+      const raw = await lead.ask(
+        `As the orchestrator, review the finished work.\n\nTasks:\n${board}\n\nOutputs:\n${outputs}\n\n` +
+          `Reply with ONLY JSON: {"summary": ["…", "…"], "next": ["…"]}.\n` +
+          `- summary: 2-6 short bullet lines for the user — what changed (name files), what was verified, what is still open. No preamble.\n` +
+          `- next: up to 3 short next requests the user is likely to send now (imperative, under 60 characters each, e.g. "run the full test suite"). Empty if the work is plainly finished.`,
       );
+      const { summary, next } = parseIntegrate(raw);
       bus?.publish({ agentId: lead.config.id, type: "message", payload: summary, time: Date.now() });
-      emit?.({ type: "integrate", summary, time: Date.now() });
+      emit?.({ type: "integrate", summary, next, time: Date.now() });
     } catch (err) {
       bus?.publish({ agentId: lead.config.id, type: "error", payload: `integrate failed: ${err instanceof Error ? err.message : err}`, time: Date.now() });
     }
@@ -398,4 +401,16 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     cancelled: deps.shouldStop?.() ?? false,
     time: Date.now(),
   });
+}
+
+// The integrate reply as bullets + next-step suggestions. A model that ignores the JSON contract
+// still produces a usable summary: its text, as-is, with no suggestions.
+export function parseIntegrate(raw: string): { summary: string; next: string[] } {
+  const j = extractJson(raw) as { summary?: unknown; next?: unknown } | undefined;
+  if (j && typeof j === "object" && !Array.isArray(j) && (Array.isArray(j.summary) || typeof j.summary === "string")) {
+    const bullets = Array.isArray(j.summary) ? j.summary.map(String).filter((s) => s.trim()) : [String(j.summary)];
+    const next = Array.isArray(j.next) ? j.next.map(String).map((s) => s.trim()).filter((s) => s && s.length <= 120).slice(0, 3) : [];
+    return { summary: bullets.map((b) => (Array.isArray(j.summary) ? `• ${b.replace(/^[-•*]\s*/, "")}` : b)).join("\n"), next };
+  }
+  return { summary: raw.trim(), next: [] };
 }

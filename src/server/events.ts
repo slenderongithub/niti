@@ -15,6 +15,21 @@ export type ServerEventBody =
   | { kind: "lock"; holders: { path: string; holder: string }[] }
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
   | { kind: "theme"; theme: string }
+  // The end of a run, as one card: the lead's summary, suggested next prompts, what changed, and
+  // what it took. Published once per work run (not for a chat reply or an answered question).
+  | {
+      kind: "turn_summary";
+      goal: string;
+      ok: boolean; // every task finished
+      cancelled: boolean;
+      summary: string;
+      next: string[];
+      files: { path: string; added: number; removed: number }[];
+      durationMs: number;
+      tokens: number;
+      cost: number;
+      costKnown: boolean;
+    }
   // Sent to one reconnecting client (never published) when the events it asked to replay have
   // already left the ring buffer — its view is incomplete, and it should say so rather than
   // present a partial history as the whole one.

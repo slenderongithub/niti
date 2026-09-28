@@ -518,3 +518,12 @@ test("the review gate truncates a very long reported output instead of sending i
   expect(reportedSection.length).toBe(4000); // capped at DEP_CONTEXT_MAX, not the full 10,000 chars
   expect(tasks[0]!.status).toBe("done"); // the (truncated) review still runs the gate correctly
 });
+
+test("parseIntegrate: bullets and next-step suggestions, or the plain text when the model ignores JSON", () => {
+  const { parseIntegrate } = require("./scheduler.ts") as typeof import("./scheduler.ts");
+  expect(parseIntegrate('{"summary":["Added src/cart.ts","- Tests pass"],"next":["add a test for empty carts"]}')).toEqual({
+    summary: "• Added src/cart.ts\n• Tests pass",
+    next: ["add a test for empty carts"],
+  });
+  expect(parseIntegrate("Built the cart. All good.")).toEqual({ summary: "Built the cart. All good.", next: [] });
+});

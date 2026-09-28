@@ -175,7 +175,12 @@ function onOrch(ev) {
   }
 }
 
+// Live-only events: a running command's latest output (several a second) and bare call ends. The
+// TUI animates them; here they would bury the agent's log under repeats of the same four lines.
+const LIVE_ONLY = new Set(["tool_output", "tool_end"]);
+
 function onAgentEvent(ae) {
+  if (LIVE_ONLY.has(ae.type)) return;
   const n = ensureNode(ae.agentId);
   if (!n) return;
   if (ae.type === "delta" || ae.type === "tool_call" || ae.type === "message" || ae.type === "thought") n.status = n.status === "done" ? "done" : "working";

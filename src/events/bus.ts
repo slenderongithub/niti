@@ -10,7 +10,11 @@ export type EventType =
   | "warning" // pre-emptive heads-up (e.g. approaching context limit)
   | "external_change" // a file changed outside niti (human edit, git checkout, formatter)
   | "done"
-  | "error";
+  | "error"
+  // The live view (all additive — a consumer that ignores them sees exactly what it saw before):
+  | "tool_output" // a running shell call's latest output lines (payload), throttled
+  | "tool_end" // end of a call that published no other end event (coordination tools, forks)
+  | "todo"; // the agent's checklist changed (todos), payload is the rendered list
 
 export interface AgentEvent {
   agentId: string;
@@ -24,6 +28,24 @@ export interface AgentEvent {
   path?: string;
   // "file_edit" only: a unified snippet of what changed (see snippetDiff), for the TUI feed.
   diff?: string;
+
+  // --- the live view (optional, additive) ---
+  // Pairs a call's start with its end and its streamed output: the provider's tool call id.
+  callId?: string;
+  phase?: "start" | "end";
+  tool?: string; // the tool's name, so a consumer needn't parse it out of payload
+  ok?: boolean; // end: whether the call succeeded (an error event is the failed end)
+  durationMs?: number;
+  exitCode?: number; // shell
+  outcome?: string; // end: the one line that stays in the transcript ("48 passed", "exit 1")
+  lines?: number; // end: how many lines of output there were in total
+  head?: string[]; // end: the first few output lines, for the collapsed view
+  tail?: string[]; // end: the last few
+  hunks?: { lines: { k: "+" | "-" | " "; t: string; o?: number; n?: number }[] }[]; // file_edit: the change, numbered
+  added?: number;
+  removed?: number;
+  more?: number; // diff lines beyond what hunks carries
+  todos?: { text: string; status: string }[]; // "todo"
 }
 
 // Thin typed wrapper over node:events. Many agents publish; the log/TUI subscribes.

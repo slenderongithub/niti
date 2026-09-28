@@ -11,7 +11,7 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, normalizePath, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, snippetDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
@@ -1073,9 +1073,46 @@ export class Agent {
     }
   }
 
+  // Every call that starts on screen also ends on screen. The paths below that already publish an
+  // end (a write's file_edit, a sandbox call's result, an error) mark it; anything else — forks,
+  // messaging, the todo tool — gets a plain tool_end here, so no live block spins forever.
+  private openCalls = new Set<string>();
+  private async execTool(call: ToolCall, allowed: string[], ctx: LoopCtx): Promise<string> {
+    const started = Date.now();
+    this.openCalls.add(call.id);
+    try {
+      return await this.execToolInner(call, allowed, ctx, started);
+    } finally {
+      if (this.openCalls.delete(call.id)) {
+        this.bus.publish({ agentId: this.config.id, type: "tool_end", payload: call.name, time: Date.now(), callId: call.id, phase: "end", tool: call.name, ok: true, durationMs: Date.now() - started });
+      }
+    }
+  }
+
+  // A running shell call's output, as the last few lines, at most ~7 times a second — enough to
+  // watch a test run scroll by without flooding the event stream (and its 2,000-event replay ring).
+  private streamOutput(call: ToolCall): (chunk: string) => void {
+    let buf = "";
+    let last = 0;
+    return (chunk) => {
+      buf = (buf + chunk).slice(-4000);
+      const now = Date.now();
+      if (now - last < 150) return;
+      last = now;
+      const lines = buf.replace(/\s+$/, "").split("\n").slice(-4);
+      this.bus.publish({ agentId: this.config.id, type: "tool_output", payload: lines.join("\n"), time: now, callId: call.id, tool: call.name });
+    };
+  }
+
+  // The fields every end event carries. Marks the call ended so the wrapper doesn't add another.
+  private endOf(call: ToolCall, started: number, ok: boolean) {
+    this.openCalls.delete(call.id);
+    return { callId: call.id, phase: "end" as const, tool: call.name, ok, durationMs: Date.now() - started };
+  }
+
   // Execute one tool call: coordination tools first, then approval + MCP/sandbox dispatch. Publishes
   // the tool_call / file_edit / error telemetry. Returns the string result fed back to the model.
-  private async execTool(call: ToolCall, allowed: string[], ctx: LoopCtx): Promise<string> {
+  private async execToolInner(call: ToolCall, allowed: string[], ctx: LoopCtx, started: number): Promise<string> {
     const id = this.config.id;
     const sessionId = ctx.sessionId;
     try {
@@ -1083,7 +1120,7 @@ export class Agent {
     } catch (err) {
       return `error: ${err instanceof Error ? err.message : err}`;
     }
-    this.bus.publish({ agentId: id, type: "tool_call", payload: `${call.name} ${JSON.stringify(call.input)}`.slice(0, 180), time: Date.now() });
+    this.bus.publish({ agentId: id, type: "tool_call", payload: `${call.name} ${JSON.stringify(call.input)}`.slice(0, 180), time: Date.now(), callId: call.id, phase: "start", tool: call.name });
 
     // Internal coordination tools: not sandboxed (whatever the fork or the peer then does goes
     // through these same gates on its own). spawn_fork *is* policy-checked, though — it used to
@@ -1092,7 +1129,7 @@ export class Agent {
     if (call.name === "spawn_fork") {
       const forkDecision = resolvePermission([this.config.permissions, ...this.permissionLayers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input);
       if (forkDecision === "deny") {
-        this.bus.publish({ agentId: id, type: "error", payload: "spawn_fork: denied by permission policy", time: Date.now() });
+        this.bus.publish({ agentId: id, type: "error", payload: "spawn_fork: denied by permission policy", time: Date.now(), ...this.endOf(call, started, false) });
         return "denied by permission policy";
       }
       return this.fork(String(call.input.goal ?? ""), ctx);
@@ -1101,7 +1138,7 @@ export class Agent {
     // it resolves above the permission gate exactly as the messaging tools do.
     if (call.name === "todo") {
       this.todos = parseTodos(call.input.items);
-      this.bus.publish({ agentId: id, type: "thought", payload: `plan: ${renderTodos(this.todos).replace(/\n/g, " · ")}`, time: Date.now() });
+      this.bus.publish({ agentId: id, type: "todo", payload: renderTodos(this.todos), time: Date.now(), todos: this.todos.map((t) => ({ text: t.text, status: t.status })) });
       return todoAck(this.todos);
     }
     if (MESSAGING_TOOLS.has(call.name) && this.messenger) {
@@ -1112,7 +1149,7 @@ export class Agent {
     // Mirrored from buildTools: filtering the *specs* stops a well-behaved model naming a tool it
     // wasn't offered, but a hallucinated or replayed name would otherwise still execute.
     if (isMcp && !this.mcpAllowed(allowed, call.name)) {
-      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: not in this agent's allowedTools`, time: Date.now() });
+      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: not in this agent's allowedTools`, time: Date.now(), ...this.endOf(call, started, false) });
       return `tool '${call.name}' not allowed for this agent`;
     }
     // Always prompts, even with a standing "always allow" grant or --auto — none of these can be
@@ -1142,7 +1179,7 @@ export class Agent {
     // A deny is policy, not a question: it short-circuits without queuing an approval, and it holds
     // in headless mode too (where there is no approver and everything else would just run).
     if (decision === "deny") {
-      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: denied by permission policy`, time: Date.now() });
+      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: denied by permission policy`, time: Date.now(), ...this.endOf(call, started, false) });
       return "denied by permission policy";
     }
     // A config `allow` can never downgrade a dangerous command, nor one reaching outside the project.
@@ -1206,7 +1243,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root);
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call) });
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo
@@ -1233,6 +1270,8 @@ export class Agent {
         }
       }
       const after = writeRel !== undefined ? await this.readForCheckpoint(writeRel) : undefined;
+      const result = summarizeResult(call.name, output);
+      const shellFailed = result.exitCode !== undefined && result.exitCode !== 0;
       this.bus.publish({
         agentId: id,
         type: kind,
@@ -1240,11 +1279,13 @@ export class Agent {
         time: Date.now(),
         path: writeRel,
         diff: after === undefined ? undefined : snippetDiff(writeRel!, before ?? null, after) || undefined,
+        ...this.endOf(call, started, !shellFailed),
+        ...(after === undefined ? { outcome: result.outcome, lines: result.lines, head: result.head, tail: result.tail, exitCode: result.exitCode } : diffHunks(before ?? null, after)),
       });
       return this.admit(call, output, ctx);
     } catch (err) {
       const output = `error: ${err}`;
-      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: ${output}`, time: Date.now() });
+      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: ${output}`, time: Date.now(), ...this.endOf(call, started, false), outcome: String(err).slice(0, 160) });
       return output;
     }
   }

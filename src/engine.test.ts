@@ -419,3 +419,31 @@ test("the engine remembers recent exchanges for follow-ups, bounded, and /clear 
   await new CommandRegistry().run(engine, "clear");
   expect(engine.history).toEqual([]);
 });
+
+test("a work run ends with one turn_summary card (files, bullets, suggestions); a chat reply gets none", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-summary-"));
+  let n = 0;
+  const p: Provider = {
+    async send(_s, turns) {
+      const last = [...turns].reverse().find((t) => t.role === "user");
+      const text = last && "text" in last ? last.text : "";
+      if (text.includes("User's message: hi")) return { text: '{"reply":"hello"}', toolCalls: [] };
+      if (text.includes("User's message:")) return { text: '[{"description":"make a","role":"lead"}]', toolCalls: [] };
+      if (text.includes("review the finished work")) return { text: '{"summary":["Created a.txt"],"next":["add b.txt"]}', toolCalls: [] };
+      n++;
+      if (n === 1) return { text: "", toolCalls: [{ id: "w1", name: "write_file", input: { path: "a.txt", content: "x\ny\n" } }] };
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const engine = new Engine({
+    configs: [{ id: "lead", provider: "anthropic", model: "x", role: "Lead", systemPrompt: "s", lead: true, allowedTools: ["write_file"], autoApprove: ["write_file"] }],
+    makeProvider: () => p, interactive: false, auto: true, root, repoMap: false,
+  });
+  const cards: any[] = [];
+  engine.hub.subscribe((e: ServerEvent) => e.kind === "turn_summary" && cards.push(e));
+  await engine.submit("hi");
+  expect(cards).toHaveLength(0);
+  await engine.submit("make a.txt");
+  expect(cards).toHaveLength(1);
+  expect(cards[0]).toMatchObject({ ok: true, summary: "• Created a.txt", next: ["add b.txt"], files: [{ path: "a.txt", added: 2, removed: 0 }] });
+});

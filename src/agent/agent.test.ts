@@ -1828,3 +1828,44 @@ test("a file whose earlier read was masked comes back in full when it is read ag
   expect(seenOutput(finalTurns, "r0")).toStartWith("[Previous output masked"); // a.txt's first read was masked…
   expect(seenOutput(finalTurns, "r13")).toContain("a.txt line 0"); // …so the re-read is the whole file, not "[unchanged: …]"
 });
+
+test("live view: every call's start gets exactly one end, with its result, diff hunks or outcome", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-live-"));
+  writeFileSync(join(root, "a.txt"), "one\ntwo\nthree\n");
+  let n = 0;
+  const p: Provider = {
+    async send() {
+      n++;
+      if (n === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "c1", name: "edit", input: { path: "a.txt", oldString: "two", newString: "TWO" } },
+            { id: "c2", name: "shell", input: { command: "git", args: ["--version"] } },
+            { id: "c3", name: "todo", input: { items: [{ text: "edit a.txt", status: "done" }] } },
+          ],
+        };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const bus = new Bus();
+  const events: any[] = [];
+  bus.subscribe((e) => events.push(e));
+  await new Agent({ ...cfg, allowedTools: ["edit", "shell"] }, p, bus, { root, approve: async () => true }).run("go");
+
+  for (const callId of ["c1", "c2", "c3"]) {
+    expect(events.filter((e) => e.callId === callId && e.phase === "start")).toHaveLength(1);
+    expect(events.filter((e) => e.callId === callId && e.phase === "end")).toHaveLength(1);
+  }
+  const edit = events.find((e) => e.callId === "c1" && e.phase === "end");
+  expect(edit.type).toBe("file_edit");
+  expect(edit).toMatchObject({ ok: true, added: 1, removed: 1 });
+  expect(edit.hunks[0].lines).toContainEqual({ k: "+", t: "TWO", n: 2 });
+  const sh = events.find((e) => e.callId === "c2" && e.phase === "end");
+  expect(sh).toMatchObject({ ok: true, exitCode: 0 });
+  expect(sh.outcome).toContain("git version");
+  expect(events.some((e) => e.type === "tool_output" && e.callId === "c2" && e.payload.includes("git version"))).toBe(true); // streamed live
+  expect(events.find((e) => e.type === "todo")?.todos).toEqual([{ text: "edit a.txt", status: "done" }]);
+  expect(events.find((e) => e.callId === "c3" && e.phase === "end")?.type).toBe("tool_end"); // coordination tool: generic end
+});
