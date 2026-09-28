@@ -149,22 +149,29 @@ func TestUserThemesLoadAndBadOnesAreSkipped(t *testing.T) {
 	}
 }
 
-// Light mode switches to the authored light theme and back to the exact dark theme it left; a
-// light theme picked directly is not undone by light mode being off.
-func TestLightModeSwitchesToAuthoredLightThemeAndBack(t *testing.T) {
+// Every dark theme has an authored light sibling, and light mode moves between the pair.
+func TestEveryDarkThemeHasALightSiblingAndLightModeMovesBetweenThem(t *testing.T) {
+	var raw []paletteFile
+	json.Unmarshal(palettesJSON, &raw)
+	for _, p := range raw {
+		if p.Light {
+			continue
+		}
+		if sib, ok := Themes[p.Name+" light"]; !ok || !sib.Light {
+			t.Errorf("%q has no light sibling", p.Name)
+		}
+	}
 	Use("tide")
 	SetLight(true)
-	if !IsLight() || Current() != "paper" {
-		t.Fatalf("light mode should select paper, got %q", Current())
+	if Current() != "tide light" || !IsLight() {
+		t.Fatalf("light mode on tide should give tide light, got %q", Current())
 	}
 	SetLight(false)
 	if Current() != "tide" {
-		t.Fatalf("light mode off should restore tide, got %q", Current())
+		t.Fatalf("light mode off should return to tide, got %q", Current())
 	}
-	Use("paper")
-	SetLight(false)
-	if Current() != "paper" {
-		t.Errorf("a directly picked light theme must stay, got %q", Current())
+	if !Use("paper") || Current() != "graphite light" {
+		t.Errorf("the former light theme name should load graphite light, got %q", Current())
 	}
 	Use("graphite")
 }
