@@ -154,6 +154,7 @@ type Event struct {
 	Holders  []Lock          `json:"holders"`
 	State    string          `json:"state"`
 	Goal     string          `json:"goal"`
+	Missed   int             `json:"missed"` // resync events: how many events were lost while disconnected
 	// usage events only: session spend so far. CostKnown is false when some agent's model has no
 	// published price, so the UI can show "$0.42+" instead of implying the total is complete.
 	Cost      float64 `json:"cost"`

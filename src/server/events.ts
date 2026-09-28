@@ -14,7 +14,11 @@ export type ServerEventBody =
   | { kind: "approval_request"; requests: { agentId: string; tool: string; input: Record<string, unknown> }[] }
   | { kind: "lock"; holders: { path: string; holder: string }[] }
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
-  | { kind: "theme"; theme: string };
+  | { kind: "theme"; theme: string }
+  // Sent to one reconnecting client (never published) when the events it asked to replay have
+  // already left the ring buffer — its view is incomplete, and it should say so rather than
+  // present a partial history as the whole one.
+  | { kind: "resync"; missed: number };
 
 export type ServerEvent = ServerEventBody & { seq: number; time: number };
 
@@ -37,6 +41,12 @@ export class EventHub {
   // Events with seq strictly greater than `fromSeq` (0 = everything still buffered).
   replay(fromSeq: number): ServerEvent[] {
     return this.buffer.filter((e) => e.seq > fromSeq);
+  }
+
+  // How many events after `fromSeq` fell out of the buffer before a client came back for them.
+  missedSince(fromSeq: number): number {
+    const oldest = this.buffer[0]?.seq;
+    return fromSeq > 0 && oldest !== undefined && oldest > fromSeq + 1 ? oldest - fromSeq - 1 : 0;
   }
 
   lastSeq(): number {
