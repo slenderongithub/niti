@@ -211,7 +211,9 @@ export const BUILTIN_COMMANDS: Command[] = [
         // A savings mechanism nobody can see delivers no visible value — show it whenever a
         // provider has actually reported any cache activity for this agent.
         const cache = usage.cacheReadTokens || usage.cacheWriteTokens ? ` (cache ${usage.cacheReadTokens}in ${usage.cacheWriteTokens}wr)` : "";
-        lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}${cache}`);
+        // Thinking is billed as output; showing its share explains an output count far above the text.
+        const thinking = usage.reasoningTokens ? ` (thinking ${usage.reasoningTokens})` : "";
+        lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}${cache}${thinking}`);
       }
       if (!lines.length) return { ok: true, message: "nothing spent yet" };
       return { ok: true, message: [...lines, `TOTAL $${total.toFixed(4)}${complete ? "" : "+"}`].join("\n") };

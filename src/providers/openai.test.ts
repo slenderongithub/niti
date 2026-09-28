@@ -109,9 +109,60 @@ test("stream_options is withheld from local runtimes, which reject unknown param
 
 test("reasoning_effort is sent only when asked for, since most catalog models reject it", () => {
   expect(reasoningEffort("high")).toEqual({ reasoning_effort: "high" });
-  expect(reasoningEffort("off")).toEqual({ reasoning_effort: "minimal" });
   expect(reasoningEffort("auto")).toEqual({}); // auto = leave the model's own default alone
   expect(reasoningEffort(undefined)).toEqual({});
+});
+
+test("reasoning is encoded per vendor: 'minimal' only on OpenAI's GPT-5, OpenRouter's own object", () => {
+  expect(reasoningEffort("off", "openai", "gpt-5-mini")).toEqual({ reasoning_effort: "minimal" });
+  expect(reasoningEffort("off", "openai", "o3")).toEqual({ reasoning_effort: "low" });
+  expect(reasoningEffort("off", "groq", "openai/gpt-oss-120b")).toEqual({ reasoning_effort: "low" }); // groq rejects minimal
+  expect(reasoningEffort("medium", "openrouter", "openai/gpt-5")).toEqual({ reasoning: { effort: "medium" } });
+});
+
+test("native OpenAI gets a prompt_cache_key and max_completion_tokens; compatible vendors get max_tokens", async () => {
+  const native = new OpenAIProvider("gpt-5", "k", undefined, undefined, undefined, { vendor: "openai", cacheKey: "niti-lead", maxOutput: 8000 });
+  const seenNative = withStub(native, reply({ content: "ok" }));
+  await native.send("S", [{ role: "user", text: "hi" }], []);
+  expect(seenNative.params.prompt_cache_key).toBe("niti-lead");
+  expect(seenNative.params.max_completion_tokens).toBe(8000);
+
+  const groq = new OpenAIProvider("llama-3.3-70b", "k", "https://api.groq.com/openai/v1", undefined, undefined, { vendor: "groq", cacheKey: "niti-lead", maxOutput: 8000 });
+  const seenGroq = withStub(groq, reply({ content: "ok" }));
+  await groq.send("S", [{ role: "user", text: "hi" }], []);
+  expect("prompt_cache_key" in seenGroq.params).toBe(false); // an OpenAI-only parameter
+  expect(seenGroq.params.max_tokens).toBe(8000);
+});
+
+test("usage: reasoning tokens and DeepSeek's cache-hit field are read", async () => {
+  const p = new OpenAIProvider("gpt-5", "k");
+  withStub(p, reply({ content: "ok" }, { prompt_tokens: 100, completion_tokens: 40, completion_tokens_details: { reasoning_tokens: 30 }, prompt_tokens_details: { cached_tokens: 64 } }));
+  expect((await p.send("S", [{ role: "user", text: "hi" }], [])).usage).toEqual({ inputTokens: 100, outputTokens: 40, cacheReadTokens: 64, reasoningTokens: 30 });
+
+  const ds = new OpenAIProvider("deepseek-chat", "k", "https://api.deepseek.com");
+  withStub(ds, reply({ content: "ok" }, { prompt_tokens: 100, completion_tokens: 5, prompt_cache_hit_tokens: 80, prompt_cache_miss_tokens: 20 }));
+  expect((await ds.send("S", [{ role: "user", text: "hi" }], [])).usage?.cacheReadTokens).toBe(80);
+});
+
+test("OpenRouter serving Claude gets cache_control breakpoints; other OpenRouter models don't", async () => {
+  const turns: Turn[] = [
+    { role: "user", text: "task" },
+    { role: "assistant", text: "", toolCalls: [{ id: "c0", name: "read_file", input: {} }] },
+    { role: "tool", results: [{ id: "c0", name: "read_file", output: "contents" }] },
+  ];
+  const claude = new OpenAIProvider("anthropic/claude-sonnet-5", "k", "https://openrouter.ai/api/v1", undefined, undefined, { vendor: "openrouter" });
+  const seen = withStub(claude, reply({ content: "ok" }));
+  await claude.send("SYS", turns, []);
+  const cc = { type: "ephemeral" };
+  expect(seen.params.messages[0].content).toEqual([{ type: "text", text: "SYS", cache_control: cc }]);
+  expect(seen.params.messages[1].content).toEqual([{ type: "text", text: "task", cache_control: cc }]); // previous call's newest
+  expect(seen.params.messages[3].content).toEqual([{ type: "text", text: "contents", cache_control: cc }]); // newest
+  expect(seen.params.usage).toEqual({ include: true });
+
+  const llama = new OpenAIProvider("meta-llama/llama-3.3-70b-instruct", "k", "https://openrouter.ai/api/v1", undefined, undefined, { vendor: "openrouter" });
+  const seenLlama = withStub(llama, reply({ content: "ok" }));
+  await llama.send("SYS", turns, []);
+  expect(seenLlama.params.messages[0].content).toBe("SYS");
 });
 
 test("setThinking(false) drops reasoning_effort from the request; true restores it", async () => {

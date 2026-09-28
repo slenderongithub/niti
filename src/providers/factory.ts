@@ -4,7 +4,7 @@ import { AnthropicProvider } from "./anthropic.ts";
 import { OpenAIProvider } from "./openai.ts";
 import { GeminiProvider } from "./gemini.ts";
 import { CopilotProvider } from "./copilot.ts";
-import { CATALOG, providerKeys } from "./catalog.ts";
+import { CATALOG, providerKeys, probeOllamaContext } from "./catalog.ts";
 import { resolveApiKey, resolveBaseURL } from "../auth/auth-store.ts";
 
 export function makeProvider(cfg: AgentConfig): Provider {
@@ -30,12 +30,19 @@ export function makeProvider(cfg: AgentConfig): Provider {
   }
   switch (entry.client) {
     case "anthropic":
-      return new AnthropicProvider(cfg.model, apiKey, baseURL);
+      return new AnthropicProvider(cfg.model, apiKey, baseURL, cfg.maxOutput, cfg.reasoning);
     case "gemini":
-      return new GeminiProvider(cfg.model, apiKey, baseURL, cfg.reasoning);
+      return new GeminiProvider(cfg.model, apiKey, baseURL, cfg.reasoning, cfg.maxOutput);
     case "openai":
-      return new OpenAIProvider(cfg.model, apiKey, baseURL, undefined, cfg.reasoning);
+      if (cfg.provider === "ollama") void probeOllamaContext(cfg.model, baseURL);
+      // cacheKey is per agent: one agent's calls share a system prompt + tool list, so they are the
+      // requests OpenAI's prefix cache should route together.
+      return new OpenAIProvider(cfg.model, apiKey, baseURL, undefined, cfg.reasoning, {
+        vendor: cfg.provider,
+        cacheKey: `niti-${cfg.id}`,
+        maxOutput: cfg.maxOutput,
+      });
     case "copilot":
-      return new CopilotProvider(cfg.model, apiKey); // apiKey is the GitHub OAuth token
+      return new CopilotProvider(cfg.model, apiKey, cfg.reasoning); // apiKey is the GitHub OAuth token
   }
 }

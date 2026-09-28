@@ -9,6 +9,7 @@ export class GeminiProvider implements Provider {
     apiKey: string, // required — the SDK has no env fallback
     baseURL?: string, // a Gemini-compatible proxy; the factory computes it and used to drop it here
     private reasoning?: Reasoning,
+    private maxOutput?: number,
   ) {
     // The @google/genai transport falls back to a bare fetch() — no retries, no timeout — unless
     // httpOptions.retryOptions is set. Anthropic and OpenAI's SDKs both retry twice by default, so
@@ -56,7 +57,8 @@ export class GeminiProvider implements Provider {
       contents: contents as any,
       config: {
         systemInstruction: sysPrompt,
-        ...thinkingConfig(this.thinking ? this.reasoning : undefined),
+        ...thinkingConfig(this.thinking ? this.reasoning : undefined, this.model),
+        ...(this.maxOutput ? { maxOutputTokens: this.maxOutput } : {}),
         ...(tools.length
           ? {
               tools: [
@@ -87,11 +89,15 @@ export class GeminiProvider implements Provider {
     //
     // promptTokenCount already includes the cached tokens, so this is a breakdown of inputTokens,
     // not an addition to it — same shape Anthropic and OpenAI report.
-    const grabUsage = (meta?: { promptTokenCount?: number; candidatesTokenCount?: number; cachedContentTokenCount?: number }) => {
+    const grabUsage = (meta?: { promptTokenCount?: number; candidatesTokenCount?: number; cachedContentTokenCount?: number; thoughtsTokenCount?: number }) => {
       if (!meta) return;
+      // candidatesTokenCount EXCLUDES thinking, but thinking is billed at the output rate — leaving
+      // it out under-reported output and cost on every call with thinking on.
+      const thoughts = meta.thoughtsTokenCount ?? 0;
       usage = {
         inputTokens: meta.promptTokenCount ?? 0,
-        outputTokens: meta.candidatesTokenCount ?? 0,
+        outputTokens: (meta.candidatesTokenCount ?? 0) + thoughts,
+        reasoningTokens: thoughts || undefined,
         // Left undefined rather than 0 when absent: 0 asserts "the cache was checked and missed",
         // which is a different claim from "this response said nothing about caching".
         cacheReadTokens: meta.cachedContentTokenCount ?? undefined,
@@ -147,8 +153,17 @@ export class GeminiProvider implements Provider {
 //
 // -1 is Gemini's "dynamic" budget: the model sizes its own thinking per request, which is the
 // right answer whenever the user has not got a specific number in mind.
-export function thinkingConfig(r?: Reasoning): Record<string, unknown> {
+//
+// Two model-specific encodings: Gemini 3 takes a `thinkingLevel` (low/high) in place of a token
+// budget, and Pro models cannot switch thinking off at all — a budget of 0 is a 400 there, so
+// "off" becomes the smallest budget Pro accepts. Aliases like gemini-pro-latest name no version, so
+// they keep the budget form, which Gemini 3 still accepts.
+export function thinkingConfig(r?: Reasoning, model = ""): Record<string, unknown> {
   if (!r) return {};
-  const budget = { off: 0, low: 1024, medium: 8192, high: 24576, auto: -1 }[r];
+  if (/gemini-3/.test(model)) {
+    if (r === "auto") return {}; // the model's own dynamic default
+    return { thinkingConfig: { thinkingLevel: r === "off" || r === "low" ? "low" : "high" } };
+  }
+  const budget = { off: /pro/.test(model) ? 128 : 0, low: 1024, medium: 8192, high: 24576, auto: -1 }[r];
   return { thinkingConfig: { thinkingBudget: budget } };
 }

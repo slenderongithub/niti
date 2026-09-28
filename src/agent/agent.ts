@@ -217,6 +217,8 @@ export interface AgentConfig {
   // How hard this model should think per call (Gemini thinkingBudget / OpenAI reasoning_effort).
   // Unset sends nothing, which is what models without a reasoning mode require.
   reasoning?: Reasoning;
+  // Per-response output cap. Unset → each client's own default (Anthropic 16000, others: the model's).
+  maxOutput?: number;
 }
 
 export interface AgentDeps {
@@ -374,7 +376,7 @@ export class Agent {
     this.push(turns, { role: "user", text: task }, sessionId);
     const onDelta = (text: string) =>
       this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() });
-    const context = contextWindow(this.config.provider);
+    const context = contextWindow(this.config.provider, this.config.model);
     let warned = false;
     let quotaWarned = false;
     let verifyRounds = 0;
@@ -409,7 +411,7 @@ export class Agent {
           this.lastText = reply.text;
           this.bus.publish({ agentId: id, type: "message", payload: reply.text, time: Date.now() });
         }
-        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
+        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
         if (reply.rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, reply.rateLimit);
 
         // Pre-emptive heads-up: fire once when the conversation nears the context window.
@@ -435,7 +437,7 @@ export class Agent {
             0,
             turns.length,
             ...(await compactTurns(turns, this.provider, undefined, (u) =>
-              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens),
+              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, undefined, u.reasoningTokens),
             )),
           );
           if (turns.length < before) {
@@ -602,7 +604,7 @@ export class Agent {
       parentSessionId: o.parentSessionId,
     });
     const ctx: LoopCtx = { askDepth: o.askDepth, forkDepth: o.forkDepth, sessionId };
-    const context = contextWindow(this.config.provider);
+    const context = contextWindow(this.config.provider, this.config.model);
     this.push(turns, { role: "user", text: prompt }, sessionId);
     const onDelta = (text: string) => this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() });
     this.inFlightCount++;
@@ -616,7 +618,7 @@ export class Agent {
         this.provider.setThinking?.(this.settings.thinkingMode);
         const reply = await this.provider.send(this.config.systemPrompt, turns, this.buildTools(allowed, ctx), onDelta);
         if (reply.text) text = reply.text;
-        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
+        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
         // run() warns at 85% and compacts at 95%; this loop had neither, so a fork doing real work
         // (a 12-turn loop with full file contents in its tool results) hit a hard provider error on
         // overflow instead of shrinking — and the parent only saw "fork failed".
@@ -627,7 +629,7 @@ export class Agent {
             0,
             turns.length,
             ...(await compactTurns(turns, this.provider, undefined, (u) =>
-              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens),
+              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, undefined, u.reasoningTokens),
             )),
           );
           if (turns.length < before) {
@@ -666,7 +668,7 @@ export class Agent {
     // planning, replanning, integrate and /debate turns were spent off the books — /usage, /cost,
     // the TUI sidebar and the dashboard all under-reported the run by the orchestrator's whole
     // share, which on a mixed team is usually the most expensive model on it.
-    if (reply.usage) this.usageTracker?.record(this.config.id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
+    if (reply.usage) this.usageTracker?.record(this.config.id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
     if (reply.rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, reply.rateLimit);
     return reply.text;
   }
@@ -785,7 +787,7 @@ export class Agent {
 
   private buildTools(allowed: string[], ctx: LoopCtx): ToolSpec[] {
     const peers = this.messenger?.peers(this.config.id) ?? [];
-    const key = [allowed.join(","), ctx.forkDepth, ctx.askDepth, this.forkCount, peers.map((p) => p.id).join(",")].join("|");
+    const key = [allowed.join(","), ctx.forkDepth, ctx.askDepth, peers.map((p) => p.id).join(",")].join("|");
     if (this.toolsCache?.key === key) return this.toolsCache.specs;
 
     // Three independent tool sources, concatenated: the sandbox, MCP servers, and LSP servers.
@@ -796,7 +798,10 @@ export class Agent {
     // configured MCP server — a field named allowedTools that did not bound the tools.
     // `"mcp"` in the list is the opt-in for "all of them", so the common case stays one word.
     const specs = [...toolSpecs(allowed), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)];
-    if (ctx.forkDepth < MAX_FORK_DEPTH && this.forkCount < MAX_FORKS_PER_AGENT) {
+    // Offered even once the breadth budget is spent — fork() refuses it at call time instead.
+    // Dropping it mid-task changed the tool list, which sits first in Anthropic's cache prefix, so
+    // the whole cached conversation was rewritten at 1.25× on the next call.
+    if (ctx.forkDepth < MAX_FORK_DEPTH) {
       specs.push({
         name: "spawn_fork",
         description:

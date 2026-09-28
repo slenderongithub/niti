@@ -7,6 +7,7 @@ import type { LspServerConfig } from "../lsp/registry.ts";
 import { parsePermissions, type PermissionRules } from "../permissions.ts";
 import { CATALOG, providerKeys } from "../providers/catalog.ts";
 import { parseReasoning } from "../providers/provider.ts";
+import { truncateMiddle } from "../agent/context.ts";
 
 // Find the project root the way git finds a repo: walk up for the first ancestor holding .niti/
 // (or, failing that, .git/). Every path in niti is cwd-relative, so running from a subdirectory
@@ -116,14 +117,21 @@ export const PREF_DEFAULTS = {
 } as const;
 export type PrefKey = keyof typeof PREF_DEFAULTS;
 
+const AUTO_INSTRUCTIONS_MAX_CHARS = 32_000;
+
 export function loadInstructions(files: string[] = [], root = process.cwd(), discover = false): string {
   const parts: string[] = [];
-  const auto = discover ? INSTRUCTION_FILES.find((f) => existsSync(join(root, f))) : undefined;
-  if (auto && !files.some((f) => f.replace(/^\.\//, "").toLowerCase() === auto.toLowerCase())) files = [auto, ...files];
+  let auto = discover ? INSTRUCTION_FILES.find((f) => existsSync(join(root, f))) : undefined;
+  if (auto && files.some((f) => f.replace(/^\.\//, "").toLowerCase() === auto!.toLowerCase())) auto = undefined; // listed, so chosen
+  if (auto) files = [auto, ...files];
   for (const f of files) {
     const p = f.startsWith("/") ? f : join(root, f);
     if (!existsSync(p)) continue;
-    const body = readFileSync(p, "utf8").trim();
+    let body = readFileSync(p, "utf8").trim();
+    // The auto-discovered file is resent at the head of every call to every agent, and nobody chose
+    // to pay for it — a 200 KB AGENTS.md became ~50k tokens per call. Files listed under
+    // `instructions:` were chosen deliberately, so only the discovered one is capped (~8k tokens).
+    if (f === auto) body = truncateMiddle(body, AUTO_INSTRUCTIONS_MAX_CHARS);
     if (body) parts.push(`\n\n# Project instructions (${f})\n\n${body}`);
   }
   return parts.join("");
@@ -195,6 +203,7 @@ export function saveAgents(agents: AgentConfig[], path = ".niti/agents.yaml"): v
       ...(a.permissions ? { permissions: a.permissions } : {}),
       ...(a.reviewer ? { reviewer: a.reviewer } : {}),
       ...(a.reasoning ? { reasoning: a.reasoning } : {}),
+      ...(a.maxOutput ? { maxOutput: a.maxOutput } : {}),
     })),
   };
   doc.set("agents", next.agents);
@@ -254,5 +263,6 @@ function validate(a: unknown, i: number, path: string): AgentConfig {
     permissions: parsePermissions(rec.permissions, `${path} agent[${i}]`),
     reviewer: typeof rec.reviewer === "string" ? rec.reviewer : undefined,
     reasoning: parseReasoning(rec.reasoning),
+    maxOutput: Number.isInteger(rec.maxOutput) && (rec.maxOutput as number) > 0 ? (rec.maxOutput as number) : undefined,
   };
 }

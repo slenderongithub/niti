@@ -1,4 +1,4 @@
-import type { Provider, Turn, ToolSpec, ProviderReply, OnDelta } from "./provider.ts";
+import type { Provider, Turn, ToolSpec, ProviderReply, OnDelta, Reasoning } from "./provider.ts";
 import { OpenAIProvider } from "./openai.ts";
 
 // GitHub Copilot's public OAuth client id (same one used by copilot.vim / editor plugins).
@@ -94,16 +94,25 @@ export class CopilotProvider implements Provider {
   private inner?: OpenAIProvider;
   private expiresAt = 0;
 
+  private thinking = true;
+
   constructor(
     private model: string,
     private githubToken: string,
+    private reasoning?: Reasoning,
   ) {}
+
+  setThinking(on: boolean): void {
+    this.thinking = on;
+    this.inner?.setThinking(on);
+  }
 
   private async client(): Promise<OpenAIProvider> {
     if (this.inner && Date.now() < this.expiresAt - 60_000) return this.inner;
     const { token, expiresAt } = await fetchCopilotToken(this.githubToken);
     this.expiresAt = expiresAt || Date.now() + 25 * 60_000;
-    this.inner = new OpenAIProvider(this.model, token, "https://api.githubcopilot.com", COPILOT_HEADERS);
+    this.inner = new OpenAIProvider(this.model, token, "https://api.githubcopilot.com", COPILOT_HEADERS, this.reasoning, { vendor: "github-copilot" });
+    this.inner.setThinking(this.thinking); // the token refresh must not reset the user's switch
     return this.inner;
   }
 
