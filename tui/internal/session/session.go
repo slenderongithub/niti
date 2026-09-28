@@ -174,9 +174,6 @@ type Model struct {
 	// because a frozen-but-normal-looking frame is the worst way to learn the core is gone.
 	disconnected bool
 	quitArm      time.Time // when ctrl+c was last pressed — a second press inside quitGrace leaves
-	// When a plain-text goal was last held back because the board still has unfinished work. Same
-	// two-press shape as quitArm: the first enter explains, a second inside the window commits.
-	resubmitArm time.Time
 	quitting    bool
 }
 
@@ -188,9 +185,6 @@ const promptCharLimit = 100_000
 // stray ctrl+c aimed at cancelling a runaway agent used to take the whole thing down with it.
 const quitGrace = 3 * time.Second
 
-// Longer than quitGrace on purpose: this warning is a sentence about losing a plan, not four words,
-// and it has to be readable before the second press commits.
-const resubmitGrace = 6 * time.Second
 
 // New builds the model. `events` is the already-open SSE channel; `cancel` tears down the stream.
 func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, cancel context.CancelFunc) Model {
@@ -481,11 +475,6 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.quitArm = time.Time{} // any other key disarms: the two presses have to be consecutive
-	// Same rule, minus enter itself — enter is handled below and is the key that CONFIRMS the new
-	// goal, so disarming on it here would cancel the confirmation before it could ever be given.
-	if k.String() != "enter" {
-		m.resubmitArm = time.Time{}
-	}
 	if m.out.open {
 		return m, m.outputKey(k)
 	}
@@ -537,17 +526,6 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// How many tasks on the board haven't finished. Drives the new-goal guard above: a board that is
-// entirely done is finished work, and a fresh goal on top of it is exactly what the user means.
-func (m Model) unfinishedTasks() int {
-	n := 0
-	for _, t := range m.tasks {
-		if t.Status != "done" {
-			n++
-		}
-	}
-	return n
-}
 
 // scroll moves whichever list has the screen by one row; with nothing open, the wheel scrolls the
 // transcript (it used to do nothing, and old output was only reachable through /transcript).

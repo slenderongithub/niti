@@ -62,7 +62,8 @@ export async function runProject(
     bus.publish({ agentId: lead.config.id, type: "thought", payload: `running the plan you reviewed (${tasks.length} tasks) — no second planning call`, time: Date.now() });
   } else {
     bus.publish({ agentId: lead.config.id, type: "thought", payload: `thinking about: ${prompt}`, time: Date.now() });
-    const plan = await makePlan(lead, prompt, roles, deps.history);
+    const unfinished = orch.all.filter((t) => t.status !== "done").map((t) => `${t.id} (${t.assignedTo ?? "?"}, ${t.status}): ${t.description}`);
+    const plan = await makePlan(lead, prompt, roles, deps.history, unfinished);
     // Not work: say it and stop. "hi" used to be forced into 2-6 invented tasks here.
     if (plan.reply !== undefined) {
       bus.publish({ agentId: lead.config.id, type: "message", payload: plan.reply, time: Date.now() });

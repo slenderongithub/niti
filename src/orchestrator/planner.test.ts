@@ -122,3 +122,12 @@ test("the planner sees recent exchanges, so a follow-up can refer back", async (
   expect(seen).toContain("now add tests for it");
   expect(seen).toContain("never invent work"); // the old prompt forced 2-6 tasks out of anything
 });
+
+test("a follow-up is planned against the unfinished board, so it adjusts the plan instead of replacing it blind", async () => {
+  let seen = "";
+  const lead: PlannerAgent = { config: { id: "orchestrator" }, ask: async (p) => ((seen = p), '[{"description":"b","role":"backend"}]') };
+  await makePlan(lead, "skip the first one", roles, [], ["t1 (frontend, failed): build the header", "t2 (backend, pending): add the API"]);
+  expect(seen).toContain("Unfinished tasks from the current plan");
+  expect(seen).toContain("t2 (backend, pending): add the API");
+  expect(seen).toContain("keep the tasks the user still wants");
+});

@@ -3,7 +3,6 @@ package session
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/niti/tui/internal/theme"
 	tea "github.com/charmbracelet/bubbletea"
@@ -372,18 +371,9 @@ func (m *Model) enter() tea.Cmd {
 		m.input.SetValue("")
 		return m.steer(m.steerTarget(), text)
 	}
-	// Every plain message is a BRAND NEW goal to the core: the planner only ever sees the text just
-	// typed, never the previous run's. So a follow-up sent while a half-finished plan is still on
-	// the board silently throws that plan away and re-plans from a sentence that was never meant to
-	// stand on its own. Hold the first press and say so; /resume continues the real plan instead.
-	if text != "" && !strings.HasPrefix(text, "/") && !m.running() && m.unfinishedTasks() > 0 {
-		if m.resubmitArm.IsZero() || time.Since(m.resubmitArm) > resubmitGrace {
-			m.resubmitArm = time.Now()
-			m.status = fmt.Sprintf("%d unfinished task(s) — /resume continues them; enter again starts a new goal and drops the plan", m.unfinishedTasks())
-			return nil // input deliberately left intact, nothing submitted
-		}
-	}
-	m.resubmitArm = time.Time{}
+	// No "press enter again" guard for an unfinished board any more: a chat message or a question
+	// never touches the board now, and a work message is planned *against* the unfinished tasks
+	// (the core shows them to the planner), so a follow-up adjusts the plan instead of replacing it.
 	// A goal sent in PLAN mode stays in the prompt: shift+tab then enter is how you run the plan you
 	// just read, and the core matches the goal by text to skip a second planning call (see
 	// runProject's takeApprovedPlan). Commands and BUILD goals clear as before.

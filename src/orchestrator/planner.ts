@@ -154,7 +154,19 @@ function historyBlock(history: Exchange[]): string {
   return `Recent conversation (oldest first) — the new message may refer back to it:\n${lines.join("\n")}\n\n`;
 }
 
-export function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, history: Exchange[] = []): string {
+// Tasks a previous plan left unfinished. A follow-up ("skip the first one", "also add tests") is
+// about them, so the planner sees them and folds them into the new plan instead of the new message
+// silently replacing a detailed plan with a one-line one.
+function boardBlock(unfinished: string[]): string {
+  if (!unfinished.length) return "";
+  return (
+    `Unfinished tasks from the current plan:\n${unfinished.slice(0, 12).map((t) => `  - ${t}`).join("\n")}\n` +
+    `If the message is work, your plan replaces this board: keep the tasks the user still wants (restated in full), ` +
+    `apply what the message changes, and drop only what it says to drop.\n\n`
+  );
+}
+
+export function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, history: Exchange[] = [], unfinished: string[] = []): string {
   const roster = roles
     .map((r) => `  - id "${r.id}" — role: ${r.role}${r.description ? ` (${r.description})` : ""}`)
     .join("\n");
@@ -172,6 +184,7 @@ export function plannerPrompt(goal: string, roles: RoleInfo[], correction?: stri
     `teammate ids that should receive a task's output.\n\n` +
     `Teammates:\n${roster}\n\n` +
     historyBlock(history) +
+    boardBlock(unfinished) +
     `User's message: ${goal}\n\n` +
     `Return ONLY JSON — {"reply": ...}, {"question": ...}, or an array of ` +
     `{"id","description","role","dependsOn","handoffTo","acceptance"} where "role" MUST be one of the ids above. No prose.` +
@@ -181,12 +194,12 @@ export function plannerPrompt(goal: string, roles: RoleInfo[], correction?: stri
 
 // Ask the orchestrator agent for a plan, validating + normalizing. Retries on invalid JSON, then
 // falls back to a single task (the whole goal on the lead) — a bad planner never crashes the run.
-export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo[], history: Exchange[] = []): Promise<Plan> {
+export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo[], history: Exchange[] = [], unfinished: string[] = []): Promise<Plan> {
   let correction: string | undefined;
   for (let attempt = 0; attempt < MAX_PLAN_ATTEMPTS; attempt++) {
     let raw: string;
     try {
-      raw = await lead.ask(plannerPrompt(goal, roles, correction, history));
+      raw = await lead.ask(plannerPrompt(goal, roles, correction, history, unfinished));
     } catch (err) {
       correction = summarizeError(err);
       continue;
