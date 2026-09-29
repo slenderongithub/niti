@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 
@@ -23,5 +24,36 @@ func TestWrapBoundsLinesAndMarksTheCut(t *testing.T) {
 	}
 	if Wrap("", 10, 3) != nil {
 		t.Fatal("empty text wraps to nothing")
+	}
+}
+
+func TestCutLeftKeepsTheStylingAtTheCut(t *testing.T) {
+	cases := []struct{ in string; n int; wantPlain string }{
+		{"hello world", 6, "world"},
+		{"hello", 0, "hello"},
+		{"hello", 9, ""},
+		{"日本語です", 3, " 語です"}, // cut inside a wide character: its visible half becomes a space
+	}
+	for _, c := range cases {
+		if got := ansi.Strip(cutLeft(c.in, c.n)); got != c.wantPlain {
+			t.Errorf("cutLeft(%q, %d) = %q, want %q", c.in, c.n, got, c.wantPlain)
+		}
+	}
+	// A colour switched on before the cut is still on after it.
+	got := cutLeft("\x1b[31mred text\x1b[0m plain", 4)
+	if !strings.HasPrefix(got, "\x1b[31m") || ansi.Strip(got) != "text plain" {
+		t.Errorf("styling lost at the cut: %q", got)
+	}
+}
+
+// A popup leaves the rest of every row it covers alone — the main panel's right border must
+// survive to the right of the box.
+func TestOverlayKeepsWhatIsToTheRightOfTheBox(t *testing.T) {
+	base := strings.Repeat("|"+strings.Repeat(".", 38)+"|\n", 5) + "|" + strings.Repeat(".", 38) + "|"
+	out := Overlay(base, "[box]\n[box]", 40, 6)
+	for i, line := range strings.Split(ansi.Strip(out), "\n") {
+		if !strings.HasSuffix(line, "|") || !strings.HasPrefix(line, "|") {
+			t.Errorf("row %d lost the frame on one side: %q", i, line)
+		}
 	}
 }

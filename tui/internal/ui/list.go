@@ -308,13 +308,47 @@ func OverlayAt(base, box string, w, h, top int) string {
 		if pad := side - lipgloss.Width(left); pad > 0 { // a base line shorter than the gap
 			left += gap.Render(strings.Repeat(" ", pad))
 		}
-		baseLines[row] = left + "\x1b[0m" + bl + gap.Render(strings.Repeat(" ", max(w-side-bw, 0)))
+		// What lies to the right of the box stays too. It used to be repainted flat, which erased the
+		// main panel's right border and its pattern on every row a popup covered — the "messy from
+		// the right" look.
+		right := cutLeft(baseLines[row], side+bw)
+		if pad := w - side - bw - lipgloss.Width(right); pad > 0 {
+			right += gap.Render(strings.Repeat(" ", pad))
+		}
+		baseLines[row] = left + "\x1b[0m" + bl + "\x1b[0m" + right
 	}
 	out := strings.Join(baseLines, "\n")
 	// View() clamps itself to the terminal, but the overlay is composited *after* that clamp — so a
 	// popup wider than the terminal (any of them, below ~40 columns) pushed the frame sideways and
 	// wrapped it into garbage. Clamp again here, where the final string is actually assembled.
 	return lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(out)
+}
+
+// cutLeft drops the first n display cells of s and keeps the rest, with the styling that was in
+// force at the cut: every escape sequence in the dropped part is replayed ahead of what remains
+// (SGR is cumulative, so replaying them all leaves the same colours active). A wide character
+// straddling the cut becomes spaces for its visible half.
+func cutLeft(s string, n int) string {
+	var replay, rest strings.Builder
+	state := byte(0)
+	cells := 0
+	for len(s) > 0 {
+		seq, width, used, next := ansi.DecodeSequence(s, state, nil)
+		state = next
+		s = s[used:]
+		switch {
+		case cells >= n:
+			rest.WriteString(seq)
+		case width == 0:
+			replay.WriteString(seq) // styling from before the cut
+		default:
+			cells += width
+			if cells > n { // a wide character cut in half
+				rest.WriteString(strings.Repeat(" ", cells-n))
+			}
+		}
+	}
+	return replay.String() + rest.String()
 }
 
 // Truncate cuts to n display cells, counting runes (the UI is full of multibyte glyphs) and
