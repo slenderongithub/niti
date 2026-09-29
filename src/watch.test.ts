@@ -93,6 +93,21 @@ test("an agent's own write is not reported back as an external change", async ()
   w.close();
 }, 20_000);
 
+test("an agent's new file does not report its folder as changed either", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
+  const seen: string[] = [];
+  const w = watchProject(root, (p) => seen.push(p));
+  await armed(root, seen);
+
+  w.markSelfWrite("./src/new.ts");
+  mkdirSync(join(root, "src"));
+  writeFileSync(join(root, "src", "new.ts"), "agent wrote this");
+  writeFileSync(join(root, "after.txt"), "a human write"); // proves delivery, as above
+  expect(await until(() => seen.includes("after.txt"), 10_000)).toBe(true);
+  expect(seen.filter((p) => p.startsWith("src"))).toEqual([]);
+  w.close();
+}, 20_000);
+
 test("isIgnored matches on any path segment", () => {
   expect(isIgnored(".git/HEAD")).toBe(true);
   expect(isIgnored("src/node_modules/x/index.js")).toBe(true);

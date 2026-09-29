@@ -45,7 +45,9 @@ export function watchProject(root: string, onChange: (relPath: string) => void):
       // Normalized on the way in, because the caller passes the model's own spelling of the path
       // ("./src/a.ts", "src/../src/a.ts") while fs.watch reports a clean relative one. Any mismatch
       // meant the agent's own write was announced back to it as an external change.
-      selfWrites.set(normalizePath(relPath), now);
+      // Its folders too: creating src/a.ts also changes src, and macOS reports that as its own
+      // event — which read as "changed outside niti: src" every time an agent made a file.
+      for (let p = normalizePath(relPath); p && p !== "."; p = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") selfWrites.set(p, now);
       for (const [path, at] of selfWrites) if (now - at > SELF_WRITE_TTL_MS) selfWrites.delete(path); // bounded without a timer
     },
     close() {
