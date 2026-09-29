@@ -43,7 +43,7 @@ func TestPopupsAreSizedToTheirContent(t *testing.T) {
 // the Agents panel's frame survives on every row the box covers.
 func TestOverlayKeepsTheSidebarPainted(t *testing.T) {
 	m := sized(2, 120, 34)
-	m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
+	m.out = output{open: true, title: "Commands", lines: m.helpLines()}
 	frame := strings.Split(ansi.Strip(m.View()), "\n")
 	covered := 0
 	for i, line := range frame {
@@ -156,5 +156,46 @@ func TestCtrlCNeedsTwoPresses(t *testing.T) {
 	third, _ := again.(Model).onKey(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if third.(Model).quitting {
 		t.Error("a keystroke between the two presses must disarm the quit")
+	}
+}
+
+// /tasks is drawn by the TUI from the live board: status spelled out, the agent by its role, long
+// descriptions wrapped rather than cut, dependencies under the task that waits — and it moves when
+// the board does.
+func TestTasksWindowIsATableThatFollowsTheBoard(t *testing.T) {
+	m := sized(2, 120, 40)
+	first := m.order[0]
+	m.tasks = []api.Task{
+		{ID: "t1", Description: "Design the cart schema", AssignedTo: first, Status: "done"},
+		{ID: "t2", Description: "Implement the checkout endpoint with validation, idempotency keys and a retry-safe payment step that survives duplicate submits", AssignedTo: m.agents[m.order[1]].cfg.Role, Status: "in_progress", DependsOn: []string{"t1"}},
+		{ID: "t3", Description: "Write tests", Status: "pending"},
+	}
+	m.submit("/tasks")
+	if !m.out.open || m.out.kind != "tasks" {
+		t.Fatalf("/tasks should open the tasks window, got %+v", m.out)
+	}
+	v := screen(m)
+	for _, want := range []string{"1/3 done · 1 running · 1 pending", "STATUS", "AGENT", "TASK", "● done", "◐ running", "○ pending", "↳ after t1", "duplicate submits"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("tasks window missing %q:\n%s", want, v)
+		}
+	}
+	m.setTask("t2", "done")
+	if v := screen(m); !strings.Contains(v, "2/3 done · 1 pending") {
+		t.Errorf("the open window should follow the board:\n%s", v)
+	}
+}
+
+func TestAgentsWindowListsTheTeamWithModelsAndTools(t *testing.T) {
+	m := sized(2, 120, 40)
+	m.submit("/agents")
+	if m.out.kind != "agents" {
+		t.Fatalf("/agents should open the agents window, got %+v", m.out)
+	}
+	v := screen(m)
+	for _, want := range []string{"ROLE", "MODEL", "STATE", "TOOLS", m.agents[m.order[0]].cfg.Role, m.agents[m.order[1]].cfg.Role} {
+		if !strings.Contains(v, want) {
+			t.Errorf("agents window missing %q:\n%s", want, v)
+		}
 	}
 }

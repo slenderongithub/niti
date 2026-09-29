@@ -200,5 +200,5 @@ func (m Model) paletteView(w, h int) string {
 		lines = append(lines, lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render(" no matches"))
 	}
 	body := query + "\n" + strings.Join(lines, "\n")
-	return ui.Box("COMMANDS", body, "↑↓ move · enter run · esc close", pw)
+	return ui.Box("Commands", body, "↑↓ move · enter run · esc close", pw)
 }

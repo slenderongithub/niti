@@ -269,18 +269,15 @@ func (m Model) sidebar(sw, h int, compact bool) string {
 	// Agents: avatar + role on the left, status on the right, cursor bar when this panel has focus.
 	for i, id := range m.order {
 		st := m.agents[id]
-		name := st.avatar + " " + st.cfg.Role
-		if st.cfg.Lead {
-			name += " ★"
-		}
 		status := st.status
 		rowBg := bg
 		if focused && i == m.agentCursor {
 			rowBg = theme.Tint(theme.Accent)
 		}
-		name = truncate(name, max(iw-lipgloss.Width(status)-1, 1))
-		gap := max(iw-lipgloss.Width(name)-lipgloss.Width(status), 1)
-		lines = append(lines, txt(st.color, rowBg).Bold(st.id() == m.focus).Render(name)+
+		chip := st.chip()
+		name := truncate(st.label(), max(iw-lipgloss.Width(status)-lipgloss.Width(chip)-2, 1))
+		gap := max(iw-lipgloss.Width(chip)-1-lipgloss.Width(name)-lipgloss.Width(status), 1)
+		lines = append(lines, chip+txt(st.color, rowBg).Render(" ")+txt(st.color, rowBg).Bold(st.id() == m.focus).Render(name)+
 			txt(theme.Muted, rowBg).Render(strings.Repeat(" ", gap))+
 			txt(theme.StatusColor(st.status), rowBg).Render(status))
 	}
@@ -466,7 +463,7 @@ func (m Model) mainPane(mw, h int, compact bool) string {
 			sub = fmt.Sprintf("%d lines · ▎%d changed this session · e edit · esc close", len(m.viewer.lines), n)
 		}
 	case st != nil:
-		title, sub = st.avatar+" "+st.cfg.Role, fmt.Sprintf("%s/%s · %s tok", st.cfg.Provider, st.cfg.Model, fmtTok(st.tokens))
+		title, sub = st.label(), fmt.Sprintf("%s/%s · %s tok", st.cfg.Provider, st.cfg.Model, fmtTok(st.tokens))
 	default:
 		sub = fmt.Sprintf("%d agents · %s tok", len(m.order), fmtTok(m.totals.InputTokens+m.totals.OutputTokens))
 	}
@@ -495,7 +492,7 @@ func (m Model) tabBar(w int) string {
 	segs := []string{tab("≡ All agents", m.focus == "" && m.viewer == nil, theme.Fg)}
 	for _, id := range m.order {
 		st := m.agents[id]
-		segs = append(segs, tab(st.avatar+" "+st.cfg.Role, id == m.focus && m.viewer == nil, st.color))
+		segs = append(segs, tab(st.label(), id == m.focus && m.viewer == nil, st.color))
 	}
 	if m.viewer != nil {
 		segs = append(segs, tab("▤ "+filepath.Base(m.viewer.path), true, theme.Accent))
@@ -588,16 +585,14 @@ func (m Model) agentBlock(st *agentState, w, per int) string {
 }
 
 func agentHeader(st *agentState, w int, bg lipgloss.Color) string {
-	name := st.avatar + " " + st.cfg.Role
-	if st.cfg.Lead {
-		name += " ★"
-	}
+	chip := st.chip()
+	name := st.label()
 	status := "● " + st.status
 	// The role and status are what identify a block; the model id gives up width first.
-	model := truncate("  "+st.cfg.Provider+"/"+st.cfg.Model, max(w-lipgloss.Width(name)-lipgloss.Width(status)-1, 0))
-	gap := max(w-lipgloss.Width(name)-lipgloss.Width(model)-lipgloss.Width(status), 1)
+	model := truncate("  "+st.cfg.Provider+"/"+st.cfg.Model, max(w-lipgloss.Width(chip)-1-lipgloss.Width(name)-lipgloss.Width(status)-1, 0))
+	gap := max(w-lipgloss.Width(chip)-1-lipgloss.Width(name)-lipgloss.Width(model)-lipgloss.Width(status), 1)
 
-	return txt(st.color, bg).Bold(true).Render(name) +
+	return chip + txt(st.color, bg).Render(" ") + txt(st.color, bg).Bold(true).Render(name) +
 		txt(theme.Muted, bg).Render(model) +
 		txt(theme.Muted, bg).Render(strings.Repeat(" ", gap)) +
 		txt(theme.StatusColor(st.status), bg).Render(status)

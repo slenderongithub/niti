@@ -491,7 +491,7 @@ func main() {
 
 	m := session.New(c.client, sess, events, cancel)
 	verbose, rest := parseArgs(os.Args[1:])
-	m = m.WithVerbose(verbose)
+	m = m.WithVerbose(verbose).WithTabGlow()
 	if len(rest) > 0 {
 		m = m.OpenSettings(rest[0]) // niti status | config | settings | usage | stats
 	}
@@ -499,7 +499,7 @@ func main() {
 	// the way out so it doesn't leak into the user's shell.
 	fmt.Fprint(os.Stdout, session.EnableModifiedEnter)
 	_, err = tea.NewProgram(m, screenOpts()...).Run()
-	fmt.Fprint(os.Stdout, session.DisableModifiedEnter)
+	fmt.Fprint(os.Stdout, session.DisableModifiedEnter, session.TabGlowReset())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}

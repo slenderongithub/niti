@@ -561,7 +561,7 @@ func sanitize(s string) string {
 func renderRoles(roles []api.AgentConfig) string {
 	bg := theme.BgDeep
 	if len(roles) == 0 {
-		return section("Team") + "\n" + lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("  (nobody yet)")
+		return section("Team") + "\n" + lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render("  (nobody yet)")
 	}
 	parts := []string{section("Team")}
 	for i, r := range roles {

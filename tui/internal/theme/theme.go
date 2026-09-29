@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -282,14 +283,37 @@ func Pick(name string) bool {
 	return Use(name)
 }
 
-// No ★: the sidebar marks the lead agent with ★, so the fifth agent's avatar read as a second lead.
-var avatars = []string{"◆", "▲", "●", "■", "✦", "◈", "❖", "⬢", "⬟", "✱", "✚", "◇"}
 
 // AgentColor is an agent's identity color by roster position — stable within a session, distinct
 // across many agents, and re-themed along with everything else.
 func AgentColor(index int) lipgloss.Color { return palette[index%len(palette)] }
 
-func Avatar(index int) string { return avatars[index%len(avatars)] }
+// Avatar is the fallback badge letter for roster position `index` (A, B, C…), for an agent whose
+// role and id give nothing to build a monogram from.
+func Avatar(index int) string { return string(rune('A' + index%26)) }
+
+// Monogram is an agent's badge: the first letter of its role, so "Frontend" is F and the badge says
+// something the old roster-order shapes (◆ ▲ ●) never did. If a teammate already has that letter
+// the next unused one in the role is taken instead, and `taken` records the choice. A plain ASCII
+// capital, so it is one cell wide in every terminal and font. The lead is marked with ★ beside
+// its name, not here.
+func Monogram(role string, taken map[string]bool) string {
+	var first string
+	for _, r := range strings.ToUpper(role) {
+		if !unicode.IsLetter(r) || r > unicode.MaxASCII {
+			continue
+		}
+		l := string(r)
+		if first == "" {
+			first = l
+		}
+		if !taken[l] {
+			taken[l] = true
+			return l
+		}
+	}
+	return first // no unused letter left: share the first one
+}
 
 // MessageColor maps an AgentMessage kind to its edge/log color (matches the web dashboard).
 func MessageColor(kind string) lipgloss.Color {

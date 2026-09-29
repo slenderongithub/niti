@@ -199,7 +199,7 @@ func (l *List) Render(w, rows int, bg lipgloss.Color) string {
 		return ""
 	}
 	if len(l.shown) == 0 {
-		return pad(lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("  no matches"), w, bg, 1)
+		return pad(lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render("  no matches"), w, bg, 1)
 	}
 
 	body := rows
@@ -226,7 +226,7 @@ func (l *List) Render(w, rows int, bg lipgloss.Color) string {
 		lines = append(lines, l.row(l.items[l.shown[i]], i == l.cursor, w, bg))
 	}
 	if hidden := len(l.shown) - len(lines); more > 0 && hidden > 0 {
-		lines = append(lines, lipgloss.NewStyle().Foreground(theme.Line).Background(bg).
+		lines = append(lines, lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).
 			Render(Truncate("  +"+strconv.Itoa(hidden)+" more", w)))
 	}
 	return pad(strings.Join(lines, "\n"), w, bg, len(lines))
@@ -259,24 +259,39 @@ func (l *List) row(it Item, selected bool, w int, bg lipgloss.Color) string {
 	return line
 }
 
-// Box draws a titled, bordered panel on the pane background — the carousel's frame.
+// Box is the frame every floating window shares, and it is the same frame the panes use: rounded
+// border, the title set into the top edge and the key hints into the bottom one, so a popup reads
+// as one more region of the app rather than a foreign widget. The accent border marks it as the
+// thing that has focus. A hint of several lines keeps only its last line on the border — earlier
+// lines are status text and go under the content.
 func Box(title, body, hint string, w int) string {
 	bg := theme.BgPane
-	inner := max(w-4, 1)
-	head := lipgloss.NewStyle().Foreground(theme.Accent).Background(bg).Bold(true).Render(Truncate(title, inner))
-	parts := []string{head, body}
-	if hint != "" {
-		// One blank row between the content and the hint — the box is content-sized now, and without
-		// this the hint reads as another list row.
-		parts = append(parts, "")
-		for _, hl := range strings.Split(hint, "\n") {
-			parts = append(parts, lipgloss.NewStyle().Foreground(theme.Muted).Background(bg).Render(Truncate(hl, inner)))
+	hl := strings.Split(hint, "\n")
+	lines := strings.Split(body, "\n")
+	if len(hl) > 1 {
+		lines = append(lines, "")
+		for _, extra := range hl[:len(hl)-1] {
+			lines = append(lines, lipgloss.NewStyle().Foreground(theme.Muted).Render(extra))
 		}
 	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).BorderForeground(theme.Accent).BorderBackground(theme.BgDeep).
-		Background(bg).Padding(0, 1).Width(inner).
-		Render(strings.Join(parts, "\n"))
+	fill := lipgloss.NewStyle().Background(bg)
+	for i, l := range lines {
+		lines[i] = fill.Render(l) // unstyled text must not show the terminal's own background
+	}
+	p := Panel{Title: title, Subtitle: hl[len(hl)-1], Focused: true, TitleLeft: true, Bg: bg}
+	return p.Render(strings.Join(lines, "\n"), w, len(lines)+2)
+}
+
+// dim turns a rendered screen into the muted backdrop a floating window sits on: styles are
+// dropped and every line is repainted in the muted color on the canvas, so the window is the only
+// thing on screen with colour in it.
+func dim(base string) string {
+	ghost := lipgloss.NewStyle().Foreground(theme.Muted).Background(theme.BgDeep)
+	lines := strings.Split(base, "\n")
+	for i, l := range lines {
+		lines[i] = ghost.Render(ansi.Strip(l))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Overlay floats `box` over the middle of `base`. The part of the base line to the *left* of the
@@ -290,7 +305,7 @@ func Overlay(base, box string, w, h int) string {
 // OverlayAt is Overlay with the box's first row at `top` instead of vertically centered — a
 // command palette sits near the top, where the eye already is, as posting's and VS Code's do.
 func OverlayAt(base, box string, w, h, top int) string {
-	baseLines := strings.Split(base, "\n")
+	baseLines := strings.Split(dim(base), "\n")
 	boxLines := strings.Split(box, "\n")
 	if len(boxLines) > h {
 		boxLines = boxLines[:h]

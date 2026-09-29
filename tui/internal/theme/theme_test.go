@@ -195,3 +195,20 @@ func TestChoicesFollowLightMode(t *testing.T) {
 		t.Errorf("/theme ember in light mode should apply ember light, got %q", Current())
 	}
 }
+
+func TestMonogramIsTheRolesFirstFreeLetter(t *testing.T) {
+	taken := map[string]bool{}
+	got := []string{Monogram("Frontend", taken), Monogram("Backend", taken), Monogram("Builder", taken), Monogram("Bug hunter", taken), Monogram("Frontend", taken)}
+	want := []string{"F", "B", "U", "G", "R"} // Builder loses B to Backend and takes U; Bug hunter B,U taken → G; a second Frontend → R
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("agent %d: got %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
+	}
+	if m := Monogram("日本語", map[string]bool{}); m != "" {
+		t.Errorf("a role with no ASCII letters must yield no monogram (the caller falls back), got %q", m)
+	}
+	if m := Monogram("Ab", map[string]bool{"A": true, "B": true}); m != "A" {
+		t.Errorf("with every letter taken the first one is shared, got %q", m)
+	}
+}

@@ -205,3 +205,27 @@ func TestApprovalShowsTheWholeLongCommand(t *testing.T) {
 		t.Errorf("the end of the command should be visible:\n%s", ansi.Strip(v))
 	}
 }
+
+func TestSessionResetWipesTheScreenButKeepsTheRoster(t *testing.T) {
+	m := sized(2, 120, 40)
+	m.apply(api.Event{Kind: "session", State: "started", Goal: "fix the cart"})
+	m.applyAgentEvent(ev(t, `{"agentId":"a","type":"message","payload":"hello there"}`))
+	m.apply(api.Event{Kind: "turn_summary", Ok: true, Summary: "• done", Files: []api.FileChange{{Path: "src/cart.ts", Added: 1}}})
+	m.tasks = []api.Task{{ID: "t1", Description: "x", Status: "done"}}
+	m.markTouched("src/cart.ts", 'M')
+	m.totals = api.Totals{InputTokens: 900}
+	m.cost = 1.5
+	if len(m.agents["a"].log) == 0 {
+		t.Fatal("setup: expected the agent to have a transcript")
+	}
+
+	m.apply(api.Event{Kind: "session_reset"})
+
+	if len(m.agents) != 2 || len(m.order) != 2 {
+		t.Errorf("roster must survive a reset, got %d agents", len(m.agents))
+	}
+	if len(m.agents["a"].log) != 0 || len(m.tasks) != 0 || m.card != nil || len(m.touched) != 0 || m.totals.InputTokens != 0 || m.cost != 0 || m.goal != "" || m.active {
+		t.Errorf("reset left state behind: log=%d tasks=%d card=%v touched=%v totals=%v cost=%v goal=%q active=%v",
+			len(m.agents["a"].log), len(m.tasks), m.card != nil, m.touched, m.totals, m.cost, m.goal, m.active)
+	}
+}

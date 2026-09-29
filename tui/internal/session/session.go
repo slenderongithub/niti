@@ -61,7 +61,22 @@ type agentState struct {
 	runOut   []string   // the in-flight command's latest output lines (tool_output), under its spinner
 	todos    []api.Todo // the agent's checklist while steps remain, pinned under its header
 	color    lipgloss.Color
-	avatar   string
+	avatar   string // the badge letter (theme.Monogram)
+}
+
+// chip is the agent's badge: its letter in its own colour on a tint of it, one cell either side.
+// Unlike the plain-text label it carries a background, so it is composed next to the name rather
+// than inside a string that gets styled as a whole.
+func (s *agentState) chip() string {
+	return lipgloss.NewStyle().Foreground(s.color).Background(theme.Tint(s.color)).Bold(true).Render(" " + s.avatar + " ")
+}
+
+// label is the agent's role as text, with the lead's star.
+func (s *agentState) label() string {
+	if s.cfg.Lead {
+		return s.cfg.Role + " ★"
+	}
+	return s.cfg.Role
 }
 
 // Per-agent scrollback. Only the tail is rendered in the pane, but /transcript pages through all
@@ -176,6 +191,12 @@ type Model struct {
 	disconnected bool
 	quitArm      time.Time // when ctrl+c was last pressed — a second press inside quitGrace leaves
 	quitting    bool
+	// Terminal tab status (tabglow.go).
+	glow        bool   // the terminal takes a tab colour (iTerm2)
+	glowPhase   int    // which working agent's colour the tab shows while several work
+	glowTicking bool   // the rotation timer is scheduled
+	tabTitle    string // the last window title sent
+	tabSeq      string // the last tab-colour sequence sent
 }
 
 // Long enough that pasting a file or a stack trace is not silently clipped; still bounded, since
@@ -209,10 +230,15 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	for k, v := range sess.Prefs {
 		m.prefs[k] = v
 	}
+	letters := map[string]bool{}
 	for i, c := range sess.Agents {
 		m.order = append(m.order, c.ID)
+		badge := theme.Monogram(c.Role, letters)
+		if badge == "" {
+			badge = theme.Avatar(i)
+		}
 		m.agents[c.ID] = &agentState{
-			cfg: c, status: "idle", color: theme.AgentColor(i), avatar: theme.Avatar(i),
+			cfg: c, status: "idle", color: theme.AgentColor(i), avatar: badge,
 			ctxLimit: sess.ContextLimits[c.ID], showDur: m.prefs["showTurnDuration"],
 		}
 	}
@@ -432,7 +458,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		m.apply(api.Event(msg))
-		return m, waitFor(m.events) // keep listening
+		return m, tea.Batch(waitFor(m.events), m.glowCmd()) // keep listening
 	case eventsMsg:
 		before := m.transcriptLen()
 		for _, e := range msg {
@@ -460,7 +486,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ticking = true
 			cmds = append(cmds, tick())
 		}
+		cmds = append(cmds, m.glowCmd())
 		return m, tea.Batch(cmds...)
+	case glowTickMsg:
+		m.glowTicking = false
+		m.glowPhase++
+		return m, m.glowCmd()
 	case tickMsg:
 		if m.ticking = m.anyRunning() && !m.prefs["reduceMotion"]; m.ticking {
 			return m, tick()
@@ -694,7 +725,23 @@ func (m *Model) submit(text string) tea.Cmd {
 		case "help":
 			// Client-side, because only the client knows the whole set: the server registry plus the
 			// commands that can only happen here (/quit, /theme, /graph, /dashboard, the settings tabs).
-			m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
+			m.out = output{open: true, title: "Commands", lines: m.helpLines()}
+			return nil
+		case "tasks":
+			// The board is already here, kept current by the orchestration events: draw that rather
+			// than the server's flat text (see tasks.go).
+			if len(m.tasks) == 0 {
+				m.status = "no tasks yet — describe what you want built"
+				return nil
+			}
+			m.out = output{open: true, title: "Tasks", kind: "tasks"}
+			return nil
+		case "agents":
+			if len(m.order) == 0 {
+				m.status = "no agents configured"
+				return nil
+			}
+			m.out = output{open: true, title: "Agents", kind: "agents"}
 			return nil
 		case "api":
 			return m.openAPIKey()
@@ -846,14 +893,31 @@ func (m *Model) apply(e api.Event) {
 		}
 	case "approval_request":
 		m.approvals = e.Requests
+	case "session_reset":
+		m.resetSession()
 	}
 }
 
+// resetSession is /clear reaching the screen: everything the last session left behind goes. What
+// stays is the user's own setup — prompt history, prefs, theme, the roster and its colours.
+func (m *Model) resetSession() {
+	for _, st := range m.agents {
+		st.status, st.activity = "idle", ""
+		st.tokens, st.in, st.out, st.calls, st.ctxUsed = 0, 0, 0, 0, 0
+		st.log, st.pending, st.running, st.runOut, st.todos, st.group = nil, "", "", nil, nil, nil
+	}
+	m.tasks, m.messages, m.feed, m.approvals = nil, nil, nil, nil
+	m.card, m.suggestions = nil, nil
+	m.touched, m.changed = nil, nil
+	m.goal, m.progress, m.active, m.steerTo = "", 0, false, ""
+	m.totals, m.cost, m.costKnown = api.Totals{}, 0, true
+	m.scrollBack, m.unseen = 0, 0
+	m.status = "session cleared"
+}
+
 func (m *Model) applyAgentEvent(ae api.AgentEvent) {
-	// Not an agent speaking: a file changed outside niti (a human's editor, a git checkout).
 	if ae.Type == "external_change" {
-		m.pushFeed("⟳ changed outside niti: " + truncate(ae.Payload, 60))
-		return
+		return // the core still emits these (the /graph cache uses them); the TUI has nothing useful to do with one
 	}
 	st := m.agents[ae.AgentID]
 	if st == nil {

@@ -21,6 +21,19 @@ type output struct {
 	title string
 	lines []string
 	top   int
+	kind  string // "" for plain text; "tasks" and "agents" are drawn by the TUI and rebuilt every frame (see outLines)
+}
+
+// outLines is what the window shows. Most windows hold a fixed snapshot; the tasks board is live,
+// so it is rebuilt from the model each time and moves as tasks start and finish.
+func (m Model) outLines() []string {
+	switch m.out.kind {
+	case "tasks":
+		return m.taskLines()
+	case "agents":
+		return m.agentLines()
+	}
+	return m.out.lines
 }
 
 // show routes a command result by shape rather than by name — anything that wraps to more than one
@@ -59,31 +72,36 @@ func (m *Model) outputKey(k tea.KeyMsg) tea.Cmd {
 }
 
 func (m Model) outputRows() int   { return clamp(m.height-10, 3, 24) }
-func (m Model) outputMaxTop() int { return max(len(m.out.lines)-m.outputRows(), 0) }
+func (m Model) outputMaxTop() int { return max(len(m.outLines())-m.outputRows(), 0) }
 
 func (m Model) outputView(w, h int) string {
 	bg := theme.BgPane
-	rows := min(m.outputRows(), len(m.out.lines))
+	all := m.outLines()
+	rows := min(m.outputRows(), len(all))
 	top := clamp(m.out.top, 0, m.outputMaxTop())
 
 	// The hint is finished before the box is measured, so a long "(12–34 of 90)" widens the box
 	// rather than being truncated by it.
-	hint := "esc closes"
-	if len(m.out.lines) > rows {
-		hint = fmt.Sprintf("↑↓ scroll · esc closes   (%d–%d of %d)", top+1, min(top+rows, len(m.out.lines)), len(m.out.lines))
+	hint := "esc close"
+	if len(all) > rows {
+		hint = fmt.Sprintf("↑↓ scroll · esc close · %d–%d of %d", top+1, min(top+rows, len(all)), len(all))
 	}
 	// Width follows the content, capped by the terminal — a two-column list shouldn't get a box
 	// sized for the widest command output imaginable.
 	natural := widest(m.out.title, hint)
-	for _, l := range m.out.lines {
+	for _, l := range all {
 		natural = max(natural, lipgloss.Width(l))
 	}
 	boxW := clamp(natural+6, 30, max(w-6, 30))
 	inner := boxW - 4
 
 	var lines []string
-	for i := top; i < len(m.out.lines) && i < top+rows; i++ {
-		lines = append(lines, txt(theme.Fg, bg).Render(padRight(truncate(m.out.lines[i], inner), inner, bg)))
+	for i := top; i < len(all) && i < top+rows; i++ {
+		if m.out.kind != "" { // drawn by the TUI with its own styling: no plain-text wrapper
+			lines = append(lines, padRight(truncate(all[i], inner), inner, bg))
+			continue
+		}
+		lines = append(lines, txt(theme.Fg, bg).Render(padRight(truncate(all[i], inner), inner, bg)))
 	}
 	return ui.Box(m.out.title, strings.Join(lines, "\n"), hint, boxW)
 }
