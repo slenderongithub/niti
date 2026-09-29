@@ -47,6 +47,10 @@ transcript glyph). The ones worth knowing on day one:
 | `^l` | Switch an agent's model |
 | `^t` | Theme picker with live preview (themes: graphite, ember, tide, dusk, moss, paper — or your own in `~/.config/niti/themes/*.json`) |
 | `f1` | Help for whatever has focus |
+| `ctrl+o` | Unfold full command output and whole diffs |
+| `esc` | While agents work: interrupt them. Anything you type mid-run steers the working agent |
+| `↑` / `^r` | Recall or search earlier prompts |
+| `@path` | Mention a project file in the prompt · `!cmd` runs a command right here |
 
 Type `/` for the full command list:
 

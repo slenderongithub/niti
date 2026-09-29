@@ -124,3 +124,14 @@ func TestBangRunsACommandHereAndShowsItsOutput(t *testing.T) {
 		t.Error("output should open in the pager")
 	}
 }
+
+func TestCtrlRSearchesEarlierPrompts(t *testing.T) {
+	m := sized(1, 120, 30)
+	m.history = []string{"build the cart", "add tests for checkout"}
+	next, _ := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = typing(next.(Model), "check")
+	next, _ = m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := next.(Model).input.Value(); got != "add tests for checkout" {
+		t.Errorf("ctrl+r → check → enter should recall the prompt, got %q", got)
+	}
+}

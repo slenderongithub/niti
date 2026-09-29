@@ -161,6 +161,12 @@ func (m Model) globalBindings() []binding {
 		{keys: []string{"ctrl+g"}, label: "^g", desc: "Agents", help: "jump to one agent's view (alt+1…9 directly)", run: (*Model).openAgentPicker},
 		{keys: []string{"alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9"}, label: "alt+1…9", desc: "Agent N", help: "show only agent N (same key again: all agents)", run: nil},
 		{keys: []string{"ctrl+o"}, label: "^o", desc: "Expand", help: "show full command output and whole diffs (again: fold them)", footer: m.hasFolded(), run: func(m *Model) tea.Cmd { m.expanded = !m.expanded; return nil }},
+		{keys: []string{"ctrl+r"}, label: "^r", desc: "History", help: "search earlier prompts", run: func(m *Model) tea.Cmd {
+			m.openPalette()
+			m.pal.query = "history: "
+			m.pal.list.SetQuery(m.pal.query)
+			return nil
+		}},
 		{keys: []string{"ctrl+t"}, label: "^t", desc: "Theme", help: "pick a theme, with live preview", run: func(m *Model) tea.Cmd { m.openThemePicker(); return nil }},
 		{keys: []string{"f1"}, label: "f1", desc: "Help", help: "this list: keys for what's focused, and what the glyphs mean", footer: true, run: (*Model).openHelp},
 		m.quitBinding(),

@@ -37,6 +37,15 @@ func (m *Model) openPalette() tea.Cmd {
 		entries = append(entries, e)
 	}
 
+	// Earlier prompts, newest first — ctrl+r opens the palette filtered to these.
+	for i := len(m.history) - 1; i >= 0 && i >= len(m.history)-50; i-- {
+		h := m.history[i]
+		add("history: "+strings.ReplaceAll(h, "\n", " ⏎ "), paletteEntry{desc: "Put this earlier prompt back in the prompt", run: func(m *Model) tea.Cmd {
+			m.input.SetValue(strings.ReplaceAll(h, "\n", newlineMark))
+			m.input.CursorEnd()
+			return nil
+		}})
+	}
 	for _, sgt := range m.suggestions {
 		sgt := sgt
 		add("suggest: "+sgt, paletteEntry{desc: "Suggested next step — puts it in the prompt", run: func(m *Model) tea.Cmd { m.input.SetValue(sgt); m.input.CursorEnd(); return nil }})
