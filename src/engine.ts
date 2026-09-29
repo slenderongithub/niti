@@ -562,6 +562,24 @@ export class Engine {
     }
   }
 
+  // A provider's key changed (POST /auth, the TUI's /api): every agent on that provider was built
+  // with the old key and would keep failing with it until a restart. Rebuild their clients now.
+  // Same provider, same model — only the key differs — so unlike switchModel this is safe mid-task:
+  // the next call goes out with the new key. Returns the agents that picked it up.
+  refreshProvider(provider: string): string[] {
+    const refreshed: string[] = [];
+    for (const [id, agent] of this.byId) {
+      if (agent.config.provider !== provider) continue;
+      try {
+        agent.reconfigure(provider, agent.config.model, this.makeProvider(agent.config), agent.config.baseURL);
+        refreshed.push(id);
+      } catch {
+        // still no usable key for it — it keeps failing through its normal error path
+      }
+    }
+    return refreshed;
+  }
+
   // User-triggered task reassignment (drives POST /reassign). Only pending tasks are eligible — see
   // Orchestrator.reassign. Publishes on hub, same broadcast path runProject's onOrchestration uses,
   // so every connected client (TUI, web, desktop) picks up the move, not just the caller.

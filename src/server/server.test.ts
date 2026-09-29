@@ -329,7 +329,7 @@ test("auth store round-trips through the API (redacted on read)", async () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ provider: "openai", type: "api", key: "sk-secret" }),
     });
-    expect((await post.json())).toMatchObject({ ok: true });
+    expect((await post.json())).toMatchObject({ ok: true, agents: expect.any(Array) }); // agents on openai now use the new key
     const list = await (await fetch(`${h.url}/auth?token=${h.token}`)).json();
     expect(list.credentials).toEqual([{ provider: "openai", type: "api" }]); // key redacted
   } finally {

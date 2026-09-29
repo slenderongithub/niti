@@ -447,3 +447,17 @@ test("a work run ends with one turn_summary card (files, bullets, suggestions); 
   expect(cards).toHaveLength(1);
   expect(cards[0]).toMatchObject({ ok: true, summary: "• Created a.txt", next: ["add b.txt"], files: [{ path: "a.txt", added: 2, removed: 0 }] });
 });
+
+test("refreshProvider rebuilds the clients of every agent on that provider, and only those", () => {
+  const built: string[] = [];
+  const configs: AgentConfig[] = [
+    { id: "a", provider: "google", model: "g", role: "A", systemPrompt: "s", lead: true, allowedTools: [] },
+    { id: "b", provider: "google", model: "g", role: "B", systemPrompt: "s", allowedTools: [] },
+    { id: "c", provider: "openai", model: "o", role: "C", systemPrompt: "s", allowedTools: [] },
+  ];
+  const engine = new Engine({ configs, makeProvider: (cfg) => (built.push(cfg.id), fake), interactive: false, repoMap: false });
+  built.length = 0; // construction built all three; count only the refresh
+  expect(engine.refreshProvider("google")).toEqual(["a", "b"]);
+  expect(built).toEqual(["a", "b"]);
+  expect(engine.refreshProvider("anthropic")).toEqual([]);
+});

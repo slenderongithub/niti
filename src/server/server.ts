@@ -508,7 +508,7 @@ export function startServer(
         // Validation is deferred to first use, which surfaces a clear error there. Upgrade to a cheap
         // models-list ping per client kind if silent bad keys become a real problem.
         setCredential(built);
-        return json({ ok: true, note: "stored (verified on first use)" });
+        return json({ ok: true, note: "stored (verified on first use)", agents: engine.refreshProvider(built.provider) });
       }
       if (p === "/auth" && method === "DELETE") {
         const prov = u.searchParams.get("provider") ?? "";
