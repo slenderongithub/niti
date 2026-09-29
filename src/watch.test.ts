@@ -80,7 +80,7 @@ test("an agent's own write is not reported back as an external change", async ()
   // events — Linux coalesces them, so the only event was the suppressed one and the test hung
   // waiting for a second that was never coming.
   writeFileSync(join(root, "theirs.txt"), "a human wrote this");
-  expect(await until(() => seen.includes("theirs.txt"))).toBe(true);
+  expect(await until(() => seen.includes("theirs.txt"), 10_000)).toBe(true); // CI Linux headroom, as above
 
   w.markSelfWrite("mine.txt");
   writeFileSync(join(root, "mine.txt"), "agent wrote this");
@@ -88,7 +88,7 @@ test("an agent's own write is not reported back as an external change", async ()
   // filtered or it hasn't landed yet; the following write proves the watcher is still delivering,
   // so "hasn't landed yet" cannot silently carry the assertion.
   writeFileSync(join(root, "after.txt"), "another human write");
-  expect(await until(() => seen.includes("after.txt"))).toBe(true);
+  expect(await until(() => seen.includes("after.txt"), 10_000)).toBe(true);
   expect(seen).not.toContain("mine.txt");
   w.close();
 }, 20_000);
