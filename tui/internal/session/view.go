@@ -139,6 +139,8 @@ func (m Model) View() (frame string) {
 		out = ui.OverlayAt(out, m.paletteView(w, h), w, h, 2)
 	case m.car.open:
 		out = ui.Overlay(out, m.carouselView(w, h), w, h)
+	case m.akp.open:
+		out = ui.Overlay(out, m.apiKeyView(w, h), w, h)
 	case m.ap.open:
 		out = ui.Overlay(out, m.agentPickerView(w, h), w, h)
 	case m.tp.open:

@@ -56,6 +56,7 @@ func (m *Model) openPalette() tea.Cmd {
 		add("mode: Build", paletteEntry{desc: "Agents carry out the plan", run: (*Model).toggleMode})
 	}
 	add("model: Switch model…", paletteEntry{desc: "Change which model an agent runs on (^l)", run: (*Model).openCarousel})
+	add("api: Change API key…", paletteEntry{desc: "Replace a provider's key when calls fail on a wrong one (/api)", run: (*Model).openAPIKey})
 	if m.view == "usage" {
 		add("view: Transcript", paletteEntry{desc: "Back to the agents' live output", run: func(m *Model) tea.Cmd { m.view = "panes"; return nil }})
 	} else {

@@ -132,6 +132,7 @@ type Model struct {
 	diffv     diffview    // full-screen state for the diff-viewing approval (edit/write_file only)
 	tp        themePicker // the ctrl+t theme swatch picker, when open
 	ap        agentPicker // the ctrl+g "switch agent window" quick-picker, when open
+	akp       apiKeyPicker // /api: replace a provider's key, when open
 	pal       palette     // the ctrl+p command palette, when open
 	view      string      // "panes" | "usage"
 	focus     string      // agent id currently maximized in the work pane, or "" for the stacked overview
@@ -402,6 +403,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case apiCredsMsg:
+		if m.akp.open && m.akp.stage == "provider" {
+			m.akp.list.Set(m.apiKeyItems(msg.creds))
+		}
+		return m, nil
+
+	case apiKeySavedMsg:
+		m.apiKeySaved(msg)
+		return m, nil
+
 	case credsMsg:
 		m.sett.creds, m.sett.credsLoaded = msg.creds, true
 		return m, nil
@@ -486,6 +497,9 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.ap.open {
 		return m, m.agentPickerKey(k)
+	}
+	if m.akp.open {
+		return m, m.apiKeyKey(k)
 	}
 	if m.tp.open {
 		return m, m.themePickerKey(k)
@@ -594,6 +608,7 @@ func (m Model) menuItems() []ui.Item {
 	add("config", "Theme, mode and the team's model assignments")
 	add("stats", "Token stats: favorite model and per-model breakdown")
 	add("theme", "Open the theme picker (or /theme <name> to switch directly)")
+	add("api", "Change a provider's API key — the fix when every call fails on a wrong key")
 	add("quit", "Leave niti")
 	return items
 }
@@ -681,6 +696,8 @@ func (m *Model) submit(text string) tea.Cmd {
 			// commands that can only happen here (/quit, /theme, /graph, /dashboard, the settings tabs).
 			m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
 			return nil
+		case "api":
+			return m.openAPIKey()
 		case "model":
 			// Bare /model opens the same centred picker ctrl+l does; with arguments it's the scriptable
 			// form and goes to the server. Nobody should have to type an agent id from memory.

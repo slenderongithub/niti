@@ -20,6 +20,8 @@ var (
 	reCmd  = reStr("command")
 	reQ    = reStr("(?:query|pattern|symbol)")
 	reKey  = reStr("key")
+	// An error that reads like a rejected credential; its line then points at /api.
+	reKeyError = regexp.MustCompile(`(?i)api[ _-]?key|\b(401|403)\b|unauthori[sz]ed|forbidden|invalid (x-api-key|credential|token)|authentication|no API key`)
 	reTask = regexp.MustCompile(`^(starting|queued) (\S+?)(?: → (\S+))?: (.*)$`)
 )
 
@@ -43,7 +45,11 @@ func humanize(kind, payload string) string {
 		}
 		return "" // a read's result is a file dump — the ⏺ line already said what was read
 	case "error":
-		return "✖ " + strings.TrimPrefix(strings.Replace(payload, ": error: Error:", ":", 1), "error: ")
+		line := "✖ " + strings.TrimPrefix(strings.Replace(payload, ": error: Error:", ":", 1), "error: ")
+		if reKeyError.MatchString(payload) {
+			line += " — /api to change the key"
+		}
+		return line
 	case "warning":
 		return "⚠ " + payload
 	case "thought":

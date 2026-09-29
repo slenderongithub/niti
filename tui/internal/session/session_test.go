@@ -210,7 +210,7 @@ func TestSlashMenuFiltersAndCompletes(t *testing.T) {
 		t.Fatal("the menu must stay closed until a / is typed")
 	}
 	m = typing(m, "/")
-	if !m.menuOpen || m.menu.Len() != 12 { // /help + 3 server commands + /transcript /graph /dashboard /settings /config /stats /theme /quit
+	if !m.menuOpen || m.menu.Len() != 13 { // /help + 3 server commands + /transcript /graph /dashboard /settings /config /stats /theme /api /quit
 		t.Fatalf("expected all commands offered on /, open=%v len=%d", m.menuOpen, m.menu.Len())
 	}
 	m = typing(m, "m")

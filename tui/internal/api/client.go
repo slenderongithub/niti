@@ -462,6 +462,16 @@ func (c *Client) SaveAuth(cred map[string]string) error {
 	return c.do("POST", "/auth", cred, nil)
 }
 
+// SetAPIKey replaces a provider's API key (POST /auth). The core rebuilds every agent on that
+// provider with it straight away; their ids come back so the caller can say who picked it up.
+func (c *Client) SetAPIKey(provider, key string) ([]string, error) {
+	var r struct {
+		Agents []string `json:"agents"`
+	}
+	err := c.do("POST", "/auth", map[string]string{"provider": provider, "type": "api", "key": key}, &r)
+	return r.Agents, err
+}
+
 // Credential mirrors GET /auth's redacted entries — provider + auth type, never the secret itself.
 type Credential struct {
 	Provider string `json:"provider"`
