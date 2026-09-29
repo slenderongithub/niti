@@ -535,7 +535,10 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	// Typing while the transcript or the agents panel has focus goes to the prompt — nobody should
 	// have to press tab back before they can type the next message.
-	if m.context() != regionPrompt {
+	// The open command menu is the prompt with suggestions over it, not another panel: editing keys
+	// (backspace, delete, the arrows) belong to the text there too. Treating it as a panel swallowed
+	// them, so a typed "/hel" could only be cleared whole with esc.
+	if c := m.context(); c != regionPrompt && c != "menu" {
 		if k.Type != tea.KeyRunes {
 			return m, nil
 		}

@@ -242,3 +242,35 @@ func TestWheelMovesTheDiffNotTheTranscriptBehindIt(t *testing.T) {
 		t.Errorf("and comes straight back: top %d, max %d", m.diffv.top, m.diffMaxTop())
 	}
 }
+
+// A slash command being typed is ordinary text: backspace, delete and the cursor keys edit it, and
+// the menu narrows or widens to follow. (They used to be swallowed while the menu was open, so the
+// only way to fix a typo was esc, which cleared everything.)
+func TestSlashCommandsEditLikeNormalText(t *testing.T) {
+	m := sized(2, 110, 26)
+	m.commands = []api.Command{{Name: "help"}, {Name: "hello"}, {Name: "cost"}}
+	m.menu.Set(m.menuItems())
+	m = typing(m, "/hel")
+	if m.context() != "menu" {
+		t.Fatalf("setup: expected the command menu to be open, context is %q", m.context())
+	}
+	press := func(k tea.KeyMsg) {
+		next, _ := m.onKey(k)
+		m = next.(Model)
+	}
+	press(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.input.Value() != "/he" || !m.menuOpen {
+		t.Errorf("backspace: %q menuOpen=%v", m.input.Value(), m.menuOpen)
+	}
+	press(tea.KeyMsg{Type: tea.KeyLeft})
+	press(tea.KeyMsg{Type: tea.KeyLeft})
+	press(tea.KeyMsg{Type: tea.KeyDelete}) // deletes the "h" under the cursor: "/he" -> "/e"
+	if m.input.Value() != "/e" {
+		t.Errorf("cursor keys + delete: %q", m.input.Value())
+	}
+	press(tea.KeyMsg{Type: tea.KeyBackspace})
+	press(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.input.Value() != "e" || m.menuOpen {
+		t.Errorf("deleting the slash should close the menu: %q menuOpen=%v", m.input.Value(), m.menuOpen)
+	}
+}
