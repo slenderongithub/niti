@@ -12,5 +12,6 @@ desktop/dist/
 .niti/session.json
 .niti/niti.db*
 .niti/reports/
+.niti/history
 .env
 .env.*

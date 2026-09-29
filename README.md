@@ -1,160 +1,210 @@
 <div align="center">
 
-# <img src="assets/logo.png" alt="niti logo" width="90" valign="middle"> niti
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](#license)
-[![Bun](https://img.shields.io/badge/core-Bun%20%2F%20TypeScript-f9f1e1)](#two-front-ends-one-core)
-[![Go](https://img.shields.io/badge/TUI-Go%20%2F%20Bubbletea-00add8)](#two-front-ends-one-core)
+<br>
 
-**A terminal CLI that runs multiple AI coding agents — from different LLM providers — concurrently on one project.**
+<img src="assets/logo.png" alt="" width="112">
 
-Assign models to custom roles, pick an **orchestrator** to plan the work into a task DAG, and watch the team build together. They talk to each other directly to stay aligned — live in your terminal, or in an optional web dashboard.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/wordmark-light.svg">
+  <img src="assets/wordmark-dark.svg" alt="niti" width="360">
+</picture>
 
+### A team of AI coding agents, on any mix of models, working on one project — live in your terminal.
 
 <br>
 
-<img src="readme_images/CLI.png" alt="niti's terminal UI — team of 4 agents, live context/token sidebar" width="100%">
+[![npm](https://img.shields.io/npm/v/@slenderbuilds/niti?style=flat-square&color=7aa2d6&label=npm)](https://www.npmjs.com/package/@slenderbuilds/niti)
+[![CI](https://img.shields.io/github/actions/workflow/status/slenderongithub/niti/ci.yml?branch=main&style=flat-square&label=CI&color=8fbf8a)](https://github.com/slenderongithub/niti/actions/workflows/ci.yml)
+[![Platforms](https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-2e333d?style=flat-square)](#install)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2e333d?style=flat-square)](#license)
+
+**[Install](#install)** &nbsp;·&nbsp; **[The terminal](#the-terminal)** &nbsp;·&nbsp; **[In the browser](#in-the-browser)** &nbsp;·&nbsp; **[Under the hood](#under-the-hood)** &nbsp;·&nbsp; **[Configure](#configure)**
+
+<br>
+
+<img src="readme_images/cli.png" alt="niti's terminal: a three-agent team, the project's files, and the live transcript" width="100%">
 
 </div>
 
----
+<br>
 
-## Quickstart
+## Install
 
 ```sh
-npm install -g @slenderbuilds/niti   # prebuilt binaries — no Bun, no Go, no build step
-niti                                 # pick your team, then start building
+npm install -g @slenderbuilds/niti
+niti
 ```
 
-> Published as **`@slenderbuilds/niti`** — the unscoped `niti` was rejected by npm's own
-> anti-squatting check (too similar to `jiti`/`vite`/others), and it suggested this scope. The
-> commands are still `niti` (TUI) and `niti-core` (headless engine); project state still lives
-> in `.niti/` — only the install name changed.
+Prebuilt for macOS, Linux and Windows — no Bun, no Go, no build step. On first launch niti asks
+how many teammates you want (1–6) and, for each, a **provider**, a **model**, a **name** and a
+one-line **job**. One of them leads: it turns your request into a plan, the others build it, and
+they talk to each other as they go.
 
-On first launch, `niti` opens a picker: how many teammates (1–6), then per teammate — provider,
-model, name, and a one-line job description. **29 providers / 152 models** from the
-[Models.dev](https://models.dev) catalog, plus local (Ollama/LM Studio) and **Custom** for any
-OpenAI-compatible endpoint. Keys live in `~/.config/niti/auth.json` (0600) and your OS keychain —
-never a server.
+Anthropic, OpenAI, Gemini, OpenRouter, DeepSeek, Groq, xAI, Mistral and many more come from the
+[Models.dev](https://models.dev) catalog, alongside local models (Ollama, LM Studio) and any
+OpenAI-compatible endpoint. Keys stay on your machine — `~/.config/niti/auth.json` (mode 0600) and
+your OS keychain.
 
-The footer always shows the keys that work where you are, and `f1` explains them (and every
-transcript glyph). The ones worth knowing on day one:
+<br>
 
-| Key | Does |
+## What you get
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**A team, not a chatbot**<br>
+Mix models by strength — a careful model to plan, a fast one to build, a cheap one to review. The
+lead plans the work as a dependency graph; independent tasks run at the same time; teammates ask
+each other questions directly.
+
+</td>
+<td width="50%" valign="top">
+
+**Watch it work**<br>
+Every edit appears as a numbered, syntax-colored diff. Commands stream their output, then fold to a
+one-line result. Each agent's checklist stays pinned. Every run ends with a summary card and a
+suggested next step.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+**Talk to it mid-run**<br>
+Say hello and it says hello — no invented work. Ask a question and it reads the code to answer.
+Anything you type while agents work steers them; <kbd>esc</kbd> stops them at once.
+
+</td>
+<td width="50%" valign="top">
+
+**Guardrails on by default**<br>
+Approvals before risky actions, a project-scoped sandbox, verification against your own build
+before a task counts as done, undo and rewind for every write, and a check that refuses "fixes"
+that only edited the tests.
+
+</td>
+</tr>
+</table>
+
+<br>
+
+## The terminal
+
+The footer always lists the keys that work where you are, and <kbd>f1</kbd> explains them — along
+with every glyph in the transcript. The ones worth knowing on day one:
+
+| Key | |
 |---|---|
-| `^p` | Command palette — every command, theme, view and agent, fuzzy-searchable |
-| `tab` | Move focus: prompt → transcript (scroll it with ↑↓ / pgup, `G` to follow) → agents |
-| `⇧tab` | Switch BUILD ↔ PLAN |
-| `^l` | Switch an agent's model |
-| `^t` | Theme picker with live preview (themes: graphite, ember, tide, dusk, moss, paper — or your own in `~/.config/niti/themes/*.json`) |
-| `f1` | Help for whatever has focus |
-| `ctrl+o` | Unfold full command output and whole diffs |
-| `esc` | While agents work: interrupt them. Anything you type mid-run steers the working agent |
-| `↑` / `^r` | Recall or search earlier prompts |
-| `@path` | Mention a project file in the prompt · `!cmd` runs a command right here |
+| <kbd>^p</kbd> | Command palette — every command, view, agent and theme, fuzzy-searchable |
+| <kbd>tab</kbd> | Move focus: prompt → transcript → agents → files |
+| <kbd>⇧tab</kbd> | Switch **Build** ↔ **Plan** (plan first, run when you like it) |
+| <kbd>esc</kbd> | While agents work: interrupt them. Anything you type mid-run steers the working agent |
+| <kbd>^o</kbd> | Unfold full command output and whole diffs |
+| <kbd>^l</kbd> | Switch an agent's model |
+| <kbd>^t</kbd> | Theme picker with live preview |
+| <kbd>↑</kbd> · <kbd>^r</kbd> | Recall or search earlier prompts |
+| `@path` · `!cmd` | Mention a project file · run a command right here |
 
-Type `/` for the full command list:
+The **Files** panel marks what the agents touched this session — **M** edited, **A** created,
+**·** read. Open any file read-only with this session's changes marked, or hand it to `$EDITOR`.
 
-<img src="readme_images/commands.png" alt="the / command palette, listing every slash command" width="100%">
+Type <kbd>/</kbd> for every command:
 
-## Watch it from the browser too
+<img src="readme_images/commands.png" alt="the command list over the running session" width="100%">
 
-`/dashboard` opens a live control center — agent avatars, message graph, task board, and per-agent
-usage, all pushed over SSE as the team works:
+**Themes** — six calm palettes (graphite, obsidian, ember, tide, dusk, moss), each with a designed
+light version that takes over when you turn on light mode. Or add your own in
+`~/.config/niti/themes/*.json`.
 
-<img src="readme_images/dashboardniti.png" alt="the web dashboard — live agent graph with task/message/usage panels" width="100%">
+<br>
 
-`/graph` opens an interactive force-graph — your project's file/import structure, or (toggle to
-**Models**) the live agent-to-agent conversation as it happens:
+## In the browser
 
-<table>
-<tr>
-<td width="50%"><img src="readme_images/graph1.png" alt="project mode: 137-file dependency graph"></td>
-<td width="50%"><img src="readme_images/graph2.png" alt="models mode: live pixel-art agent avatars, message-colored edges"></td>
-</tr>
-<tr>
-<td>Project mode — every file, colored by directory</td>
-<td>Models mode — your team, colored by status, talking in real time</td>
-</tr>
-</table>
+`/dashboard` opens a live control center: the team as a graph, the task board, agent-to-agent
+messages and usage, updated as the work happens. Click an agent to read its transcript, switch its
+model or message it mid-task. Approvals can be answered here too.
 
-Both pages retheme live with whatever theme (`ctrl+t` / `/theme`) the TUI has active.
+<img src="readme_images/dashboard.png" alt="the web dashboard: team graph, board and an agent's live transcript" width="100%">
 
-## Everything, at a glance
-
-`/settings` opens Status, Config, Usage, and Stats panes without leaving the session:
+`/graph` maps your project's imports — or, in **Models** mode, the team talking in real time.
 
 <table>
 <tr>
-<td width="33%"><img src="readme_images/status.png" alt="Status tab — version, team, mode, theme, models"></td>
-<td width="33%"><img src="readme_images/usage.png" alt="Usage tab — session cost, tokens, per-agent breakdown"></td>
-<td width="34%"><img src="readme_images/stats_models.png" alt="Stats tab — tokens per day, tokens by model"></td>
+<td width="33%"><img src="readme_images/graph-project.png" alt="project mode: every file, colored by directory"></td>
+<td width="33%"><img src="readme_images/graph-focus.png" alt="hovering a file highlights what it imports and what imports it"></td>
+<td width="34%"><img src="readme_images/graph-models.png" alt="models mode: each agent, colored by status"></td>
+</tr>
+<tr>
+<td align="center"><sub>Every file, colored by directory</sub></td>
+<td align="center"><sub>Hover to trace a file's imports</sub></td>
+<td align="center"><sub>Models mode: the team, live</sub></td>
 </tr>
 </table>
 
-## What's actually happening under the hood
+Both pages follow the theme you pick in the terminal.
 
-- **Orchestrator DAG** — the lead agent turns your goal into a validated task graph (dependencies +
-  hand-offs), not a flat queue; independent tasks run concurrently and the lead reviews at the end.
-- **Agent-to-agent messaging** — any teammate can `ask_agent`/`send_message` another mid-task (e.g.
-  frontend asking backend about an API shape), rate-capped per pair as the loop guard.
-- **Sandboxed tools** — `read_file` / `write_file` / `edit` / `shell` plus read-only navigation
-  (`grep` / `glob` / `list_dir`), gated per-agent by `allowedTools` and a wildcard permission
-  policy; every path is jailed to the project root. Reads are line-numbered and paged, so `grep`'s
-  `path:line:` output and a read share one coordinate system; independent reads in a turn run
-  together rather than one round-trip at a time.
-- **Project map + ranked context** — a generated outline of the repo (directory shape plus the
-  files most of the project imports, PageRank over the import graph) rides in the system prompt, so
-  an agent starts oriented instead of guessing. `repoMap: false` turns it off.
-- **Working checklist** — agents write a `todo` list for multi-step tasks, re-stated to the model
-  whenever it changes so the plan stays recent context instead of something to reconstruct from a
-  transcript. Scoped to one task; never carried into the next.
-- **Per-model steering** — each agent's prompt carries a short addendum for its model family
-  (`src/agent/steering.ts`). Mechanical only — verbosity, tool-call shape, when to stop. Anything
-  two agents must agree on stays in the shared guidance, since they message each other across
-  providers.
-- **Reasoning effort** — `reasoning: off|low|medium|high|auto` per agent maps to Gemini's
-  `thinkingBudget` and OpenAI's `reasoning_effort`. Unset sends nothing; note that Flash and
-  Flash-Lite do not think at all unless you set it.
-- **Verification before "done"** — an agent that changed files must pass the project's own checks
-  (a `typecheck`/`build` script, `go build`, `cargo check`, or whatever `verify:` names) before it
-  may report a task complete; failures go back to it as the real compiler output, twice at most.
-  A task whose checks never pass ends `unverified` rather than `done`, so the DAG never releases
-  dependents onto a tree that doesn't build.
-- **Check-gaming guard** — a green result that arrived only because the agent edited the tests,
-  the lint config or the check script itself is refused, and the agent is told to revert it and fix
-  the code. Judged by content, not by touch, so reverting as instructed isn't flagged; and only
-  ever after a failure, so writing a test in a task that never failed is ordinary work.
-- **Objective retry** — an `unverified` task is handed to a *different* model with the check output
-  attached, before any replan. Best-of-N where the selector is a compiler rather than a judge
-  model, and where the tasks that were right first time cost nothing extra.
-- **Approval gates** — agents pause for `[y] approve · [n] deny · [a] always` before risky actions,
-  answered from the TUI or the web dashboard; dangerous shell patterns always prompt.
-- **Persistence** — every turn checkpoints to SQLite (`.niti/niti.db`); `niti-core resume` picks up
-  unfinished tasks with history intact. `/undo` and `/rewind` revert file writes.
-- **MCP + LSP** — declare `mcpServers`/`lsp` in `agents.yaml`; both merge into the same tool loop,
-  gated the same way as everything else.
-- **Failover** — a 429/overload/context-limit requeues the task instead of failing it; another agent
-  picks it up.
+<br>
 
-See [`project_context.md`](./project_context.md) for the full architecture record, the verification
-history, and the deliberate ceilings (what's intentionally out of scope, and why).
+## Settings, at a glance
 
-## Configuring agents
+`/settings` opens Status, Config, Usage and Stats without leaving the session.
 
-`niti` rewrites only the `agents:` block on each team pick — everything else survives a relaunch.
-Edit `.niti/agents.yaml` directly for anything the picker doesn't cover:
+<table>
+<tr>
+<td width="50%"><img src="readme_images/config.png" alt="Config: mode, theme, permissions, thinking, light mode and more"></td>
+<td width="50%"><img src="readme_images/stats_models.png" alt="Stats: tokens per day and by model"></td>
+</tr>
+</table>
+
+<br>
+
+## Under the hood
+
+- **Talks before it plans** — a greeting gets a reply and a question gets an answer (read-only). Only
+  a request to change something becomes a plan, and a follow-up adjusts the unfinished plan instead
+  of replacing it. The lead remembers the last few exchanges.
+- **Plans as a graph** — the lead turns a request into tasks with dependencies and hand-offs;
+  independent tasks run concurrently, and the lead reviews the result at the end.
+- **Agents talk to each other** — any teammate can ask another mid-task (the frontend asking the
+  backend about an API shape), rate-capped per pair.
+- **Starts oriented** — a map of the repository (its layout and the files most of it depends on)
+  rides in every agent's prompt, so work begins with context instead of guesses.
+- **Verified before "done"** — an agent that changed files must pass your project's own checks
+  (a `typecheck` or `build` script, `go build`, `cargo check`, or whatever `verify:` names). A task
+  that never passes ends `unverified`, and is retried on a different model before any replan.
+- **Honest about cost** — prompt caching tuned per provider (Anthropic breakpoints, OpenAI cache
+  keys, Gemini implicit caching), reasoning effort per agent, real per-model context windows and
+  prices, and thinking tokens counted — see `/cost`.
+- **Guarded tools** — `read_file`, `write_file`, `edit`, `shell` and read-only search, gated per
+  agent and by a permission policy; paths are jailed to the project; dangerous commands always ask.
+- **Picks up where you left off** — every turn checkpoints to SQLite; `niti-core resume` continues
+  unfinished work, and `/undo` / `/rewind` revert writes.
+- **Extensible** — MCP servers and language servers join the same tool loop, under the same gates.
+
+The full architecture record, the verification history and what is deliberately out of scope live
+in [`project_context.md`](./project_context.md).
+
+<br>
+
+## Configure
+
+The team picker rewrites only the `agents:` block of `.niti/agents.yaml`; everything else is
+yours to edit.
 
 ```yaml
 agents:
   - id: architect
     provider: anthropic
-    model: claude-opus-4-8
+    model: claude-opus-5
     role: Architect
     lead: true
-    systemPrompt: You are a software architect. Decompose work into independent subtasks.
+    reasoning: high
+    systemPrompt: You are a software architect. Plan the work into independent tasks.
   - id: engineer
     provider: openai
-    model: gpt-4o
+    model: gpt-5
     role: Backend Engineer
     systemPrompt: You are a backend engineer. Implement the assigned task.
     allowedTools: [read_file, write_file, edit, shell, mcp]
@@ -168,42 +218,41 @@ mcpServers:
     command: code-review-graph
     args: [--stdio]
 
-theme: graphite      # ctrl+t / /theme / ^p opens a live preview, synced to any open dashboard/graph tab
-auto: false          # approve anything not explicitly denied
-maxAgents: 6
+theme: graphite
+auto: false   # true: approve anything not explicitly denied
 ```
 
-Full config reference — permissions resolution order, environment variables, LSP setup — lives in
-[`project_context.md`](./project_context.md).
+<br>
 
-## From source
+## Build from source
 
 Requires [Bun](https://bun.sh) ≥ 1.3 and [Go](https://go.dev) ≥ 1.22.
 
 ```sh
 bun install
-bun run build:tui                 # builds ./niti (the Go TUI)
+bun run build:all          # ./niti (terminal UI) and ./niti-core (engine)
 ./niti
 ```
 
-Headless / scripting, no interactive terminal needed:
+Headless, for scripts and CI:
 
 ```sh
 bun run src/cli.ts "Build a clothing website for gen-z."   # one-shot
-bun run src/cli.ts --web "..."                              # + live web dashboard
-bun run src/server/main.ts                                  # headless server, prints its own handshake URL
+bun run src/cli.ts --web "…"                               # with the live dashboard
 ```
 
-## Development
+Tests: `bun test` · `bunx tsc --noEmit` · `cd tui && go test ./...`
 
-```sh
-bun test                                                     # TypeScript unit + integration tests
-bunx tsc --noEmit                                             # typecheck
-cd tui && go build ./... && go vet ./... && go test ./...    # Go TUI: build, vet, unit tests
-```
+<br>
 
 ## License
 
-MIT.
+MIT
 
-<img src="assets/logo.png" alt="niti logo" width="40">
+<br>
+
+<div align="center">
+<img src="assets/logo.png" alt="niti" width="40">
+<br>
+<sub>Built for people who would rather watch their tools work than wonder what they're doing.</sub>
+</div>
