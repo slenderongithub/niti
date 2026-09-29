@@ -55,6 +55,9 @@ func (m Model) View() (frame string) {
 		return "bye.\n"
 	}
 	w, h := m.width, m.height
+	if m.vm != nil {
+		m.vm.scrollMax, m.vm.measured = 0, true // agentBlock raises it as it lays out
+	}
 	if w == 0 {
 		w = 100 // before the first WindowSizeMsg arrives
 	}
@@ -573,6 +576,9 @@ func (m Model) agentBlock(st *agentState, w, per int) string {
 	}
 	gutter := txt(st.color, bg).Render("│ ")
 	rows := max(per-2-len(st.todos), 1) // -2: the header, plus a blank row separating this block from the next
+	if m.vm != nil {
+		m.vm.scrollMax = max(m.vm.scrollMax, len(body)-rows)
+	}
 	end := max(len(body)-m.scrollBack, min(rows, len(body))) // scrolled back: stop short of the newest
 	for i := max(end-rows, 0); i < end; i++ {
 		line := renderLine(body[i], max(w-2, 0), bg)

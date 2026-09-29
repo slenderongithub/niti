@@ -156,6 +156,7 @@ type Model struct {
 	region      string
 	agentCursor int // highlighted row in the Agents panel while it has focus
 	scrollBack  int  // transcript lines scrolled up from the newest; 0 = following the output
+	vm          *viewMetrics // what the last frame measured; View has a value receiver, so it reports through this
 	expanded    bool // ctrl+o: show full command output and whole diffs instead of their folded form
 	card        *api.Event // the last run's summary card (turn_summary), shown until the next goal
 	suggestions []string   // next prompts the lead suggested; the first is the prompt's ghost text
@@ -220,7 +221,7 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	ti.CharLimit = promptCharLimit
 	m := Model{
 		client: client, events: events, cancel: cancel,
-		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected",
+		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected", vm: &viewMetrics{},
 		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), prefs: map[string]bool{"projectInstructions": true}, autoApprove: sess.Auto,
 		autoCompact: true, thinkingMode: true, // the core's defaults, kept when an older core sends none
 	}
@@ -572,28 +573,65 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 
-// scroll moves whichever list has the screen by one row; with nothing open, the wheel scrolls the
-// transcript (it used to do nothing, and old output was only reachable through /transcript).
+// wheelLines is how far one wheel event moves any scrolling view. One constant for the transcript,
+// the pager and the diff, so the same flick goes the same distance everywhere — the transcript
+// used to take three lines per event and the pager one, and a trackpad's burst of events made
+// that difference feel like acceleration. Lists that move a cursor still move it one row per event.
+const wheelLines = 2
+
+// viewMetrics is what a frame learns about itself that scrolling needs and Update cannot compute
+// without repeating the whole layout. View has a value receiver, so it reports through a pointer
+// the model carries; nil (a model built by hand) falls back to an estimate.
+type viewMetrics struct {
+	scrollMax int  // how far back the tallest visible transcript can actually scroll
+	measured  bool // View has run at least once
+}
+
+// scroll moves whichever view has the screen; with nothing open, the wheel scrolls the transcript
+// (it used to do nothing, and old output was only reachable through /transcript).
 func (m *Model) scroll(delta int) {
 	switch {
+	case m.sett.open:
+		// no scrolling body; must not fall through to the transcript hidden behind it
+	case len(m.approvals) > 0 && m.diffOpen():
+		if !m.diffv.editing {
+			m.diffv.top = clamp(m.diffv.top+delta*wheelLines, 0, m.diffMaxTop())
+		}
 	case m.out.open:
-		m.out.top = clamp(m.out.top+delta, 0, m.outputMaxTop())
+		m.out.top = clamp(m.out.top+delta*wheelLines, 0, m.outputMaxTop())
 	case m.car.open:
 		m.car.list.Move(delta)
 	case m.pal.open:
 		m.pal.list.Move(delta)
 		m.preview()
+	case m.ap.open:
+		m.ap.list.Move(delta)
+	case m.akp.open:
+		if m.akp.stage == "provider" {
+			m.akp.list.Move(delta)
+		}
+	case m.tp.open:
+		// the theme picker is a sideways carousel: the wheel has no meaningful axis there
 	case m.menuOpen:
 		m.menu.Move(delta)
 	default:
-		m.scrollTranscript(-delta * 3) // wheel up = back in time
+		m.scrollTranscript(-delta * wheelLines) // wheel up = back in time
 	}
+}
+
+// diffOpen: the full-screen diff has the screen (same test View uses to choose it).
+func (m Model) diffOpen() bool {
+	if len(m.approvals) == 0 || m.sett.open {
+		return false
+	}
+	_, ok := approvalDiff(m.approvals[0])
+	return ok
 }
 
 // scrollTranscript moves the transcript view `delta` lines back in time (negative: forward). Zero
 // means following the newest output; any other value holds the view still while output arrives.
 func (m *Model) scrollTranscript(delta int) {
-	m.scrollBack = clamp(m.scrollBack+delta, 0, m.transcriptLen())
+	m.scrollBack = clamp(m.scrollBack+delta, 0, m.scrollLimit())
 	if m.scrollBack == 0 {
 		m.unseen = 0
 	}
@@ -601,7 +639,17 @@ func (m *Model) scrollTranscript(delta int) {
 
 func (m *Model) follow() { m.scrollBack, m.unseen = 0, 0 }
 
-// transcriptLen is the length of the longest log on screen — what scrolling is bounded by.
+// scrollLimit is how far back the transcript can go. The last frame measured it exactly. Bounding
+// by log length instead let the offset run past the top: extra wheel events piled up unseen, and
+// scrolling back down then did nothing until they had all been undone.
+func (m Model) scrollLimit() int {
+	if m.vm != nil && m.vm.measured {
+		return m.vm.scrollMax
+	}
+	return m.transcriptLen()
+}
+
+// transcriptLen is the length of the longest log on screen — an upper estimate before any frame.
 func (m Model) transcriptLen() int {
 	n := 0
 	for _, id := range m.order {

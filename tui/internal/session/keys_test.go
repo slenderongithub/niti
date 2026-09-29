@@ -194,3 +194,51 @@ func TestCompactModeFitsSmallTerminals(t *testing.T) {
 		t.Errorf("compact view is %d rows, want 16", n)
 	}
 }
+
+// Scrolling up past the top used to bank the excess: the offset kept growing while the view sat at
+// the oldest line, so the first wheel-downs after a hard flick did nothing visible. The offset is
+// bounded by what a frame can actually show, so the way back starts at once.
+func TestWheelHasNoDeadZoneAtTheTop(t *testing.T) {
+	m := sized(1, 100, 30)
+	m.vm = &viewMetrics{} // New() sets this; a hand-built model has to
+	m.goal = "x"
+	st := m.agents[m.order[0]]
+	for i := 0; i < 200; i++ {
+		st.push(fmt.Sprintf("line %d", i))
+	}
+	_ = m.View() // a frame measures how far back there is to go
+	for i := 0; i < 500; i++ {
+		m.scroll(-1) // a long flick up
+	}
+	top := m.scrollBack
+	if top <= 0 || top >= 200 {
+		t.Fatalf("the offset should stop at the oldest line, got %d of 200", top)
+	}
+	m.scroll(1)
+	if m.scrollBack != top-wheelLines {
+		t.Errorf("one wheel-down after the flick should move %d lines back toward the newest, got %d -> %d", wheelLines, top, m.scrollBack)
+	}
+}
+
+func TestWheelMovesTheDiffNotTheTranscriptBehindIt(t *testing.T) {
+	m := sized(1, 100, 24)
+	diff := strings.Repeat("+added line\n", 80)
+	m.approvals = []api.Approval{{AgentID: "a", Tool: "write_file", Input: map[string]any{"diff": diff, "path": "x.ts"}}}
+	if !m.diffOpen() {
+		t.Fatal("setup: expected the full-screen diff to be showing")
+	}
+	m.scroll(1)
+	if m.diffv.top != wheelLines || m.scrollBack != 0 {
+		t.Errorf("wheel-down should scroll the diff by %d (got %d) and leave the transcript alone (got %d)", wheelLines, m.diffv.top, m.scrollBack)
+	}
+	for i := 0; i < 100; i++ {
+		m.scroll(1)
+	}
+	if m.diffv.top != m.diffMaxTop() {
+		t.Errorf("scrolling stops at the end of the diff: top %d, max %d", m.diffv.top, m.diffMaxTop())
+	}
+	m.scroll(-1)
+	if m.diffv.top != m.diffMaxTop()-wheelLines {
+		t.Errorf("and comes straight back: top %d, max %d", m.diffv.top, m.diffMaxTop())
+	}
+}
