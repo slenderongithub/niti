@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { CATALOG, providersByCategory } from "./catalog.ts";
+import { CATALOG, providersByCategory, contextWindow, probeOllamaContext } from "./catalog.ts";
 import { GENERATED_CATALOG } from "./catalog.generated.ts";
 
 test("every catalog entry is well-formed", () => {
@@ -79,5 +79,26 @@ test("no two providers point at the same host", () => {
     const prev = byHost.get(host);
     expect(prev ? `${prev} and ${id} both claim ${host}` : host).toBe(host);
     byHost.set(host, id);
+  }
+});
+
+test("context window is per model: Haiku 4.5 is 200k even though the Anthropic default is 1M", () => {
+  expect(contextWindow("anthropic", "claude-haiku-4-5")).toBe(200_000);
+  expect(contextWindow("anthropic", "claude-opus-4-8")).toBe(1_000_000);
+  expect(contextWindow("openai", "gpt-5-mini")).toBe(400_000);
+  expect(contextWindow("openrouter", "anthropic/claude-sonnet-4-5")).toBe(200_000); // gateway ids match on the model half
+  expect(contextWindow("groq", "some-unlisted-model")).toBe(128_000); // unknown → conservative default
+});
+
+test("an Ollama server's own num_ctx overrides the table, since it truncates silently past it", async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch: () => Response.json({ parameters: "stop <eot>\nnum_ctx 4096", model_info: { "llama.context_length": 131072 } }),
+  });
+  try {
+    expect(await probeOllamaContext("llama3.3", `http://localhost:${server.port}/v1`)).toBe(4096);
+    expect(contextWindow("ollama", "llama3.3")).toBe(4096);
+  } finally {
+    server.stop(true);
   }
 });

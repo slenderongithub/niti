@@ -1,16 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, RateLimit } from "./provider.ts";
-import { parseRateLimit } from "./provider.ts";
+import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, RateLimit, Reasoning } from "./provider.ts";
+import { parseRateLimit, cacheBreakpoints } from "./provider.ts";
 
 const EPHEMERAL: Anthropic.CacheControlEphemeral = { type: "ephemeral" };
 
 // Marks the LAST content block of a message as a cache breakpoint. Anthropic caches everything up
-// to and including a marked block, so marking the second-to-newest message caches the whole
-// growing conversation prefix — the newest one or two turns are the only "fresh" tokens each call.
-// Thinking/redacted-thinking blocks can't carry cache_control at all — when a replayed assistant
-// turn (Turn.raw) ends in one, this just skips marking that particular message; the next call
-// still gets a fresh chance once a cacheable block is at the end.
-function withCacheControl(m: Anthropic.MessageParam): Anthropic.MessageParam {
+// to and including a marked block. Thinking/redacted-thinking blocks can't carry cache_control at
+// all — when a replayed assistant turn (Turn.raw) ends in one, this just skips that message.
+export function withCacheControl(m: Anthropic.MessageParam): Anthropic.MessageParam {
   if (typeof m.content === "string") {
     return { ...m, content: [{ type: "text", text: m.content, cache_control: EPHEMERAL }] };
   }
@@ -21,6 +18,20 @@ function withCacheControl(m: Anthropic.MessageParam): Anthropic.MessageParam {
   content[content.length - 1] = { ...last, cache_control: EPHEMERAL };
   return { ...m, content };
 }
+
+// Pre-4.6 models (Haiku 4.5, Sonnet/Opus 4.5 and older) take neither adaptive thinking nor
+// `effort` — both 400. Everything newer takes both.
+const LEGACY_MODEL = /haiku|claude-3|-4-5|-4-1\b|-4-0|-4-2025/;
+
+// niti's portable reasoning level → Anthropic's `effort`. "off" becomes the lowest effort rather
+// than `thinking: {type: "disabled"}`, which Opus 5.5 rejects at every effort and Opus 5 above high.
+const EFFORT: Record<Reasoning, "low" | "medium" | "high" | undefined> = {
+  off: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  auto: undefined,
+};
 
 function blocksToReply(content: Anthropic.ContentBlock[]): ProviderReply {
   let text = "";
@@ -43,12 +54,14 @@ export class AnthropicProvider implements Provider {
   // proprietary and a strict shim 400s on it, and a fixed 16k max_tokens exceeds the output cap of
   // plenty of non-Anthropic models.
   private readonly native: boolean;
+  private thinking = true; // the user's thinking-mode switch (RuntimeSettings.thinkingMode)
 
   constructor(
     private model: string,
     apiKey?: string,
     baseURL?: string, // set for Anthropic-format providers other than Anthropic itself
     private maxOutput = 16000,
+    private reasoning?: Reasoning,
   ) {
     this.native = !baseURL;
     const trackedFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -63,8 +76,24 @@ export class AnthropicProvider implements Provider {
     });
   }
 
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
-    const messages: Anthropic.MessageParam[] = turns.map((t) => {
+  setThinking(on: boolean): void {
+    this.thinking = on;
+  }
+
+  // Thinking + effort, only where the model takes them (see LEGACY_MODEL). Thinking off drops the
+  // thinking block and asks for the lowest effort; on Opus 5+ that's the documented way to spend
+  // less on reasoning, since those models think adaptively whether or not the param is sent.
+  private reasoningParams(): Pick<Anthropic.MessageCreateParamsNonStreaming, "thinking" | "output_config"> {
+    if (!this.native || LEGACY_MODEL.test(this.model)) return {};
+    const effort = EFFORT[this.thinking ? (this.reasoning ?? "auto") : "off"];
+    return {
+      ...(this.thinking && this.reasoning !== "off" ? { thinking: { type: "adaptive" as const } } : {}),
+      ...(effort ? { output_config: { effort } } : {}),
+    };
+  }
+
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply> {
+    let messages: Anthropic.MessageParam[] = turns.map((t) => {
       if (t.role === "user") return { role: "user", content: t.text };
       if (t.role === "assistant") {
         // Replay native blocks verbatim when we have them — preserves thinking blocks so
@@ -87,19 +116,17 @@ export class AnthropicProvider implements Provider {
       };
     });
 
-    // Prompt caching: same caution as `thinking` above — cache_control is part of the wire format,
-    // not guaranteed to be understood by every Anthropic-*format* third party, so it's scoped to
-    // native Anthropic. Two breakpoints: the system+tools block (below), and the second-to-newest
-    // message here, which caches the whole growing conversation prefix behind it.
-    if (this.native && messages.length >= 2) {
-      messages[messages.length - 2] = withCacheControl(messages[messages.length - 2]!);
-    }
+    // Prompt caching: same caution as `thinking` — cache_control is part of the wire format, not
+    // guaranteed to be understood by every Anthropic-*format* third party, so it's scoped to native
+    // Anthropic. Three breakpoints of the four allowed: the system+tools block (below) and the two
+    // conversation ones chosen by cacheBreakpoints.
+    if (this.native) messages = cacheBreakpoints(messages, withCacheControl);
 
     const params: Anthropic.MessageCreateParamsNonStreaming = {
       model: this.model,
       max_tokens: this.maxOutput,
-      // safe now: assistant turns replay native blocks (Turn.raw) — but only Anthropic defines it
-      ...(this.native ? { thinking: { type: "adaptive" as const } } : {}),
+      // safe: assistant turns replay native blocks (Turn.raw) — but only Anthropic defines these
+      ...this.reasoningParams(),
       // Rendered before `messages` in Anthropic's cache lookup order (tools → system → messages),
       // so this one breakpoint also covers the tools block below it, as long as `tools` is
       // byte-identical call to call — see agent.ts's buildTools() memoization.
@@ -118,11 +145,11 @@ export class AnthropicProvider implements Provider {
 
     const msg = onDelta
       ? await (() => {
-          const stream = this.client.messages.stream(params);
+          const stream = this.client.messages.stream(params, { signal });
           stream.on("text", (delta) => onDelta(delta));
           return stream.finalMessage();
         })()
-      : await this.client.messages.create(params);
+      : await this.client.messages.create(params, { signal });
 
     return {
       ...blocksToReply(msg.content),

@@ -7,93 +7,76 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'"
     />
-    <title>graph</title>
+    <title>niti · graph</title>
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/style.css" />
     <style>
-      :root {
-        --bg: #0b0d14; --bg2: #0d0f16; --panel: rgba(21,24,35,0.82); --panel-solid: #151823;
-        --ink: #e7e9f2; --muted: #8b90a6; --line: #262b3d;
-        --violet: #a78bfa; --green: #4ade80; --red: #f87171; --amber: #fbbf24; --blue: #60a5fa; --pink: #f472b6;
-      }
-      * { box-sizing: border-box; }
-      html, body { height: 100%; margin: 0; overflow: hidden; }
-      body {
-        font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-        background: radial-gradient(1200px 800px at 60% 35%, #12151f 0%, var(--bg) 70%);
-        color: var(--ink); touch-action: none; -webkit-user-select: none; user-select: none;
-      }
+      /* Shared look (tokens, .box, .btn, .field, .chip, kbd) comes from style.css — the same
+         TUI-style panels the dashboard uses. Only what's specific to a full-screen canvas is here. */
+      body { display: block; touch-action: none; -webkit-user-select: none; user-select: none; }
       #gcanvas { position: fixed; inset: 0; display: block; }
+      .gbox { position: fixed; margin: 0; }
 
-      /* floating panels */
-      .panel {
-        position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-        box-shadow: 0 8px 30px rgba(0,0,0,0.35);
-      }
-      #topbar { top: 14px; left: 14px; display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
-      .brand { font-weight: 700; letter-spacing: 0.3px; }
-      .brand .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--violet); margin-right: 6px; box-shadow: 0 0 10px var(--violet); }
-      #conn { color: var(--muted); font-size: 12px; }
-      #conn.live { color: var(--green); }
-      #conn.dead { color: var(--amber); }
+      #topbar { position: fixed; top: 10px; left: 14px; display: flex; align-items: center; gap: 12px; padding: 0; }
 
-      #controls { top: 14px; right: 14px; width: 250px; max-height: calc(100vh - 28px); overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
-      .seg { display: flex; background: var(--bg2); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
-      .seg button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 7px 8px; border-radius: 6px; cursor: pointer; font: inherit; font-weight: 600; transition: all .15s; }
-      .seg button.active { background: var(--violet); color: #0b0d14; }
-      .search { display: flex; align-items: center; gap: 6px; background: var(--bg2); border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; }
-      .search input { flex: 1; background: transparent; border: 0; outline: 0; color: var(--ink); font: inherit; }
-      .search .ico { color: var(--muted); }
+      #controls { top: 18px; right: 14px; width: 260px; max-height: calc(100vh - 36px); overflow: visible; display: flex; flex-direction: column; gap: 12px; padding-top: 14px; }
+      #mode { display: flex; gap: 18px; border-bottom: 1px solid var(--line); }
+      #mode button { background: none; border: 0; color: var(--muted); padding: 2px 0 6px; cursor: pointer; }
+      #mode button.active { color: var(--ink); font-weight: 700; box-shadow: inset 0 -2px var(--violet); }
+      #search { width: 100%; }
       .row { display: flex; gap: 8px; }
-      .btn { flex: 1; background: var(--bg2); border: 1px solid var(--line); color: var(--ink); border-radius: 9px; padding: 7px; cursor: pointer; font: inherit; transition: all .15s; }
-      .btn:hover { border-color: var(--violet); color: var(--violet); }
-      .sliders { display: flex; flex-direction: column; gap: 9px; padding-top: 2px; }
-      .slider label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+      .row .btn { flex: 1; }
+      .sliders { display: flex; flex-direction: column; gap: 8px; }
+      .slider label { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+      .slider label span { color: var(--ink); }
       .slider input[type=range] { width: 100%; accent-color: var(--violet); }
       .toggle { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; }
       .toggle input { accent-color: var(--violet); }
-      .hint { color: var(--muted); font-size: 11px; line-height: 1.7; }
-      .hint kbd { background: var(--bg2); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--ink); }
+      .hint { color: var(--muted); font-size: 12px; line-height: 1.8; }
 
-      #legend { bottom: 14px; left: 14px; padding: 10px 12px; max-width: 42vw; display: flex; flex-wrap: wrap; gap: 6px 14px; }
-      #legend .k { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
-      #legend .k i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-      #legend .title { width: 100%; color: var(--ink); font-weight: 600; margin-bottom: 2px; }
+      #legend-box { bottom: 18px; left: 14px; max-width: 44vw; padding-top: 14px; }
+      #legend { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+      #legend .k { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+      #legend .k i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+      #legend-box:has(#legend:empty) { display: none; } /* nothing to explain yet — no empty frame */
 
-      #stat { bottom: 14px; right: 14px; padding: 8px 12px; color: var(--muted); font-size: 12px; }
+      #stat-box { bottom: 18px; right: 14px; padding-top: 12px; }
+      #stat { color: var(--muted); font-size: 12px; }
       #stat b { color: var(--ink); }
 
-      #tip { position: fixed; pointer-events: none; z-index: 5; background: var(--panel-solid); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.4); opacity: 0; transition: opacity .12s; max-width: 320px; }
+      #tip { position: fixed; pointer-events: none; z-index: 5; background: var(--bg); border: 1px solid var(--violet); border-radius: 4px; padding: 6px 10px; font-size: 12px; opacity: 0; transition: opacity .12s; max-width: 320px; }
       #tip.show { opacity: 1; }
       #tip .t { font-weight: 700; }
       #tip .s { color: var(--muted); }
 
       @media (max-width: 640px) {
         #controls { width: 210px; }
-        #legend { max-width: 60vw; }
+        #legend-box { max-width: 60vw; }
       }
     </style>
   </head>
   <body>
     <canvas id="gcanvas"></canvas>
 
-    <div id="topbar" class="panel">
-      <div class="brand"><span class="dot"></span>niti · graph</div>
-      <div id="conn">loading…</div>
-    </div>
+    <header id="topbar">
+      <div class="brand">niti <span class="sub">graph</span></div>
+      <span class="chip conn" id="conn">loading…</span>
+      <div class="theme-wrap">
+        <button class="btn" id="theme-btn"><span id="theme-dot"></span>theme</button>
+        <div id="theme-menu" class="hidden" style="left: 0; right: auto"></div>
+      </div>
+    </header>
 
-    <div id="controls" class="panel">
-      <div class="seg" id="mode">
+    <div id="controls" class="box gbox">
+      <span class="box-title">Controls</span>
+      <nav id="mode">
         <button data-mode="project" class="active">Project</button>
         <button data-mode="models">Models</button>
-      </div>
-      <div class="search">
-        <span class="ico">⌕</span>
-        <input id="search" placeholder="search nodes…  ( / )" autocomplete="off" spellcheck="false" />
-      </div>
+      </nav>
+      <input class="field" id="search" placeholder="search nodes…" autocomplete="off" spellcheck="false" />
       <div class="row">
-        <button class="btn" id="fit">Fit&nbsp;(f)</button>
+        <button class="btn" id="fit">Fit</button>
         <button class="btn" id="reset">Re-center</button>
       </div>
       <div class="sliders">
@@ -103,13 +86,19 @@
       </div>
       <label class="toggle"><span>labels</span><input id="t-labels" type="checkbox" checked /></label>
       <div class="hint">
-        drag pins a node · <kbd>dbl-click</kbd> unpins · scroll zoom · flick to coast · click the mini-map to jump<br />
-        <kbd>1</kbd>/<kbd>2</kbd> mode · <kbd>/</kbd> search · <kbd>f</kbd> fit · <kbd>esc</kbd> clear
+        <kbd>1</kbd> <kbd>2</kbd> mode · <kbd>/</kbd> search · <kbd>f</kbd> fit · <kbd>esc</kbd> clear<br />
+        <kbd>drag</kbd> pins · <kbd>dbl-click</kbd> unpins · <kbd>scroll</kbd> zoom
       </div>
     </div>
 
-    <div id="legend" class="panel"></div>
-    <div id="stat" class="panel"></div>
+    <div id="legend-box" class="box gbox title-left">
+      <span class="box-title" id="legend-title">Legend</span>
+      <div id="legend"></div>
+    </div>
+    <div id="stat-box" class="box gbox">
+      <span class="box-title">Graph</span>
+      <div id="stat"></div>
+    </div>
     <div id="tip"></div>
 
     <script src="/avatar.js"></script>

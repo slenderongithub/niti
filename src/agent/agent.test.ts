@@ -735,7 +735,7 @@ test("ask() records its tokens — the orchestrator's plan/integrate turns are n
   };
   await new Agent(cfg, stub, new Bus(), { usageTracker: usage }).ask("plan this");
   expect(usage.snapshot()).toEqual([
-    { agentId: "a", usage: { inputTokens: 100, outputTokens: 20, calls: 1, lastInput: 100, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    { agentId: "a", usage: { inputTokens: 100, outputTokens: 20, calls: 1, lastInput: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 } },
   ]);
 });
 
@@ -839,6 +839,20 @@ test("dangerous shell detection matches flag sets, not exact spellings", () => {
   expect(d("/bin/sh", ["-c", "rm -rf /"])).toBe(true); // opaque payload, and an absolute path
   expect(d("python3", ["-c", "import shutil"])).toBe(true);
 
+  // Auto-allowed commands whose flags run programs or write files.
+  expect(d("find", [".", "-exec", "rm", "{}", ";"])).toBe(true);
+  expect(d("find", [".", "-execdir", "sh", "{}", ";"])).toBe(true);
+  expect(d("find", [".", "-fprint", "/tmp/x"])).toBe(true);
+  expect(d("rg", ["--pre", "bash", "x", "."])).toBe(true);
+  expect(d("rg", ["--pre=bash", "x"])).toBe(true);
+  expect(d("git", ["diff", "--output=/tmp/x"])).toBe(true);
+  expect(d("git", ["branch", "-D", "main"])).toBe(true);
+  expect(d("git", ["branch", "-f", "main", "HEAD~3"])).toBe(true);
+  expect(d("find", [".", "-name", "*.ts"])).toBe(false);
+  expect(d("rg", ["--pretty", "TODO"])).toBe(false); // --pretty is not --pre
+  expect(d("git", ["branch", "-a"])).toBe(false);
+  expect(d("git", ["diff", "--stat"])).toBe(false);
+
   // Ordinary commands must still run without a prompt, including harmless rm and push.
   expect(d("rm", ["one.txt"])).toBe(false);
   expect(d("rm", ["-r", "build"])).toBe(false); // recursive but not forced
@@ -878,6 +892,9 @@ test("leavesProjectRoot spots a shell call reaching outside the project", () => 
   expect(leavesProjectRoot("shell", { command: "ls", args: ["/etc"] })).toBe(true);
   expect(leavesProjectRoot("shell", { command: "cat", args: ["src/../../x"] })).toBe(true);
   expect(leavesProjectRoot("shell", { command: "../evil.sh", args: [] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "git", args: ["diff", "--output=/etc/x"] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "git", args: ["log", "--output=../x"] })).toBe(true);
+  expect(leavesProjectRoot("shell", { command: "git", args: ["log", "--format=%H"] })).toBe(false);
   // In-project work is untouched — this must not become another source of prompts.
   expect(leavesProjectRoot("shell", { command: "ls", args: ["-la"] })).toBe(false);
   expect(leavesProjectRoot("shell", { command: "cat", args: ["package.json"] })).toBe(false);
@@ -1810,4 +1827,45 @@ test("a file whose earlier read was masked comes back in full when it is read ag
   const finalTurns = seen[seen.length - 1]!;
   expect(seenOutput(finalTurns, "r0")).toStartWith("[Previous output masked"); // a.txt's first read was masked…
   expect(seenOutput(finalTurns, "r13")).toContain("a.txt line 0"); // …so the re-read is the whole file, not "[unchanged: …]"
+});
+
+test("live view: every call's start gets exactly one end, with its result, diff hunks or outcome", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-live-"));
+  writeFileSync(join(root, "a.txt"), "one\ntwo\nthree\n");
+  let n = 0;
+  const p: Provider = {
+    async send() {
+      n++;
+      if (n === 1) {
+        return {
+          text: "",
+          toolCalls: [
+            { id: "c1", name: "edit", input: { path: "a.txt", oldString: "two", newString: "TWO" } },
+            { id: "c2", name: "shell", input: { command: "git", args: ["--version"] } },
+            { id: "c3", name: "todo", input: { items: [{ text: "edit a.txt", status: "done" }] } },
+          ],
+        };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const bus = new Bus();
+  const events: any[] = [];
+  bus.subscribe((e) => events.push(e));
+  await new Agent({ ...cfg, allowedTools: ["edit", "shell"] }, p, bus, { root, approve: async () => true }).run("go");
+
+  for (const callId of ["c1", "c2", "c3"]) {
+    expect(events.filter((e) => e.callId === callId && e.phase === "start")).toHaveLength(1);
+    expect(events.filter((e) => e.callId === callId && e.phase === "end")).toHaveLength(1);
+  }
+  const edit = events.find((e) => e.callId === "c1" && e.phase === "end");
+  expect(edit.type).toBe("file_edit");
+  expect(edit).toMatchObject({ ok: true, added: 1, removed: 1 });
+  expect(edit.hunks[0].lines).toContainEqual({ k: "+", t: "TWO", n: 2 });
+  const sh = events.find((e) => e.callId === "c2" && e.phase === "end");
+  expect(sh).toMatchObject({ ok: true, exitCode: 0 });
+  expect(sh.outcome).toContain("git version");
+  expect(events.some((e) => e.type === "tool_output" && e.callId === "c2" && e.payload.includes("git version"))).toBe(true); // streamed live
+  expect(events.find((e) => e.type === "todo")?.todos).toEqual([{ text: "edit a.txt", status: "done" }]);
+  expect(events.find((e) => e.callId === "c3" && e.phase === "end")?.type).toBe("tool_end"); // coordination tool: generic end
 });

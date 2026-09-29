@@ -16,3 +16,25 @@ test("reasoning maps to a thinking budget, and sends nothing unless asked", () =
   // The default has to stay empty: models with no thinking mode reject the parameter outright.
   expect(thinkingConfig(undefined)).toEqual({});
 });
+
+test("Pro models can't turn thinking off, and Gemini 3 takes a level instead of a budget", () => {
+  expect(thinkingConfig("off", "gemini-2.5-pro")).toEqual({ thinkingConfig: { thinkingBudget: 128 } }); // 0 is a 400 on Pro
+  expect(thinkingConfig("off", "gemini-2.5-flash")).toEqual({ thinkingConfig: { thinkingBudget: 0 } });
+  expect(thinkingConfig("low", "gemini-3-pro-preview")).toEqual({ thinkingConfig: { thinkingLevel: "low" } });
+  expect(thinkingConfig("high", "gemini-3-flash")).toEqual({ thinkingConfig: { thinkingLevel: "high" } });
+  expect(thinkingConfig("auto", "gemini-3-pro-preview")).toEqual({});
+});
+
+test("thinking tokens are counted as output — candidatesTokenCount leaves them out", async () => {
+  const p = new GeminiProvider("gemini-flash-latest", "k");
+  (p as unknown as { client: unknown }).client = {
+    models: {
+      generateContent: async () => ({
+        candidates: [{ content: { parts: [{ text: "ok" }] } }],
+        usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10, thoughtsTokenCount: 250, cachedContentTokenCount: 60 },
+      }),
+    },
+  };
+  const out = await p.send("S", [{ role: "user", text: "hi" }], []);
+  expect(out.usage).toEqual({ inputTokens: 100, outputTokens: 260, reasoningTokens: 250, cacheReadTokens: 60 });
+});

@@ -9,6 +9,17 @@ import { summarizeError } from "../providers/provider.ts";
 export interface Plan {
   goal: string;
   tasks: TaskNode[];
+  // Not every message is work. The planner routes it: a greeting or chat gets `reply` (said back
+  // as-is), a question about the code gets `question` (answered by the lead with read-only tools),
+  // and only a request to change something gets `tasks`. Exactly one of the three is set.
+  reply?: string;
+  question?: string;
+}
+
+// One earlier exchange, so a follow-up ("now add tests") can refer back to what "it" was.
+export interface Exchange {
+  goal: string;
+  outcome: string;
 }
 
 // Minimal shape the planner needs — Agent satisfies it, and tests can pass a fake.
@@ -31,7 +42,12 @@ const RawTask = z.object({
   handoffTo: z.array(z.string()).optional(),
   acceptance: z.string().optional(),
 });
-const RawPlan = z.union([z.array(RawTask), z.object({ tasks: z.array(RawTask) })]);
+const RawPlan = z.union([
+  z.array(RawTask),
+  z.object({ tasks: z.array(RawTask) }),
+  z.object({ reply: z.string().min(1) }),
+  z.object({ question: z.string().min(1) }),
+]);
 
 const MAX_PLAN_ATTEMPTS = 3;
 
@@ -130,32 +146,60 @@ export function normalizePlan(
   return { goal, tasks };
 }
 
-function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string): string {
+// The last few exchanges, oldest first, bounded so a long session can't grow every planning call.
+function historyBlock(history: Exchange[]): string {
+  if (!history.length) return "";
+  const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  const lines = history.slice(-6).map((h) => `  - user: ${clip(h.goal, 300)}\n    result: ${clip(h.outcome, 400)}`);
+  return `Recent conversation (oldest first) — the new message may refer back to it:\n${lines.join("\n")}\n\n`;
+}
+
+// Tasks a previous plan left unfinished. A follow-up ("skip the first one", "also add tests") is
+// about them, so the planner sees them and folds them into the new plan instead of the new message
+// silently replacing a detailed plan with a one-line one.
+function boardBlock(unfinished: string[]): string {
+  if (!unfinished.length) return "";
+  return (
+    `Unfinished tasks from the current plan:\n${unfinished.slice(0, 12).map((t) => `  - ${t}`).join("\n")}\n` +
+    `If the message is work, your plan replaces this board: keep the tasks the user still wants (restated in full), ` +
+    `apply what the message changes, and drop only what it says to drop.\n\n`
+  );
+}
+
+export function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, history: Exchange[] = [], unfinished: string[] = []): string {
   const roster = roles
     .map((r) => `  - id "${r.id}" — role: ${r.role}${r.description ? ` (${r.description})` : ""}`)
     .join("\n");
   return (
-    `You are the orchestrator of a team of AI coding agents. Break the goal into a small DAG of ` +
-    `concrete tasks (2-6). Assign each task to exactly one teammate by their id. Sequence work with ` +
-    `"dependsOn" (task ids that must finish first) so prerequisites run before consumers — e.g. UI/` +
-    `design tasks before the frontend that uses them. Use "handoffTo" to name teammate ids that should ` +
-    `receive a task's output.\n\n` +
+    `You are the orchestrator of a team of AI coding agents, talking with the user. First decide what ` +
+    `the user's message is:\n` +
+    `- a greeting, thanks, or small talk → reply to it briefly and do no work: {"reply": "..."}\n` +
+    `- a question that needs no changes (about this project, its code, or anything else) → ` +
+    `{"question": "<the question, restated so it stands alone>"}; the lead will look at the code and answer\n` +
+    `- a request to build, change, fix or run something → plan it.\n\n` +
+    `To plan: break the work into a small DAG of concrete tasks (1-6 — one is fine for a small change; ` +
+    `never invent work the user did not ask for). Assign each task to exactly one teammate by their id. ` +
+    `Sequence work with "dependsOn" (task ids that must finish first) so prerequisites run before ` +
+    `consumers — e.g. UI/design tasks before the frontend that uses them. Use "handoffTo" to name ` +
+    `teammate ids that should receive a task's output.\n\n` +
     `Teammates:\n${roster}\n\n` +
-    `Goal: ${goal}\n\n` +
-    `Return ONLY JSON: an array of {"id","description","role","dependsOn","handoffTo","acceptance"}. ` +
-    `"role" MUST be one of the ids above. No prose.` +
+    historyBlock(history) +
+    boardBlock(unfinished) +
+    `User's message: ${goal}\n\n` +
+    `Return ONLY JSON — {"reply": ...}, {"question": ...}, or an array of ` +
+    `{"id","description","role","dependsOn","handoffTo","acceptance"} where "role" MUST be one of the ids above. No prose.` +
     (correction ? `\n\nYour previous reply was invalid: ${correction}. Return valid JSON only.` : "")
   );
 }
 
 // Ask the orchestrator agent for a plan, validating + normalizing. Retries on invalid JSON, then
 // falls back to a single task (the whole goal on the lead) — a bad planner never crashes the run.
-export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo[]): Promise<Plan> {
+export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo[], history: Exchange[] = [], unfinished: string[] = []): Promise<Plan> {
   let correction: string | undefined;
   for (let attempt = 0; attempt < MAX_PLAN_ATTEMPTS; attempt++) {
     let raw: string;
     try {
-      raw = await lead.ask(plannerPrompt(goal, roles, correction));
+      raw = await lead.ask(plannerPrompt(goal, roles, correction, history, unfinished));
     } catch (err) {
       correction = summarizeError(err);
       continue;
@@ -163,10 +207,13 @@ export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo
     const json = extractJson(raw);
     const parsed = RawPlan.safeParse(json);
     if (!parsed.success) {
-      correction = "expected an array of task objects";
+      correction = 'expected {"reply": ...}, {"question": ...}, or an array of task objects';
       continue;
     }
-    const rawTasks = Array.isArray(parsed.data) ? parsed.data : parsed.data.tasks;
+    const data = parsed.data;
+    if (!Array.isArray(data) && "reply" in data) return { goal, tasks: [], reply: data.reply };
+    if (!Array.isArray(data) && "question" in data) return { goal, tasks: [], question: data.question };
+    const rawTasks = Array.isArray(data) ? data : data.tasks;
     if (!rawTasks.length) {
       correction = "the task array was empty";
       continue;

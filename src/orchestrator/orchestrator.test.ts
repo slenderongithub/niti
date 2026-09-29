@@ -109,3 +109,37 @@ test("takeApprovedPlan only claims an untouched board planned for that exact goa
   expect(takeApprovedPlan(orch, "goal")).toHaveLength(1);
   expect(orch.plannedGoal).toBeUndefined();
 });
+
+test("'hi' is answered, not planned: no tasks are queued and nothing runs", async () => {
+  const bus = new Bus();
+  const said: string[] = [];
+  bus.subscribe((e) => e.type === "message" && said.push(e.payload));
+  let calls = 0;
+  const greeter: Provider = { async send() { calls++; return { text: '{"reply":"Hey! What are we working on?"}', toolCalls: [] }; } };
+  const lead = new Agent({ id: "lead", provider: "anthropic", model: "x", role: "Lead", systemPrompt: "s", lead: true }, greeter, bus);
+  const orch = new Orchestrator();
+  const result = await runProject("hi", [lead], orch, bus);
+  expect(result).toEqual({ kind: "reply", text: "Hey! What are we working on?" });
+  expect(orch.all).toHaveLength(0);
+  expect(said).toEqual(["Hey! What are we working on?"]);
+  expect(calls).toBe(1); // the routing rode on the planning call — no extra classifier call
+});
+
+test("a question is answered by the lead with read-only tools only", async () => {
+  const bus = new Bus();
+  const offered: string[][] = [];
+  let n = 0;
+  const p: Provider = {
+    async send(_s, _t, tools) {
+      n++;
+      if (n === 1) return { text: '{"question":"What does cart.ts export?"}', toolCalls: [] };
+      offered.push(tools.map((t) => t.name));
+      return { text: "It exports total().", toolCalls: [] };
+    },
+  };
+  const lead = new Agent({ id: "lead", provider: "anthropic", model: "x", role: "Lead", systemPrompt: "s", lead: true, allowedTools: ["read_file", "write_file", "edit", "shell"] }, p, bus);
+  const result = await runProject("what does cart.ts export?", [lead], new Orchestrator(), bus);
+  expect(result).toEqual({ kind: "answer", text: "It exports total()." });
+  expect(offered[0]).toContain("read_file");
+  for (const w of ["write_file", "edit", "shell", "spawn_fork"]) expect(offered[0]).not.toContain(w);
+});

@@ -1,5 +1,5 @@
 import { dirname, join, normalize } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 // Embedded, not read from disk: this is also the Go TUI's //go:embed source, and a compiled
@@ -9,7 +9,9 @@ import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "./events.ts";
 import { CATALOG, contextWindow, providersByCategory, splitModelId, type Category } from "../providers/catalog.ts";
 import { costOf } from "../providers/pricing.ts";
-import { buildFileGraph, trackedFiles } from "../graph/filegraph.ts";
+import { buildFileGraph, trackedFiles, projectFiles, ignored } from "../graph/filegraph.ts";
+import { safePath } from "../tools/tools.ts";
+import { normalizePath } from "../permissions.ts";
 import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
 import { saveAgents, setTheme, setAuto, setOption, PREF_DEFAULTS, type PrefKey } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
@@ -67,7 +69,7 @@ export function startServer(
   const makeCompletionProvider = opts.makeProvider ?? makeProvider;
   // Mutable, unlike the rest of `opts` — POST /theme updates this in place so /session reflects a
   // theme changed mid-session (by the TUI carousel or the web dropdown) without a server restart.
-  let currentTheme = opts.theme ?? "";
+  let currentTheme = resolveTheme(opts.theme ?? "");
   // TUI-facing flags, not engine settings: the core doesn't read them, they just have to survive a
   // restart and reach the next TUI launch via /session (projectInstructions is read at boot).
   // Only the known keys, and only real booleans: callers hand over the whole parsed agents.yaml
@@ -163,6 +165,10 @@ export function startServer(
           // replay from Last-Event-ID.
           if (controller.desiredSize !== null && controller.desiredSize < -1_000_000) close();
         };
+        // A client that was away longer than the ring buffer covers can't be backfilled completely.
+        // Tell it (seq = fromSeq, so its resume position doesn't move) before the partial backfill.
+        const missed = engine.hub.missedSince(fromSeq);
+        if (missed > 0) send({ kind: "resync", missed, seq: fromSeq, time: Date.now() });
         for (const e of engine.hub.replay(fromSeq)) send(e); // backfill so late joiners are consistent
         unsub = engine.hub.subscribe(send);
         ping = setInterval(() => {
@@ -209,7 +215,12 @@ export function startServer(
     idleTimeout: 0, // SSE connections are long-lived
     async fetch(req) {
       if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
-      return withCors(await handle(req));
+      try {
+        return withCors(await handle(req));
+      } catch (err) {
+        if (err instanceof BadJson) return withCors(json({ error: "request body is not valid JSON" }, 400));
+        throw err;
+      }
     },
   });
 
@@ -255,7 +266,7 @@ export function startServer(
           root: engine.root,
           lsp: engine.lsp?.list() ?? [],
           mcp: engine.mcp?.servers?.() ?? [],
-          contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider)])),
+          contextLimits: Object.fromEntries(engine.configs.map((c) => [c.id, contextWindow(c.provider, c.model)])),
           settings: engine.settings, // live toggles; change with POST /settings
           prefs,
           auto: engine.auto, // default permission mode: true = auto-approve
@@ -268,7 +279,7 @@ export function startServer(
       // not a team is currently running. /prompt is the wrong shape for this: it's single-flight
       // (409 while engine.running) and always launches the full multi-agent orchestrator.
       if (p === "/complete" && method === "POST") {
-        const body = (await req.json().catch(() => ({}))) as {
+        const body = (await readBody(req)) as {
           provider?: string;
           model?: string;
           prompt?: string;
@@ -278,6 +289,7 @@ export function startServer(
         if (!body.provider || !body.model || !body.prompt?.trim()) {
           return json({ error: "expected {provider, model, prompt}" }, 400);
         }
+        if (body.baseURL && !isLoopback(body.baseURL)) return json({ error: "baseURL must be a local address" }, 400);
         try {
           const provider = makeCompletionProvider({
             id: "complete",
@@ -303,10 +315,11 @@ export function startServer(
       // bypass-the-engine reasoning as /complete. Not every provider supports this (see Provider.embed's
       // doc comment), so a provider without it is a clean 400, not a 500.
       if (p === "/embed" && method === "POST") {
-        const body = (await req.json().catch(() => ({}))) as { provider?: string; texts?: string[]; baseURL?: string };
+        const body = (await readBody(req)) as { provider?: string; texts?: string[]; baseURL?: string };
         if (!body.provider || !Array.isArray(body.texts) || !body.texts.length) {
           return json({ error: "expected {provider, texts: string[]}" }, 400);
         }
+        if (body.baseURL && !isLoopback(body.baseURL)) return json({ error: "baseURL must be a local address" }, 400);
         try {
           const provider = makeCompletionProvider({
             id: "embed",
@@ -325,7 +338,7 @@ export function startServer(
       }
 
       if (p === "/prompt" && method === "POST") {
-        const { text, mode } = (await req.json().catch(() => ({}))) as { text?: string; mode?: string };
+        const { text, mode } = (await readBody(req)) as { text?: string; mode?: string };
         if (!text?.trim()) return json({ error: "empty prompt" }, 400);
         if (engine.running) return json({ error: "a task is already running" }, 409);
         // fire-and-forget; progress via SSE
@@ -358,7 +371,7 @@ export function startServer(
         // client, plus a stack trace on stderr, from one bad byte in a URL.
         const name = safeDecode(p.slice("/commands/".length));
         if (name === undefined) return json({ error: "malformed command name" }, 400);
-        const { args } = (await req.json().catch(() => ({}))) as { args?: string };
+        const { args } = (await readBody(req)) as { args?: string };
         // Always 200: the command was dispatched, and its own `ok` says how it went. A non-2xx
         // would strand that message in the client's generic error path.
         return json(await commands.run(engine, name, args ?? ""));
@@ -406,7 +419,7 @@ export function startServer(
 
       if (p === "/agents" && method === "GET") return json({ agents: engine.configs });
       if (p === "/agents" && method === "POST") {
-        const { agents } = (await req.json().catch(() => ({}))) as { agents?: AgentConfig[] };
+        const { agents } = (await readBody(req)) as { agents?: AgentConfig[] };
         if (!Array.isArray(agents) || !agents.length) return json({ error: "expected agents[]" }, 400);
         try {
           saveAgents(agents); // validates first — a malformed body used to be written straight to disk
@@ -417,7 +430,7 @@ export function startServer(
       }
 
       if (p === "/theme" && method === "POST") {
-        const { theme } = (await req.json().catch(() => ({}))) as { theme?: string };
+        const { theme } = (await readBody(req)) as { theme?: string };
         if (!theme) return json({ error: "expected theme" }, 400);
         currentTheme = theme;
         setTheme(theme);
@@ -428,7 +441,7 @@ export function startServer(
       // Approval mode, same shape as POST /theme: flip it on the live engine and persist it, so a
       // choice made in the picker or by /auto survives a restart.
       if (p === "/auto" && method === "POST") {
-        const { auto } = (await req.json().catch(() => ({}))) as { auto?: boolean };
+        const { auto } = (await readBody(req)) as { auto?: boolean };
         if (typeof auto !== "boolean") return json({ error: "expected { auto: boolean }" }, 400);
         engine.setAuto(auto);
         setAuto(auto);
@@ -439,7 +452,7 @@ export function startServer(
       // the shared object on its next call) and persist to agents.yaml so they survive a restart.
       if (p === "/settings" && (method === "GET" || method === "POST")) {
         if (method === "POST") {
-          const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+          const body = (await readBody(req)) as Record<string, unknown>;
           const keys = ["autoCompact", "thinkingMode", ...Object.keys(PREF_DEFAULTS)] as (keyof typeof engine.settings | PrefKey)[];
           const bad = keys.some((k) => k in body && typeof body[k] !== "boolean");
           const given = keys.filter((k) => typeof body[k] === "boolean");
@@ -465,7 +478,7 @@ export function startServer(
         return json({ provider: prov, models: CATALOG[prov]?.models ?? [] });
       }
       if (p === "/model" && method === "POST") {
-        const { agentId, provider, model, baseURL } = (await req.json().catch(() => ({}))) as {
+        const { agentId, provider, model, baseURL } = (await readBody(req)) as {
           agentId?: string;
           provider?: string;
           model?: string;
@@ -477,7 +490,7 @@ export function startServer(
         return err ? json({ error: err }, 400) : json({ ok: true });
       }
       if (p === "/reassign" && method === "POST") {
-        const { taskId, agentId } = (await req.json().catch(() => ({}))) as { taskId?: string; agentId?: string };
+        const { taskId, agentId } = (await readBody(req)) as { taskId?: string; agentId?: string };
         if (!taskId || !agentId) return json({ error: "taskId and agentId required" }, 400);
         const err = engine.reassignTask(taskId, agentId);
         return err ? json({ error: err }, 400) : json({ ok: true });
@@ -487,7 +500,7 @@ export function startServer(
         return json({ credentials: listCredentials().map(redact) });
       }
       if (p === "/auth" && method === "POST") {
-        const cred = (await req.json().catch(() => ({}))) as Partial<AuthCredential> & { provider?: string };
+        const cred = (await readBody(req)) as Partial<AuthCredential> & { provider?: string };
         if (!cred.provider || !CATALOG[cred.provider]) return json({ error: "unknown provider" }, 400);
         const built = buildCredential(cred);
         if (!built) return json({ error: "invalid credential (need key, oauth access, or baseURL)" }, 400);
@@ -509,7 +522,7 @@ export function startServer(
       if (p === "/worktree/merge" && method === "POST") {
         // An optional `files` list selects a partial merge (see engine.mergeWorktreeFiles) — no
         // body, or no `files` key, keeps the original whole-run merge behavior unchanged.
-        const { files } = (await req.json().catch(() => ({}))) as { files?: string[] };
+        const { files } = (await readBody(req)) as { files?: string[] };
         return json(Array.isArray(files) ? await engine.mergeWorktreeFiles(files) : await engine.mergeWorktree());
       }
       if (p === "/worktree/discard" && method === "POST") {
@@ -525,14 +538,37 @@ export function startServer(
       if (p.startsWith("/agents/") && p.endsWith("/message") && method === "POST") {
         const agentId = safeDecode(p.slice("/agents/".length, -"/message".length));
         if (agentId === undefined) return json({ error: "malformed agent id" }, 400);
-        const { text } = (await req.json().catch(() => ({}))) as { text?: string };
+        const { text } = (await readBody(req)) as { text?: string };
         if (!text?.trim()) return json({ error: "empty message" }, 400);
         const err = engine.messageAgent(agentId, text);
         return err ? json({ error: err }, 409) : json({ ok: true });
       }
 
+      // The Files panel and @-mentions: the project's files, bounded by the same IGNORE set as /graph.
+      if (p === "/files" && method === "GET") {
+        return json(projectFiles(engine.root));
+      }
+
+      // The TUI's read-only file viewer. Jailed to the project (safePath), held to IGNORE, and
+      // text only: a binary or a huge file is refused rather than streamed into a terminal.
+      if (p === "/file" && method === "GET") {
+        const rel = u.searchParams.get("path") ?? "";
+        if (!rel || ignored(normalizePath(rel))) return json({ error: "not a project file" }, 400);
+        try {
+          const abs = safePath(engine.root, rel);
+          const st = statSync(abs);
+          if (!st.isFile()) return json({ error: "not a file" }, 400);
+          if (st.size > 1_000_000) return json({ error: `too large to view here (${Math.round(st.size / 1024)} KB) — open it in your editor` }, 413);
+          const content = readFileSync(abs, "utf8");
+          if (content.includes("\u0000")) return json({ error: "binary file" }, 415);
+          return json({ path: normalizePath(rel), content });
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 404);
+        }
+      }
+
       if (p === "/approval" && method === "POST") {
-        const { ok, scope, edited } = (await req.json().catch(() => ({}))) as {
+        const { ok, scope, edited } = (await readBody(req)) as {
           ok?: boolean;
           scope?: "agent" | "path";
           edited?: Record<string, unknown>;
@@ -551,6 +587,38 @@ export function startServer(
     port,
     stop: () => server.stop(true),
   };
+}
+
+class BadJson extends Error {}
+
+// An empty body is `{}` (every route treats missing fields itself); malformed JSON is a 400, not a
+// silent `{}` that surfaced as a misleading "expected {…}" further down.
+async function readBody(req: Request): Promise<any> {
+  const text = await req.text();
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new BadJson();
+  }
+}
+
+// /complete and /embed resolve the stored key for `provider` — a caller-chosen remote baseURL would
+// let anyone holding the session token forward that key to a host of their choosing. Local
+// runtimes (Ollama, LM Studio) are the only legitimate reason to pass one per request.
+export function isLoopback(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+// A theme saved under a former name (palettes.json `aliases`) is served under its current one, so
+// the web dashboard — which looks palettes up by name — finds it.
+export function resolveTheme(name: string): string {
+  return (palettes as { name: string; aliases?: string[] }[]).find((p) => p.aliases?.includes(name))?.name ?? name;
 }
 
 // Where the dashboard's static files are. Four shapes have to work: a repo checkout, a compiled

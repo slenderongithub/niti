@@ -71,6 +71,45 @@ type AgentEvent struct {
 	Payload string `json:"payload"`
 	Time    int64  `json:"time"`
 	Diff    string `json:"diff"` // file_edit only: unified snippet of the change
+	Path    string `json:"path"`
+
+	// The live view (see src/events/bus.ts). All optional: an older core sends none of them.
+	CallID     string   `json:"callId"`
+	Phase      string   `json:"phase"` // "start" | "end"
+	Tool       string   `json:"tool"`
+	Ok         *bool    `json:"ok"`
+	DurationMs int64    `json:"durationMs"`
+	ExitCode   *int     `json:"exitCode"`
+	Outcome    string   `json:"outcome"`
+	Lines      int      `json:"lines"`
+	Body       []string `json:"body"`
+	Hunks      []Hunk   `json:"hunks"`
+	Added      int      `json:"added"`
+	Removed    int      `json:"removed"`
+	More       int      `json:"more"`
+	Todos      []Todo   `json:"todos"`
+}
+
+// Hunk is one numbered piece of a file change: K is "+", "-" or " ", O/N the old/new line numbers.
+type Hunk struct {
+	Lines []struct {
+		K string `json:"k"`
+		T string `json:"t"`
+		O int    `json:"o"`
+		N int    `json:"n"`
+	} `json:"lines"`
+}
+
+type Todo struct {
+	Text   string `json:"text"`
+	Status string `json:"status"` // pending | doing | done
+}
+
+// FileChange is one file a run touched, for the end-of-run card.
+type FileChange struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added"`
+	Removed int    `json:"removed"`
 }
 
 type AgentMessage struct {
@@ -154,6 +193,17 @@ type Event struct {
 	Holders  []Lock          `json:"holders"`
 	State    string          `json:"state"`
 	Goal     string          `json:"goal"`
+	Theme    string          `json:"theme"`  // theme events: the palette another client just picked
+	Missed   int             `json:"missed"` // resync events: how many events were lost while disconnected
+
+	// turn_summary events: the end-of-run card.
+	Summary    string       `json:"summary"`
+	Next       []string     `json:"next"`
+	Files      []FileChange `json:"files"`
+	DurationMs int64        `json:"durationMs"`
+	Tokens     int          `json:"tokens"`
+	Ok         bool         `json:"ok"`
+	Cancelled  bool         `json:"cancelled"`
 	// usage events only: session spend so far. CostKnown is false when some agent's model has no
 	// published price, so the UI can show "$0.42+" instead of implying the total is complete.
 	Cost      float64 `json:"cost"`
@@ -236,6 +286,12 @@ func (c *Client) Prompt(text, mode string) error {
 
 func (c *Client) Cancel() error { return c.do("POST", "/cancel", nil, nil) }
 
+// MessageAgent drops a note into a running agent's inbox — read at its next turn, so it steers the
+// work in progress instead of starting a new goal.
+func (c *Client) MessageAgent(agentID, text string) error {
+	return c.do("POST", "/agents/"+url.PathEscape(agentID)+"/message", map[string]string{"text": text}, nil)
+}
+
 // Command mirrors one entry of the server-side slash-command registry (src/commands/registry.ts).
 // The TUI renders this list rather than hardcoding a switch, so the TUI and the web dashboard stay
 // in step as commands are added.
@@ -250,6 +306,24 @@ type CommandResult struct {
 	Message string `json:"message"`
 	View    string `json:"view"`
 	Error   string `json:"error"`
+}
+
+// Files lists the project's files (GET /files) — bounded by the same IGNORE set as /graph.
+func (c *Client) Files() ([]string, error) {
+	var out struct {
+		Files []string `json:"files"`
+	}
+	err := c.do("GET", "/files", nil, &out)
+	return out.Files, err
+}
+
+// File reads one project file for the viewer (GET /file) — text only, size-capped by the core.
+func (c *Client) File(path string) (string, error) {
+	var out struct {
+		Content string `json:"content"`
+	}
+	err := c.do("GET", "/file?path="+url.QueryEscape(path), nil, &out)
+	return out.Content, err
 }
 
 func (c *Client) Commands() ([]Command, error) {

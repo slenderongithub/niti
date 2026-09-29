@@ -3,7 +3,7 @@ import { mkdtempSync, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, editDiff, snippetDiff, splitCommand, normalizeShellInput, canonicalizeShellCall } from "./tools.ts";
+import { diffHunks, summarizeResult, runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, editDiff, snippetDiff, splitCommand, normalizeShellInput, canonicalizeShellCall } from "./tools.ts";
 
 const root = mkdtempSync(join(tmpdir(), "niti-tools-"));
 const ALL = ["read_file", "write_file", "edit", "shell"];
@@ -265,7 +265,8 @@ test("splitCommand honours quotes and escapes, and does nothing else", () => {
   expect(splitCommand('git commit -m "fix bug"')).toEqual(["git", "commit", "-m", "fix bug"]);
   expect(splitCommand("echo 'a  b' c")).toEqual(["echo", "a  b", "c"]);
   expect(splitCommand('echo "say \\"hi\\""')).toEqual(["echo", 'say "hi"']);
-  expect(splitCommand("a\\ b c")).toEqual(["a b", "c"]);
+  // An escaped space is POSIX; on Windows a backslash is a path separator and stays literal.
+  expect(splitCommand("a\\ b c")).toEqual(process.platform === "win32" ? ["a\\", "b", "c"] : ["a b", "c"]);
   expect(splitCommand('x "" y')).toEqual(["x", "", "y"]);
   expect(splitCommand("  ls   -la ")).toEqual(["ls", "-la"]);
   // No expansion, globbing or operators: what the model wrote is what spawn receives.
@@ -317,4 +318,38 @@ test("snippetDiff shows the changed range with context and caps long hunks", () 
   const fresh = snippetDiff("n.ts", null, Array.from({ length: 30 }, (_, i) => `l${i}`).join("\n"));
   expect(fresh.split("\n")).toHaveLength(1 + 12 + 1);
   expect(fresh).toContain("+… 18 more lines");
+});
+
+test("diffHunks: line numbers on both sides, context around each change, separate hunks for scattered edits", () => {
+  const before = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
+  const after = before.replace("line 3", "line three").replace("line 25", "line twenty-five\nextra");
+  const d = diffHunks(before, after);
+  expect(d.added).toBe(3);
+  expect(d.removed).toBe(2);
+  expect(d.hunks).toHaveLength(2); // 20 unchanged lines between the two edits → two hunks
+  const first = d.hunks[0]!.lines;
+  expect(first.find((l) => l.k === "-")).toEqual({ k: "-", t: "line 3", o: 3 });
+  expect(first.find((l) => l.k === "+")).toEqual({ k: "+", t: "line three", n: 3 });
+  expect(first[0]).toEqual({ k: " ", t: "line 1", o: 1, n: 1 }); // two lines of context
+  const second = d.hunks[1]!.lines;
+  expect(second.filter((l) => l.k === "+").map((l) => l.n)).toEqual([25, 26]);
+});
+
+test("diffHunks: a new file is all additions, capped with a count of the rest", () => {
+  const d = diffHunks(null, Array.from({ length: 200 }, (_, i) => `x${i}`).join("\n"), 2, 50);
+  expect(d.added).toBe(200);
+  expect(d.hunks[0]!.lines).toHaveLength(50);
+  expect(d.more).toBe(150);
+});
+
+test("summarizeResult: the one line a finished call leaves behind", () => {
+  expect(summarizeResult("shell", "exit 0\nrunning…\n48 pass\n0 fail\n").outcome).toBe("0 fail");
+  const failed = summarizeResult("shell", "exit 1\nerror: boom\n");
+  expect(failed.exitCode).toBe(1);
+  expect(failed.outcome).toBe("exit 1 · error: boom");
+  expect(summarizeResult("grep", "a.ts:1: x\nb.ts:2: y").outcome).toBe("2 matches");
+  const long = summarizeResult("shell", "exit 0\n" + Array.from({ length: 20 }, (_, i) => `l${i}`).join("\n"));
+  expect(long.head).toEqual(["l0", "l1", "l2", "l3"]);
+  expect(long.tail).toEqual(["l16", "l17", "l18", "l19"]);
+  expect(long.lines).toBe(20);
 });

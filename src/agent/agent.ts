@@ -1,4 +1,4 @@
-import type { Provider, Turn, ToolResult, ToolSpec, ToolCall, Usage, Reasoning } from "../providers/provider.ts";
+import type { Provider, Turn, ToolResult, ToolSpec, ToolCall, Usage, Reasoning, ProviderReply, OnDelta } from "../providers/provider.ts";
 import { summarizeError } from "../providers/provider.ts";
 import type { Bus } from "../events/bus.ts";
 import type { Approve } from "../approval.ts";
@@ -10,12 +10,11 @@ import { MAX_ASK_DEPTH, USER } from "../messaging/message-bus.ts";
 import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
-import { resolve as resolvePermission, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, snippetDiff, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { resolve as resolvePermission, normalizePath, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
-import { normalize } from "node:path";
 import { contextWindow } from "../providers/catalog.ts";
 import { StallGuard, stallNudge, recurringNudge } from "./stall.ts";
 import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
@@ -91,7 +90,15 @@ export function isDangerousShellCall(name: string, input: Record<string, unknown
     if (argv[0] === "reset" && has(argv, "--hard")) return true;
     if (argv[0] === "clean" && has(argv, "-f", "--force")) return true;
   }
-  if (base === "find" && has(argv, "-delete")) return true;
+  // `find` and `rg` sit on the auto-allowed list, so every flag that turns them into "run a
+  // program" or "write a file" has to force a prompt here — the allowlist can't see flags.
+  if (base === "find" && argv.some((a) => /^-(delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/.test(a))) return true;
+  if (base === "rg" && argv.some((a) => /^--pre(-glob)?(=|$)/.test(a))) return true;
+  if (base === "git") {
+    // diff/log/show --output=<file> writes anywhere; branch -D/-f/-m rewrites or drops refs.
+    if (argv.some((a) => /^--output(=|$)/.test(a))) return true;
+    if (argv[0] === "branch" && has(argv, "-D", "-d", "-f", "-m", "-M", "--delete", "--force", "--move")) return true;
+  }
   if (base === "truncate" && argv.some((a) => /^-s\s*0$/.test(a))) return true;
   if (INTERPRETERS.has(base) && has(argv, "-c", "-e")) return true;
   return false;
@@ -107,7 +114,9 @@ export function isDangerousShellCall(name: string, input: Record<string, unknown
 export function leavesProjectRoot(name: string, input: Record<string, unknown>): boolean {
   if (name !== "shell") return false;
   const parts = [String(input.command ?? ""), ...(Array.isArray(input.args) ? input.args.map(String) : [])];
-  return parts.some((p) => p === ".." || p.startsWith("../") || p.startsWith("/") || p.includes("/../"));
+  // `--output=/abs` and `--file=../x` carry the path after the `=`, so check that half too.
+  const paths = parts.flatMap((p) => (p.startsWith("-") && p.includes("=") ? [p.slice(p.indexOf("=") + 1)] : [p]));
+  return paths.some((p) => p === ".." || p.startsWith("../") || p.startsWith("/") || p.includes("/../"));
 }
 
 // Binaries that talk to the network. Heuristic, not exhaustive: a false positive just costs one
@@ -156,7 +165,7 @@ export function isEgressShellCall(name: string, input: Record<string, unknown>):
 // kind of write that should never ride through on a standing "always allow write_file" grant.
 export function isSensitiveConfigWrite(name: string, input: Record<string, unknown>): boolean {
   if (name !== "write_file" && name !== "edit") return false;
-  return normalize(String(input.path ?? "")).startsWith(".niti/");
+  return normalizePath(String(input.path ?? "")).startsWith(".niti/"); // "/" on every OS
 }
 
 export function overContextThreshold(inputTokens: number, context: number, ratio = WARN_RATIO): boolean {
@@ -217,6 +226,8 @@ export interface AgentConfig {
   // How hard this model should think per call (Gemini thinkingBudget / OpenAI reasoning_effort).
   // Unset sends nothing, which is what models without a reasoning mode require.
   reasoning?: Reasoning;
+  // Per-response output cap. Unset → each client's own default (Anthropic 16000, others: the model's).
+  maxOutput?: number;
 }
 
 export interface AgentDeps {
@@ -238,6 +249,9 @@ export interface AgentDeps {
   // tasks, so an agent mid-task kept paying for every remaining turn — up to 12 more billed calls
   // per agent, each of which could still write files.
   shouldStop?: () => boolean;
+  // The current run's abort signal (the user pressed esc). Aborts the model call in flight, where
+  // shouldStop only takes effect between turns.
+  abortSignal?: () => AbortSignal | undefined;
 }
 
 export interface RunOptions {
@@ -282,6 +296,7 @@ export class Agent {
   private lsp?: LspRegistry;
   private onWrite?: (relPath: string) => void;
   private shouldStop?: () => boolean;
+  private abortSignal?: () => AbortSignal | undefined;
   private maxTurns: number;
   private verify: Check[];
   // Rebuilt when the root moves (worktree mode repoints it mid-session) — resolving a package
@@ -325,6 +340,7 @@ export class Agent {
     this.lsp = deps.lsp;
     this.onWrite = deps.onWrite;
     this.shouldStop = deps.shouldStop;
+    this.abortSignal = deps.abortSignal;
   }
 
   // Final assistant text of the most recent run/respond — the scheduler uses it for hand-offs.
@@ -374,7 +390,7 @@ export class Agent {
     this.push(turns, { role: "user", text: task }, sessionId);
     const onDelta = (text: string) =>
       this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() });
-    const context = contextWindow(this.config.provider);
+    const context = contextWindow(this.config.provider, this.config.model);
     let warned = false;
     let quotaWarned = false;
     let verifyRounds = 0;
@@ -403,13 +419,13 @@ export class Agent {
         this.maskOldObservations(turns, ctx);
         const tools = this.buildTools(allowed, ctx);
         this.provider.setThinking?.(this.settings.thinkingMode);
-        const reply = await this.provider.send(this.config.systemPrompt, turns, tools, onDelta);
+        const reply = await this.send(turns, tools, onDelta);
         if (reply.text) {
           finalText = reply.text; // per-call, unlike lastText, which every concurrent loop shares
           this.lastText = reply.text;
           this.bus.publish({ agentId: id, type: "message", payload: reply.text, time: Date.now() });
         }
-        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
+        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
         if (reply.rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, reply.rateLimit);
 
         // Pre-emptive heads-up: fire once when the conversation nears the context window.
@@ -435,7 +451,7 @@ export class Agent {
             0,
             turns.length,
             ...(await compactTurns(turns, this.provider, undefined, (u) =>
-              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens),
+              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, undefined, u.reasoningTokens),
             )),
           );
           if (turns.length < before) {
@@ -545,6 +561,13 @@ export class Agent {
       this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
       return { outcome: "exhausted", text: finalText, error: this.lastError };
     } catch (err) {
+      if (this.abortSignal?.()?.aborted) {
+        // The user interrupted: say so plainly, not as a provider failure with a stack of details.
+        this.lastError = "interrupted";
+        if (sessionId) this.store?.setStatus(sessionId, "failed");
+        this.bus.publish({ agentId: id, type: "warning", payload: "interrupted", time: Date.now() });
+        return { outcome: "failed", text: finalText, error: this.lastError };
+      }
       const outcome: RunOutcome = isExhaustion(err) ? "exhausted" : "failed";
       this.lastError = summarizeError(err);
       if (sessionId) this.store?.setStatus(sessionId, outcome);
@@ -555,8 +578,28 @@ export class Agent {
     }
   }
 
+  // One model call, abortable. The signal goes to the provider (which cancels the HTTP request) and
+  // the call is also raced against it, so an interrupt lands at once even with a provider (or a
+  // compatible shim) that ignores the signal.
+  private async send(turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
+    const signal = this.abortSignal?.();
+    if (signal?.aborted) throw new Error("interrupted");
+    const call = this.provider.send(this.config.systemPrompt, turns, tools, onDelta, signal);
+    if (!signal) return call;
+    return Promise.race([
+      call,
+      new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("interrupted")), { once: true })),
+    ]);
+  }
+
   // Answer a teammate's question. A bounded agentic loop (can read files / call tools to ground the
   // answer) that returns the final text. askDepth bounds A→B→A→… chains via MAX_ASK_DEPTH.
+  // A question from the user that needs no changes: the same loop as respond(), limited to tools
+  // that can only look — so "where is auth handled?" gets read, searched and answered, never edited.
+  async answer(question: string): Promise<string> {
+    return this.subLoop(question, { kind: "ask", maxTurns: MAX_RESPOND_TURNS, askDepth: 0, forkDepth: MAX_FORK_DEPTH, readOnly: true });
+  }
+
   async respond(question: string, askDepth: number, parentSessionId?: string): Promise<string> {
     return this.subLoop(question, { kind: "ask", maxTurns: MAX_RESPOND_TURNS, askDepth, forkDepth: 0, parentSessionId });
   }
@@ -589,10 +632,11 @@ export class Agent {
   // `output`. inFlightCount is a counter precisely so these can overlap.
   private async subLoop(
     prompt: string,
-    o: { kind: SessionKind; maxTurns: number; askDepth: number; forkDepth: number; parentSessionId?: string },
+    o: { kind: SessionKind; maxTurns: number; askDepth: number; forkDepth: number; parentSessionId?: string; readOnly?: boolean },
   ): Promise<string> {
     const id = this.config.id;
-    const allowed = expandTools(this.config.allowedTools ?? []);
+    const all = expandTools(this.config.allowedTools ?? []);
+    const allowed = o.readOnly ? all.filter((t) => READ_ONLY_TOOLS.has(t)) : all;
     const turns: Turn[] = [];
     const sessionId = this.store?.createSession({
       agentId: id,
@@ -602,7 +646,7 @@ export class Agent {
       parentSessionId: o.parentSessionId,
     });
     const ctx: LoopCtx = { askDepth: o.askDepth, forkDepth: o.forkDepth, sessionId };
-    const context = contextWindow(this.config.provider);
+    const context = contextWindow(this.config.provider, this.config.model);
     this.push(turns, { role: "user", text: prompt }, sessionId);
     const onDelta = (text: string) => this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() });
     this.inFlightCount++;
@@ -614,9 +658,9 @@ export class Agent {
         this.injectNotes(turns, sessionId);
         this.maskOldObservations(turns, ctx);
         this.provider.setThinking?.(this.settings.thinkingMode);
-        const reply = await this.provider.send(this.config.systemPrompt, turns, this.buildTools(allowed, ctx), onDelta);
+        const reply = await this.send(turns, this.buildTools(allowed, ctx), onDelta);
         if (reply.text) text = reply.text;
-        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
+        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
         // run() warns at 85% and compacts at 95%; this loop had neither, so a fork doing real work
         // (a 12-turn loop with full file contents in its tool results) hit a hard provider error on
         // overflow instead of shrinking — and the parent only saw "fork failed".
@@ -627,7 +671,7 @@ export class Agent {
             0,
             turns.length,
             ...(await compactTurns(turns, this.provider, undefined, (u) =>
-              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens),
+              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, undefined, u.reasoningTokens),
             )),
           );
           if (turns.length < before) {
@@ -661,12 +705,12 @@ export class Agent {
 
   // Raw single call, no tools/events — used by the orchestrator to plan and to integrate.
   async ask(prompt: string): Promise<string> {
-    const reply = await this.provider.send(this.config.systemPrompt, [{ role: "user", text: prompt }], []);
+    const reply = await this.send([{ role: "user", text: prompt }], []);
     // Every other model call in this file records its usage; this one did not, so the lead's
     // planning, replanning, integrate and /debate turns were spent off the books — /usage, /cost,
     // the TUI sidebar and the dashboard all under-reported the run by the orchestrator's whole
     // share, which on a mixed team is usually the most expensive model on it.
-    if (reply.usage) this.usageTracker?.record(this.config.id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage));
+    if (reply.usage) this.usageTracker?.record(this.config.id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
     if (reply.rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, reply.rateLimit);
     return reply.text;
   }
@@ -785,7 +829,7 @@ export class Agent {
 
   private buildTools(allowed: string[], ctx: LoopCtx): ToolSpec[] {
     const peers = this.messenger?.peers(this.config.id) ?? [];
-    const key = [allowed.join(","), ctx.forkDepth, ctx.askDepth, this.forkCount, peers.map((p) => p.id).join(",")].join("|");
+    const key = [allowed.join(","), ctx.forkDepth, ctx.askDepth, peers.map((p) => p.id).join(",")].join("|");
     if (this.toolsCache?.key === key) return this.toolsCache.specs;
 
     // Three independent tool sources, concatenated: the sandbox, MCP servers, and LSP servers.
@@ -796,7 +840,10 @@ export class Agent {
     // configured MCP server — a field named allowedTools that did not bound the tools.
     // `"mcp"` in the list is the opt-in for "all of them", so the common case stays one word.
     const specs = [...toolSpecs(allowed), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)];
-    if (ctx.forkDepth < MAX_FORK_DEPTH && this.forkCount < MAX_FORKS_PER_AGENT) {
+    // Offered even once the breadth budget is spent — fork() refuses it at call time instead.
+    // Dropping it mid-task changed the tool list, which sits first in Anthropic's cache prefix, so
+    // the whole cached conversation was rewritten at 1.25× on the next call.
+    if (ctx.forkDepth < MAX_FORK_DEPTH) {
       specs.push({
         name: "spawn_fork",
         description:
@@ -1017,7 +1064,11 @@ export class Agent {
       if (again.ok) return { enforcer: [], test: [] }; // the verdict did not depend on the edits
     } finally {
       for (const c of candidates) {
-        await writeFile(safePath(this.root, c.rel), c.current).catch(() => {});
+        // A failed restore leaves the user's file at its baseline — say so loudly, never silently.
+        await writeFile(safePath(this.root, c.rel), c.current).catch((err: unknown) => {
+          const payload = `could not restore ${c.rel} after the tamper check (${err instanceof Error ? err.message : String(err)}) — it is still at its pre-task content`;
+          this.bus.publish({ agentId: this.config.id, type: "error", payload, time: Date.now() });
+        });
       }
       for (const abs of held) this.locks?.release(abs, this.config.id);
     }
@@ -1048,9 +1099,46 @@ export class Agent {
     }
   }
 
+  // Every call that starts on screen also ends on screen. The paths below that already publish an
+  // end (a write's file_edit, a sandbox call's result, an error) mark it; anything else — forks,
+  // messaging, the todo tool — gets a plain tool_end here, so no live block spins forever.
+  private openCalls = new Set<string>();
+  private async execTool(call: ToolCall, allowed: string[], ctx: LoopCtx): Promise<string> {
+    const started = Date.now();
+    this.openCalls.add(call.id);
+    try {
+      return await this.execToolInner(call, allowed, ctx, started);
+    } finally {
+      if (this.openCalls.delete(call.id)) {
+        this.bus.publish({ agentId: this.config.id, type: "tool_end", payload: call.name, time: Date.now(), callId: call.id, phase: "end", tool: call.name, ok: true, durationMs: Date.now() - started });
+      }
+    }
+  }
+
+  // A running shell call's output, as the last few lines, at most ~7 times a second — enough to
+  // watch a test run scroll by without flooding the event stream (and its 2,000-event replay ring).
+  private streamOutput(call: ToolCall): (chunk: string) => void {
+    let buf = "";
+    let last = 0;
+    return (chunk) => {
+      buf = (buf + chunk).slice(-4000);
+      const now = Date.now();
+      if (now - last < 150) return;
+      last = now;
+      const lines = buf.replace(/\s+$/, "").split("\n").slice(-4);
+      this.bus.publish({ agentId: this.config.id, type: "tool_output", payload: lines.join("\n"), time: now, callId: call.id, tool: call.name });
+    };
+  }
+
+  // The fields every end event carries. Marks the call ended so the wrapper doesn't add another.
+  private endOf(call: ToolCall, started: number, ok: boolean) {
+    this.openCalls.delete(call.id);
+    return { callId: call.id, phase: "end" as const, tool: call.name, ok, durationMs: Date.now() - started };
+  }
+
   // Execute one tool call: coordination tools first, then approval + MCP/sandbox dispatch. Publishes
   // the tool_call / file_edit / error telemetry. Returns the string result fed back to the model.
-  private async execTool(call: ToolCall, allowed: string[], ctx: LoopCtx): Promise<string> {
+  private async execToolInner(call: ToolCall, allowed: string[], ctx: LoopCtx, started: number): Promise<string> {
     const id = this.config.id;
     const sessionId = ctx.sessionId;
     try {
@@ -1058,7 +1146,7 @@ export class Agent {
     } catch (err) {
       return `error: ${err instanceof Error ? err.message : err}`;
     }
-    this.bus.publish({ agentId: id, type: "tool_call", payload: `${call.name} ${JSON.stringify(call.input)}`.slice(0, 180), time: Date.now() });
+    this.bus.publish({ agentId: id, type: "tool_call", payload: `${call.name} ${JSON.stringify(call.input)}`.slice(0, 180), time: Date.now(), callId: call.id, phase: "start", tool: call.name });
 
     // Internal coordination tools: not sandboxed (whatever the fork or the peer then does goes
     // through these same gates on its own). spawn_fork *is* policy-checked, though — it used to
@@ -1067,7 +1155,7 @@ export class Agent {
     if (call.name === "spawn_fork") {
       const forkDecision = resolvePermission([this.config.permissions, ...this.permissionLayers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input);
       if (forkDecision === "deny") {
-        this.bus.publish({ agentId: id, type: "error", payload: "spawn_fork: denied by permission policy", time: Date.now() });
+        this.bus.publish({ agentId: id, type: "error", payload: "spawn_fork: denied by permission policy", time: Date.now(), ...this.endOf(call, started, false) });
         return "denied by permission policy";
       }
       return this.fork(String(call.input.goal ?? ""), ctx);
@@ -1076,7 +1164,7 @@ export class Agent {
     // it resolves above the permission gate exactly as the messaging tools do.
     if (call.name === "todo") {
       this.todos = parseTodos(call.input.items);
-      this.bus.publish({ agentId: id, type: "thought", payload: `plan: ${renderTodos(this.todos).replace(/\n/g, " · ")}`, time: Date.now() });
+      this.bus.publish({ agentId: id, type: "todo", payload: renderTodos(this.todos), time: Date.now(), todos: this.todos.map((t) => ({ text: t.text, status: t.status })) });
       return todoAck(this.todos);
     }
     if (MESSAGING_TOOLS.has(call.name) && this.messenger) {
@@ -1087,7 +1175,7 @@ export class Agent {
     // Mirrored from buildTools: filtering the *specs* stops a well-behaved model naming a tool it
     // wasn't offered, but a hallucinated or replayed name would otherwise still execute.
     if (isMcp && !this.mcpAllowed(allowed, call.name)) {
-      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: not in this agent's allowedTools`, time: Date.now() });
+      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: not in this agent's allowedTools`, time: Date.now(), ...this.endOf(call, started, false) });
       return `tool '${call.name}' not allowed for this agent`;
     }
     // Always prompts, even with a standing "always allow" grant or --auto — none of these can be
@@ -1117,7 +1205,7 @@ export class Agent {
     // A deny is policy, not a question: it short-circuits without queuing an approval, and it holds
     // in headless mode too (where there is no approver and everything else would just run).
     if (decision === "deny") {
-      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: denied by permission policy`, time: Date.now() });
+      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: denied by permission policy`, time: Date.now(), ...this.endOf(call, started, false) });
       return "denied by permission policy";
     }
     // A config `allow` can never downgrade a dangerous command, nor one reaching outside the project.
@@ -1181,7 +1269,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root);
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call) });
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo
@@ -1208,6 +1296,8 @@ export class Agent {
         }
       }
       const after = writeRel !== undefined ? await this.readForCheckpoint(writeRel) : undefined;
+      const result = summarizeResult(call.name, output);
+      const shellFailed = result.exitCode !== undefined && result.exitCode !== 0;
       this.bus.publish({
         agentId: id,
         type: kind,
@@ -1215,11 +1305,13 @@ export class Agent {
         time: Date.now(),
         path: writeRel,
         diff: after === undefined ? undefined : snippetDiff(writeRel!, before ?? null, after) || undefined,
+        ...this.endOf(call, started, !shellFailed),
+        ...(after === undefined ? { outcome: result.outcome, lines: result.lines, head: result.head, tail: result.tail, body: call.name === "shell" ? result.body : undefined, exitCode: result.exitCode } : diffHunks(before ?? null, after)),
       });
       return this.admit(call, output, ctx);
     } catch (err) {
       const output = `error: ${err}`;
-      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: ${output}`, time: Date.now() });
+      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: ${output}`, time: Date.now(), ...this.endOf(call, started, false), outcome: String(err).slice(0, 160) });
       return output;
     }
   }

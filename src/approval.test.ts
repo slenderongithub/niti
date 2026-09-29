@@ -179,3 +179,15 @@ test("an unresolved request that is auto-approved by a standing grant does not t
   expect(await q.request("a", "shell", { command: "ls" })).toBe(true);
   expect(audit.list()).toHaveLength(0);
 });
+
+test("a 'this folder' grant works for Windows-style paths too", async () => {
+  const q = new ApprovalQueue();
+  const p1 = q.request("a", "write_file", { path: "src\\components\\Login.tsx" });
+  q.answer(true, "path");
+  expect(await p1).toBe(true);
+  expect(await q.request("a", "write_file", { path: "src\\components\\SignUp.tsx" })).toBe(true);
+  const p2 = q.request("a", "write_file", { path: "src\\api\\routes.ts" }); // sibling folder still asks
+  expect(q.current()?.tool).toBe("write_file");
+  q.answer(false);
+  expect(await p2).toBe(false);
+});

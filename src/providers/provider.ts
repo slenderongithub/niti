@@ -64,7 +64,8 @@ export type Turn =
 
 export interface Usage {
   inputTokens: number;
-  outputTokens: number;
+  outputTokens: number; // includes reasoning/thinking tokens — they are billed as output everywhere
+  reasoningTokens?: number; // the reasoning share of outputTokens, when the provider reports it
   // Anthropic (and, per its own auto-caching, OpenAI) reports how much of inputTokens was served
   // from cache vs. freshly written to it. Undefined, not 0, when a provider doesn't report it at
   // all — 0 would claim "cache was checked and missed," which isn't true for Gemini today.
@@ -108,7 +109,9 @@ export type OnDelta = (text: string) => void;
 
 export interface Provider {
   // When onDelta is given, the provider streams text chunks to it and still returns the full reply.
-  send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply>;
+  // `signal` aborts the request in flight (the user pressed esc): the SDKs cancel the HTTP call, so
+  // an interrupt stops the stream — and the billing — instead of waiting for the reply to finish.
+  send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply>;
   // Optional: not every provider has an embeddings API (Anthropic doesn't at all). Callers that
   // want semantic search (see niti IDE's codebase index) must check for this before calling it,
   // and fall back to a non-semantic strategy when it's absent — never assume every provider has it.
@@ -131,4 +134,19 @@ export const REASONING_LEVELS: Reasoning[] = ["off", "low", "medium", "high", "a
 
 export function parseReasoning(v: unknown): Reasoning | undefined {
   return typeof v === "string" && (REASONING_LEVELS as string[]).includes(v) ? (v as Reasoning) : undefined;
+}
+
+// Where the conversation breakpoints go. The NEWEST message is written to the cache on the call that
+// first sends it (1.25×) and read on every later call (0.1×). Marking the second-to-newest instead —
+// what this used to do — sent each fresh tool result uncached once (1×) and then wrote it anyway on
+// the next call (1.25×): every tool result paid for twice. The previous call's newest message
+// (length-3: one assistant turn and one user turn ago) is marked too, so the next lookup lands on
+// the exact entry just written even when a turn adds more than the API's 20-block lookback window.
+// One-message requests are skipped: a one-shot ask() never reuses its prompt.
+export function cacheBreakpoints<M>(messages: M[], mark: (m: M) => M): M[] {
+  if (messages.length < 2) return messages;
+  const out = [...messages];
+  out[out.length - 1] = mark(out[out.length - 1]!);
+  if (out.length >= 3) out[out.length - 3] = mark(out[out.length - 3]!);
+  return out;
 }

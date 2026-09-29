@@ -226,15 +226,38 @@ func startCore() (*core, error) {
 // forever. A failure to open it is not fatal — the core just runs without its output captured,
 // which beats refusing to start over a log file.
 func openCoreLog() (*os.File, string) {
-	if err := os.MkdirAll(".niti", 0o755); err != nil {
+	dir := filepath.Join(projectRoot(), ".niti")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, ""
 	}
-	path := filepath.Join(".niti", "core.log")
+	path := filepath.Join(dir, "core.log")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return nil, ""
 	}
 	return f, path
+}
+
+// projectRoot mirrors the core's findProjectRoot (src/config/config.ts): the nearest ancestor with
+// .niti/, else the nearest with .git/, else cwd. openCoreLog used to MkdirAll(".niti") in cwd before
+// the core looked, so launching from a subdirectory planted an empty .niti/ there that the core then
+// took as the project root — starting with zero agents while the real config sat one level up.
+func projectRoot() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	for _, marker := range []string{".niti", ".git"} {
+		for dir := cwd; ; dir = filepath.Dir(dir) {
+			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+				return dir
+			}
+			if filepath.Dir(dir) == dir {
+				break
+			}
+		}
+	}
+	return cwd
 }
 
 // streamWithReconnect keeps `events` fed for the life of ctx, reconnecting with backoff whenever
@@ -396,7 +419,11 @@ func applyTheme(sess api.SessionInfo) {
 	if sess.Theme != "" && !theme.Use(sess.Theme) {
 		fmt.Fprintf(os.Stderr, "niti: unknown theme %q — using %s\n", sess.Theme, theme.Current())
 	}
-	theme.SetLight(sess.Prefs["lightMode"])
+	// Only ever switches *to* light at startup: with the pref off, a light theme the user picked
+	// directly in the theme picker must stay picked, not be flipped back to its dark sibling.
+	if sess.Prefs["lightMode"] {
+		theme.SetLight(true)
+	}
 }
 
 func main() {

@@ -1,4 +1,4 @@
-import { GENERATED_CATALOG } from "./catalog.generated.ts";
+import { GENERATED_CATALOG, GENERATED_CONTEXT } from "./catalog.generated.ts";
 
 // Provider catalog — the single source of provider metadata (client, baseURL, env var, models).
 // Anthropic and Google use native clients; everything else speaks the OpenAI chat API via baseURL,
@@ -20,10 +20,80 @@ export interface CatalogEntry {
 
 const DEFAULT_CONTEXT = 128_000;
 
-// Approximate context window for the depth warning. ponytail: per-provider, not per-model — models
-// within a provider vary; a heads-up warning doesn't need exactness.
-export function contextWindow(provider: string): number {
-  return CATALOG[provider]?.context ?? DEFAULT_CONTEXT;
+// Model-name prefix → context window, for the hand-maintained providers models.dev doesn't cover
+// here (Anthropic, OpenAI, Google) and for provider-prefixed ids routed through a gateway.
+// Longest prefix wins. Compaction fires at 95% of this, so it has to be the model's real window:
+// Haiku 4.5 under the provider-wide 1M guess would overflow long before it ever compacted.
+const MODEL_CONTEXT: Record<string, number> = {
+  claude: 1_000_000, // Opus/Sonnet 4.6 and later, Fable
+  "claude-haiku": 200_000,
+  "claude-3": 200_000,
+  "claude-sonnet-4-5": 200_000,
+  "claude-sonnet-4-0": 200_000,
+  "claude-sonnet-4-2": 200_000,
+  "claude-opus-4-5": 200_000,
+  "claude-opus-4-1": 200_000,
+  "claude-opus-4-0": 200_000,
+  "claude-opus-4-2": 200_000,
+  "gpt-4o": 128_000,
+  "gpt-4.1": 1_047_576,
+  "gpt-5": 400_000,
+  o1: 200_000,
+  o3: 200_000,
+  "o4-mini": 200_000,
+  gemini: 1_048_576,
+  "deepseek-chat": 128_000,
+  "deepseek-reasoner": 128_000,
+  "llama-3": 128_000,
+  "mistral-large": 128_000,
+  grok: 256_000,
+};
+
+// Windows learned at runtime (see probeOllamaContext), keyed "provider/model". They win over every
+// table below because they describe the server actually running, not the model in general.
+const LEARNED_CONTEXT = new Map<string, number>();
+
+// Ollama serves each model with its own num_ctx — often 4–8k, however large the model's trained
+// window — and silently drops the oldest part of an oversized prompt (the system prompt first)
+// instead of erroring. Read what it will really accept from /api/show so compaction fires in time.
+// Fire-and-forget: a server that isn't up yet keeps the conservative table value.
+export async function probeOllamaContext(model: string, baseURL = "http://localhost:11434/v1"): Promise<number | undefined> {
+  try {
+    const res = await fetch(`${baseURL.replace(/\/v1\/?$/, "")}/api/show`, {
+      method: "POST",
+      body: JSON.stringify({ model }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return undefined;
+    const info = (await res.json()) as { parameters?: string; model_info?: Record<string, unknown> };
+    const numCtx = Number(/(?:^|\n)num_ctx\s+(\d+)/.exec(info.parameters ?? "")?.[1]);
+    const trained = Object.entries(info.model_info ?? {}).find(([k]) => k.endsWith(".context_length"))?.[1];
+    // ponytail: without an explicit num_ctx the server-wide default applies, which the API doesn't
+    // report; 8k is below every recent default, so the error is compacting early, never overflowing.
+    const n = numCtx > 0 ? numCtx : Math.min(typeof trained === "number" ? trained : 8192, 8192);
+    LEARNED_CONTEXT.set(`ollama/${model}`, n);
+    return n;
+  } catch {
+    return undefined;
+  }
+}
+
+// Context window for the depth warning and compaction. A window learned from the running server
+// first, then the exact models.dev entry, then the model-name prefix table, then the provider's
+// own figure, then a conservative default.
+export function contextWindow(provider: string, model = ""): number {
+  const exact = LEARNED_CONTEXT.get(`${provider}/${model}`) ?? GENERATED_CONTEXT[`${provider}/${model}`];
+  if (exact) return exact;
+  const name = (model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model).toLowerCase();
+  let best = 0;
+  let bestLen = 0;
+  for (const [prefix, n] of Object.entries(MODEL_CONTEXT)) {
+    if (name.startsWith(prefix) && prefix.length > bestLen) {
+      best = n;
+      bestLen = prefix.length;
+    }
+  }
+  return best || (CATALOG[provider]?.context ?? DEFAULT_CONTEXT);
 }
 
 // ponytail: model lists are seeds, not exhaustive — provider catalogs drift. The selector's

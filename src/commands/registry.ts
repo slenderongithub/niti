@@ -211,7 +211,9 @@ export const BUILTIN_COMMANDS: Command[] = [
         // A savings mechanism nobody can see delivers no visible value — show it whenever a
         // provider has actually reported any cache activity for this agent.
         const cache = usage.cacheReadTokens || usage.cacheWriteTokens ? ` (cache ${usage.cacheReadTokens}in ${usage.cacheWriteTokens}wr)` : "";
-        lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}${cache}`);
+        // Thinking is billed as output; showing its share explains an output count far above the text.
+        const thinking = usage.reasoningTokens ? ` (thinking ${usage.reasoningTokens})` : "";
+        lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}${cache}${thinking}`);
       }
       if (!lines.length) return { ok: true, message: "nothing spent yet" };
       return { ok: true, message: [...lines, `TOTAL $${total.toFixed(4)}${complete ? "" : "+"}`].join("\n") };
@@ -263,7 +265,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     async run(engine) {
       if (engine.running) return { ok: false, message: "a task is already running" };
       if (!engine.orch.all.some((t) => t.status !== "done")) return { ok: false, message: "nothing left to resume" };
-      engine.resume().catch(() => {}); // long-running: progress arrives over the event stream
+      engine.resume().catch(reportRunFailure(engine)); // long-running: progress arrives over the event stream
       return { ok: true, message: "resuming unfinished tasks" };
     },
   },
@@ -274,6 +276,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       if (engine.running) return { ok: false, message: "cancel the running task first" };
       const n = engine.orch.all.length;
       engine.orch.clear();
+      engine.history.length = 0; // a clean slate means the planner forgets the conversation too
       saveTasks([]); // otherwise a restart resurrects the board this just cleared
       return { ok: true, message: `cleared ${n} task(s)` };
     },
@@ -283,11 +286,19 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: "Have the team read this project and write an AGENTS.md for it",
     async run(engine) {
       if (engine.running) return { ok: false, message: "a task is already running" };
-      engine.submit(INIT_PROMPT).catch(() => {});
+      engine.submit(INIT_PROMPT).catch(reportRunFailure(engine));
       return { ok: true, message: "analysing the project → AGENTS.md" };
     },
   },
 ];
+
+// The command has already answered "ok" by the time a background run can fail, so the failure
+// goes where every other run failure goes — the transcript — instead of vanishing (same shape
+// server.ts uses for POST /prompt).
+function reportRunFailure(engine: Engine) {
+  return (err: unknown) =>
+    engine.bus.publish({ agentId: "orchestrator", type: "error", payload: `run failed: ${err instanceof Error ? err.message : err}`, time: Date.now() });
+}
 
 const TASK_GLYPH: Record<string, string> = { done: "●", in_progress: "◐", failed: "✖", pending: "○" };
 
@@ -321,7 +332,7 @@ export function loadCommands(dir = ".niti/commands"): Command[] {
         async run(engine, args) {
           const prompt = body.replaceAll("$ARGUMENTS", args.trim());
           if (engine.running) return { ok: false, message: "a task is already running" };
-          engine.submit(prompt).catch(() => {}); // long-running: progress arrives over the event stream
+          engine.submit(prompt).catch(reportRunFailure(engine)); // long-running: progress arrives over the event stream
           return { ok: true, message: `running /${name}` };
         },
       });

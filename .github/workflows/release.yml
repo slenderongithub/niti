@@ -1,0 +1,85 @@
+name: Release
+
+# Publishes a tagged version to npm. Replaces six hand-typed `npm publish` commands, where a partial
+# run left the root package pinning platform packages that were never uploaded — a broken install
+# for everyone until someone noticed. Platform packages go first; the root package goes last and
+# only if every one of them is on the registry.
+#
+#   bun run bump 0.3.4 && git commit -am "Bump version to 0.3.4" && git tag v0.3.4 && git push --tags
+#
+# Needs an NPM_TOKEN repository secret (an npm automation token). --provenance links each tarball
+# to this workflow run, so users can verify where a binary was built.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # npm --provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: tui/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: bun install --frozen-lockfile
+
+      # The tag, package.json, its platform pins and the TUI's displayed version must all agree —
+      # `bun run bump` sets them together; this refuses to publish if anything was hand-edited apart.
+      - name: versions agree
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            const go = require("fs").readFileSync("tui/internal/ui/list.go", "utf8").match(/const Version = "([^"]+)"/)?.[1];
+            const bad = [];
+            if (pkg.version !== tag) bad.push(`package.json ${pkg.version} != tag ${tag}`);
+            if (go !== tag) bad.push(`tui Version ${go} != tag ${tag}`);
+            for (const [d, v] of Object.entries(pkg.optionalDependencies ?? {})) if (v !== tag) bad.push(`${d} pinned at ${v}`);
+            if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
+          '
+
+      - run: bun test src web
+      - run: go test ./...
+        working-directory: tui
+
+      - run: bun run build:release
+
+      # Idempotent: a re-run after a partial failure skips what is already published instead of
+      # failing on "cannot publish over the previously published version".
+      - name: publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for dir in npm/*/; do
+            name=$(node -p "require('./${dir}package.json').name")
+            version=$(node -p "require('./${dir}package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already published — skipping"
+            else
+              npm publish "./$dir" --provenance --access public
+            fi
+          done
+
+      - name: every platform package is on the registry
+        run: |
+          set -euo pipefail
+          node -p 'Object.entries(require("./package.json").optionalDependencies).map(([n,v]) => n+"@"+v).join("\n")' |
+            while read -r spec; do npm view "$spec" version >/dev/null || { echo "::error::$spec is not published"; exit 1; }; done
+
+      - name: publish the root package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public

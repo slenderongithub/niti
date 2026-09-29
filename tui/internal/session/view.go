@@ -3,41 +3,51 @@ package session
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Layout — the whole terminal is one painted surface, not boxes floating on the user's wallpaper:
+// Layout — posting's shape: titled panels whose borders carry the live detail, a prompt panel whose
+// border names the mode, and a footer listing the keys that work right now.
 //
-//	┌──────────────────────────────────────────────────────────┐
-//	│ ● niti  BUILD PLAN      ~/code/niti           ███░░  45%  │  header bar
-//	│━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  mode stripe
-//	│ CONTEXT      │ ◆ Architect  google/…      ● working       │
-//	│  ███░ 25%    │ │ ⚒ read_file README.md                    │  sidebar │ work
-//	│  13.2k / 1M  │ │ · planning the layout                    │
-//	│  $0.42 spent │                                            │
-//	│ AGENTS       │ ▲ Backend  zhipuai/glm-5   ○ idle          │
-//	│ LSP  MCP …   │ │ —                                        │
-//	├──────────────┴────────────────────────────────────────────│
-//	│ t1 ● t2 ◐ t3 ○                                            │  tasks
-//	│ architect ─handoff→ backend  api shape                    │  agent-to-agent feed
-//	│ ▸ describe the project…                                   │  input
-//	│ tab: panes · ctrl+p: plan · ctrl+t: theme · ready          │  footer
-//	└──────────────────────────────────────────────────────────┘
+//	 niti 0.3.3                                   ~/code/app · gemini-flash · Build
+//	╭──────────── Agents ─╮╭─────────────────────────────────────── Transcript ─╮
+//	│ ◆ Lead ★    working ││ ≡ All agents   ◆ Lead   ▲ Coder                    │
+//	│ ▲ Coder        idle ││ ◆ Lead  google/gemini-flash             ● working  │
+//	│                     ││ │ ⏺ Read src/engine.ts                             │
+//	│ Tasks               ││ │ ⎿ 554 lines                                      │
+//	│ ● Add login route   ││                                                    │
+//	╰─ 45% ctx · $0.03 ───╯╰─ 2 agents · 12.4k tok ─────────────────────────────╯
+//	╭─ Build ──────────────────────────────────────────────────────────────────╮
+//	│ ▸ describe the change…                                                    │
+//	╰─ status messages land here ──────────────────────────────────────────────╯
+//	 ^p Commands  tab Focus  ⇧tab Plan mode  ^l Models  f1 Help  ^c Quit
 //
 // Every row is sized from m.width/m.height, which Update() refreshes on each tea.WindowSizeMsg, so
-// a resize reflows rather than clipping — and the body is what flexes, so the input line can never
-// be pushed off the bottom.
+// a resize reflows rather than clipping — and the body is what flexes, so the prompt can never be
+// pushed off the bottom. Small terminals (and the "spacing: Compact" palette entry) drop the
+// borders, as posting's compact mode does.
 const (
-	headerRows  = 2  // the bar plus the mode stripe under it
+	headerRows  = 1  // the title bar
 	sidebarMin  = 22 // narrower than this and the sidebar is unreadable, so it's dropped instead
 	sidebarMax  = 32
 	sidebarHide = 76 // total width below which there's no room for a sidebar at all
 	minAgentRow = 3  // an agent block worth drawing: header + 2 transcript lines
 )
+
+// compact is posting's spacing mode: no panel borders. Chosen automatically when the terminal is
+// too small for frames to be worth their rows, or explicitly from the palette.
+func (m Model) compact() bool {
+	return m.prefs["compact"] || (m.width > 0 && m.width < 70) || (m.height > 0 && m.height < 20)
+}
+
+func (m Model) sidebarShown() bool { return m.width == 0 || m.width >= sidebarHide }
 
 func (m Model) View() string {
 	if m.quitting {
@@ -51,8 +61,8 @@ func (m Model) View() string {
 		h = 30
 	}
 
-	// The settings overlay paints over the whole TUI — like the Claude app's settings panel, and like
-	// the ctrl+p carousel it takes the screen while open rather than tiling into the layout.
+	// The settings overlay paints over the whole TUI — like the ctrl+p palette it takes the screen
+	// while open rather than tiling into the layout.
 	if m.sett.open {
 		return m.settingsView(w, h)
 	}
@@ -64,85 +74,63 @@ func (m Model) View() string {
 		}
 	}
 
-	// Fixed chrome is budgeted first; the body absorbs whatever is left. The optional strips (tasks,
-	// agent-to-agent feed) are the first thing given up on a short terminal.
-	tasksRows, feedRows := 0, 0
-	if len(m.tasks) > 0 && h >= 14 {
-		tasksRows = 1
+	compact := m.compact()
+	promptRows := 3
+	if compact {
+		promptRows = 1
 	}
+	// Fixed chrome is budgeted first; the body absorbs whatever is left. The agent-to-agent feed is
+	// the first thing given up on a short terminal, then the command menu.
+	feedRows := 0
 	if len(m.feed) > 0 {
 		switch {
-		case h >= 26:
+		case h >= 30:
 			feedRows = 2
-		case h >= 16:
+		case h >= 18:
 			feedRows = 1
 		}
 	}
-	// The slash-command suggestions sit directly on top of the prompt, so they come out of the same
-	// budget as everything else — the body gives up the rows while the menu is open.
 	menuRows := 0
 	if m.menuOpen && m.menu.Len() > 0 {
 		menuRows = clamp(m.menu.Len(), 1, 6)
 	}
-	// One row for the agent tab bar, when there's more than one agent to switch between.
-	tabRows := 0
-	if len(m.order) > 1 {
-		tabRows = 1
+	fixed := headerRows + promptRows + 1 // +1: the footer
+	bodyH := h - fixed - feedRows - menuRows
+	if bodyH < 3 {
+		feedRows = 0
+		bodyH = h - fixed - menuRows
 	}
-
-	bodyH := h - headerRows - tabRows - tasksRows - feedRows - menuRows - 2 // -2: the input row and the footer
-	if bodyH < 1 {
-		tasksRows, feedRows = 0, 0
-		bodyH = max(h-headerRows-tabRows-menuRows-2, 1)
-	}
-	if bodyH < 1 { // a terminal too short for both: the menu is transient, the transcript isn't
-		menuRows, bodyH = 0, max(h-headerRows-tabRows-2, 1)
-	}
-	if bodyH < 1 { // shorter still: the tab bar is the last thing given up before the body itself
-		tabRows, bodyH = 0, max(h-headerRows-2, 1)
+	if bodyH < 3 {
+		menuRows, bodyH = 0, max(h-fixed, 1)
 	}
 
 	sw := 0
 	if w >= sidebarHide {
 		sw = clamp(w/5, sidebarMin, sidebarMax)
 	}
-
-	// The agent tab bar belongs to the main column, not the whole terminal: the grey sidebar runs
-	// from the mode stripe down through the tab row, so the tabs and their views both start in the
-	// dark area beside it instead of the bar sitting across the top of the sidebar.
-	body := m.mainPane(w-sw, bodyH)
-	if tabRows > 0 {
-		body = m.tabBar(w-sw) + "\n" + body
-	}
+	body := m.mainPane(w-sw, bodyH, compact)
 	if sw > 0 {
-		body = lipgloss.JoinHorizontal(lipgloss.Top, m.sidebar(sw, bodyH+tabRows), body)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, m.sidebar(sw, bodyH, compact), body)
 	}
 
-	rows := []string{m.header(w)}
-	rows = append(rows, body)
-	if tasksRows > 0 {
-		rows = append(rows, m.tasksStrip(w))
-	}
+	rows := []string{m.header(w), body}
 	if feedRows > 0 {
 		rows = append(rows, m.commFeed(w, feedRows))
 	}
 	if menuRows > 0 {
 		rows = append(rows, m.menuView(w, menuRows))
 	}
-	if len(m.approvals) > 0 {
-		rows = append(rows, m.approvalBar(w))
-	} else {
-		rows = append(rows, m.inputBar(w))
-	}
-	rows = append(rows, m.footer(w))
+	rows = append(rows, m.promptPanel(w, promptRows, compact), m.footer(w, compact))
 	// One ANSI-aware guarantee that nothing overflows the terminal, however long a streamed line or
 	// a registry command list turns out to be.
 	out := lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(strings.Join(rows, "\n"))
 	// At most one popup is reachable at a time (onKey gives whichever is open the keyboard), so the
-	// order here is only about which one wins if both flags are somehow set.
+	// order here is only about which one wins if two flags are somehow set.
 	switch {
 	case m.out.open:
 		out = ui.Overlay(out, m.outputView(w, h), w, h)
+	case m.pal.open:
+		out = ui.OverlayAt(out, m.paletteView(w, h), w, h, 2)
 	case m.car.open:
 		out = ui.Overlay(out, m.carouselView(w, h), w, h)
 	case m.ap.open:
@@ -212,127 +200,182 @@ func bar(pct, width int, fill, empty, bg lipgloss.Color) string {
 
 // --- header ---
 
+// posting's title bar: the app name and version on the left, where-am-I on the right — here the
+// project, the model of the agent on screen, and the mode as a tinted chip.
 func (m Model) header(w int) string {
-	bg := theme.BgPane
-	// The version sits in the header rather than only behind /settings — "which niti is this?" is a
-	// question worth answering without a keystroke, especially in a bug report screenshot.
-	dot, dotColor := " ● niti", theme.Accent
+	bg := theme.BgDeep
+	left := txt(theme.Accent, bg).Bold(true).Render(" niti") + txt(theme.Muted, bg).Render(" "+ui.Version)
 	if m.disconnected {
-		dot, dotColor = " ○ niti", theme.Red // hollow + error colour: the core is not answering
+		left += txt(theme.Red, bg).Bold(true).Render("  offline — reconnecting")
 	}
-	brand := txt(dotColor, bg).Bold(true).Render(dot) + txt(theme.Line, bg).Render(" v"+ui.Version)
-	left := brand + " " + m.pill("BUILD", "build") + m.pill("PLAN", "plan")
 
-	pb := bar(m.progress, clamp(w/8, 5, 18), theme.Accent, theme.Line, bg)
-	right := pb + txt(theme.Muted, bg).Render(fmt.Sprintf(" %3d%% ", m.progress))
-
-	used := lipgloss.Width(left) + lipgloss.Width(right)
-	path := txt(theme.Muted, bg).Render(shortPath(m.root, max(w-used-4, 0)))
-	free := max(w-used-lipgloss.Width(path), 0)
-	pad := func(n int) string { return txt(theme.Muted, bg).Render(strings.Repeat(" ", n)) }
-
-	stripe := theme.Accent
+	mode, mc := "Build", theme.Accent
 	if m.mode == "plan" {
-		stripe = theme.Alt
+		mode, mc = "Plan", theme.Alt
 	}
-	return left + pad(free/2) + path + pad(free-free/2) + right + "\n" +
-		txt(stripe, theme.BgDeep).Render(strings.Repeat("━", max(w, 0)))
+	chip := lipgloss.NewStyle().Foreground(mc).Background(theme.Tint(mc)).Bold(true).Render(" " + mode + " ")
+	model := ""
+	if st := m.shownAgent(); st != nil {
+		model = st.cfg.Model
+	}
+	room := max(w-lipgloss.Width(left)-lipgloss.Width(chip)-4, 0)
+	where := shortPath(m.root, room*2/3)
+	if model != "" {
+		where = ui.Truncate(where+" · "+model, room)
+	}
+	right := txt(theme.Muted, bg).Render(where+" ") + chip + txt(theme.Muted, bg).Render(" ")
+	gap := max(w-lipgloss.Width(left)-lipgloss.Width(right), 0)
+	return left + txt(theme.Muted, bg).Render(strings.Repeat(" ", gap)) + right
 }
 
-// The active mode is a filled pill; the other is a hint that it exists (and ctrl+p reaches it).
-func (m Model) pill(label, mode string) string {
-	c := theme.Accent
-	if mode == "plan" {
-		c = theme.Alt
+// shownAgent is the agent the screen is about: the one maximized, else the lead, else the first.
+func (m Model) shownAgent() *agentState {
+	if st := m.agents[m.focus]; st != nil {
+		return st
 	}
-	if m.mode == mode {
-		return lipgloss.NewStyle().Foreground(theme.BgDeep).Background(c).Bold(true).Render(" " + label + " ")
+	for _, id := range m.order {
+		if m.agents[id].cfg.Lead {
+			return m.agents[id]
+		}
 	}
-	return txt(theme.Muted, theme.BgPane).Render(" " + label + " ")
+	if len(m.order) > 0 {
+		return m.agents[m.order[0]]
+	}
+	return nil
 }
 
-// --- sidebar: what this session is attached to, and what it has cost ---
+// --- sidebar: who is on the team, what they're doing, and what the session is wired to ---
 
-func (m Model) sidebar(sw, h int) string {
-	bg := theme.BgPane
-	iw := sw - 2 // lipgloss Width() is the total including padding, so the text gets what's left
+func (m Model) sidebar(sw, h int, compact bool) string {
+	bg := theme.BgDeep
+	iw := sw - 4 // border + padding either side
+	if compact {
+		iw = sw - 2
+	}
 	var lines []string
 	label := func(s string) {
-		lines = append(lines, txt(theme.Accent, bg).Bold(true).Render(truncate(s, iw)))
+		lines = append(lines, txt(theme.Muted, bg).Bold(true).Render(truncate(s, iw)))
 	}
-	item := func(c lipgloss.Color, s string) {
-		lines = append(lines, txt(c, bg).Render(truncate(s, iw)))
-	}
+	focused := m.context() == regionAgents
 
-	used, limit, pct := m.contextDepth()
-	label("CONTEXT")
-	lines = append(lines, bar(pct, max(iw-5, 1), theme.Accent, theme.Line, bg)+txt(theme.Muted, bg).Render(fmt.Sprintf(" %d%%", pct)))
-	item(theme.Muted, fmt.Sprintf("%s / %s ctx", fmtTok(used), fmtTok(limit)))
-	item(theme.Muted, fmt.Sprintf("%s tok · %d calls", fmtTok(m.totals.InputTokens+m.totals.OutputTokens), m.totals.Calls))
-	item(theme.Green, m.spend())
-	lines = append(lines, "")
-
-	// The LSP/MCP panels are the whole reason for a sidebar, so the roster — which the main pane
-	// already shows in full — is what gives up rows when the sidebar can't hold everything: first
-	// its per-agent status sub-lines, then the tail of the list itself.
-	tail := 2 + max(len(m.lsp), 1) + 2 + max(len(m.mcp), 1) // the LSP and MCP blocks below
-	free := max(h-len(lines)-1-tail, 1)                     // -1 for the AGENTS label
-	roster, detailed := m.order, true
-	if len(roster)*2 > free {
-		detailed = false
-		if len(roster) > free-1 {
-			roster = roster[:max(free-1, 0)]
-		}
-	}
-
-	label("AGENTS")
-	for _, id := range roster {
+	// Agents: avatar + role on the left, status on the right, cursor bar when this panel has focus.
+	for i, id := range m.order {
 		st := m.agents[id]
-		lead := ""
+		name := st.avatar + " " + st.cfg.Role
 		if st.cfg.Lead {
-			lead = " ★"
+			name += " ★"
 		}
-		if !detailed {
-			// One line each: name, then the status/token detail folded onto it.
-			item(st.color, st.avatar+" "+st.cfg.Role+lead+" · "+fmtTok(st.tokens))
-			continue
+		status := st.status
+		rowBg := bg
+		if focused && i == m.agentCursor {
+			rowBg = theme.Tint(theme.Accent)
 		}
-		item(st.color, st.avatar+" "+st.cfg.Role+lead)
-		item(theme.StatusColor(st.status), "  "+st.status+" · "+fmtTok(st.tokens))
+		name = truncate(name, max(iw-lipgloss.Width(status)-1, 1))
+		gap := max(iw-lipgloss.Width(name)-lipgloss.Width(status), 1)
+		lines = append(lines, txt(st.color, rowBg).Bold(st.id() == m.focus).Render(name)+
+			txt(theme.Muted, rowBg).Render(strings.Repeat(" ", gap))+
+			txt(theme.StatusColor(st.status), rowBg).Render(status))
 	}
-	if n := len(m.order) - len(roster); n > 0 {
-		item(theme.Muted, fmt.Sprintf("  +%d more", n))
-	}
-	lines = append(lines, "")
 
-	label("LSP")
-	if len(m.lsp) == 0 {
-		item(theme.Line, "  none configured")
+	if len(m.tasks) > 0 {
+		lines = append(lines, "")
+		label("Tasks")
+		glyphs := map[string]string{"done": "●", "in_progress": "◐", "failed": "✖"}
+		for _, t := range m.tasks {
+			g := glyphs[t.Status]
+			if g == "" {
+				g = "○"
+			}
+			title := t.Description
+			if title == "" {
+				title = t.ID
+			}
+			lines = append(lines, txt(theme.StatusColor(t.Status), bg).Render(g+" ")+txt(theme.Fg, bg).Render(truncate(title, max(iw-2, 1))))
+		}
 	}
+
+	// LSP/MCP: what the session is wired to. Given up first when the panel runs out of rows.
+	var wired []string
 	for _, l := range m.lsp {
-		// Configured-but-idle vs. running is the difference between a typo in agents.yaml and a
-		// language server that simply hasn't been needed yet.
 		dot, c := "○", theme.Muted
 		if l.Running {
 			dot, c = "●", theme.Green
 		}
-		item(c, dot+" "+l.Name)
-	}
-	lines = append(lines, "")
-
-	label("MCP")
-	if len(m.mcp) == 0 {
-		item(theme.Line, "  none connected")
+		wired = append(wired, txt(c, bg).Render(dot+" ")+txt(theme.Fg, bg).Render(truncate("lsp "+l.Name, max(iw-2, 1))))
 	}
 	for _, s := range m.mcp {
-		item(theme.Blue, fmt.Sprintf("● %s (%d)", s.Name, s.Tools))
+		wired = append(wired, txt(theme.Blue, bg).Render("● ")+txt(theme.Fg, bg).Render(truncate(fmt.Sprintf("mcp %s · %d tools", s.Name, s.Tools), max(iw-2, 1))))
+	}
+	if len(wired) > 0 {
+		lines = append(lines, "")
+		label("Connected")
+		lines = append(lines, wired...)
 	}
 
-	// The step from BgPane to the main pane's BgDeep is the divider. A drawn border would need its
-	// own background to avoid punching an unpainted column between the two panes — and on a
-	// non-truecolor terminal that border cell degrades to a stray escape sequence.
-	return lipgloss.NewStyle().Width(sw).Height(h).MaxHeight(h).Padding(0, 1).
-		Background(bg).Render(exactly(lines, h))
+	// The context figure is the agent closest to its window; it names that agent when there's room,
+	// and drops detail rather than cutting a word in half when there isn't.
+	_, limit, pct := m.contextDepth()
+	who := ""
+	if st := m.deepestAgent(); st != nil && len(m.order) > 1 {
+		who = " " + st.cfg.Role
+	}
+	subtitle := ""
+	for _, c := range []string{
+		fmt.Sprintf("ctx %d%% of %s%s · %s", pct, fmtTok(limit), who, m.spend()),
+		fmt.Sprintf("ctx %d%%%s · %s", pct, who, m.spend()),
+		fmt.Sprintf("ctx %d%% · %s", pct, m.spend()),
+		fmt.Sprintf("ctx %d%%", pct),
+	} {
+		if lipgloss.Width(c) <= sw-6 {
+			subtitle = c
+			break
+		}
+	}
+	if compact {
+		return lipgloss.NewStyle().Width(sw).Height(h).MaxHeight(h).Padding(0, 1).Background(theme.BgPane).Render(exactly(lines, h))
+	}
+	// The Files panel takes what the Agents panel doesn't need — the roster is a few lines, and the
+	// space under it used to sit empty.
+	agentsH, filesH := m.sidebarSplit(len(lines), h)
+	agents := ui.Panel{Title: "Agents", Subtitle: subtitle, Focused: focused}.Render(strings.Join(lines, "\n"), sw, agentsH)
+	if filesH == 0 {
+		return agents
+	}
+	return agents + "\n" + m.filesPanel(sw, filesH)
+}
+
+// sidebarSplit sizes the Agents panel to its content (at most half the column) and gives the rest
+// to Files — or everything to Agents when there'd be too little left for a useful tree.
+func (m Model) sidebarSplit(agentLines, h int) (int, int) {
+	agentsH := clamp(agentLines+2, 4, max(h/2, 4))
+	if len(m.files) == 0 || h-agentsH < 6 {
+		return h, 0
+	}
+	return agentsH, h - agentsH
+}
+
+// filesShown reports whether a Files panel is on screen to take focus.
+func (m Model) filesShown() bool {
+	return m.sidebarShown() && !m.compact() && len(m.files) > 0
+}
+
+func (s *agentState) id() string { return s.cfg.ID }
+
+// deepestAgent is the agent closest to its context window — the one the sidebar's figure is about.
+func (m Model) deepestAgent() *agentState {
+	var best *agentState
+	bestR := -1.0
+	for _, id := range m.order {
+		st := m.agents[id]
+		lim := st.ctxLimit
+		if lim <= 0 {
+			lim = 128_000
+		}
+		if r := float64(st.ctxUsed) / float64(lim); r > bestR {
+			best, bestR = st, r
+		}
+	}
+	return best
 }
 
 // The deepest agent context in the team — the one that will hit its window first, which is the
@@ -358,57 +401,93 @@ func (m Model) contextDepth() (used, limit, pct int) {
 
 func (m Model) spend() string {
 	if m.cost == 0 && !m.costKnown {
-		return "cost n/a"
+		return "cost unknown"
 	}
 	if !m.costKnown {
-		return fmt.Sprintf("$%.2f+ spent", m.cost) // some model has no published price
+		return fmt.Sprintf("$%.2f+", m.cost) // some model has no published price
 	}
-	return fmt.Sprintf("$%.2f spent", m.cost)
+	return fmt.Sprintf("$%.2f", m.cost)
 }
 
 // --- main pane ---
 
-func (m Model) mainPane(mw, h int) string {
-	iw := max(mw-2, 1) // the two columns of padding Width() below accounts for
-	var content string
-	switch m.view {
-	case "usage":
-		content = m.usageView(iw, h)
-	default:
-		// A focused agent gets the whole pane via the same agentBlock renderer workView already uses
-		// per-agent — no new rendering path, just a per-share of 1 instead of len(shown). Falls back
-		// to the stacked overview if the focused id no longer exists (agent removed, stale state).
-		if m.focus != "" {
-			if st := m.agents[m.focus]; st != nil {
-				content = m.agentBlock(st, iw, h)
-				break
-			}
-		}
-		content = m.workView(iw, h)
+func (m Model) mainPane(mw, h int, compact bool) string {
+	iw, ih := max(mw-4, 1), max(h-2, 1) // inside the border and its padding
+	if compact {
+		iw, ih = max(mw-2, 1), h
 	}
-	return lipgloss.NewStyle().Width(mw).Height(h).MaxHeight(h).Padding(0, 1).
-		Background(theme.BgDeep).Render(content)
+	var rows []string
+	if len(m.order) > 1 && m.view != "usage" {
+		rows = append(rows, m.tabBar(iw))
+	}
+	ch := max(ih-len(rows), 1)
+	// The last run's card sits at the bottom of the transcript, where the eye lands when work ends.
+	card := ""
+	if cr := m.cardRows(); cr > 0 && m.view != "usage" && ch-cr >= 6 {
+		card = m.cardView(iw)
+		ch -= cr
+	}
+	switch {
+	case m.view == "usage":
+		rows = append(rows, m.usageView(iw, ch))
+	case m.viewer != nil:
+		rows = append(rows, m.viewerBody(iw, ch))
+	case m.agents[m.focus] != nil:
+		// A focused agent gets the whole pane via the same agentBlock renderer workView uses per
+		// agent — no new rendering path, just a share of 1 instead of len(shown).
+		rows = append(rows, m.agentBlock(m.agents[m.focus], iw, ch))
+	default:
+		rows = append(rows, m.workView(iw, ch))
+	}
+	if card != "" {
+		rows = append(rows, card)
+	}
+	content := strings.Join(rows, "\n")
+	if compact {
+		return lipgloss.NewStyle().Width(mw).Height(h).MaxHeight(h).Padding(0, 1).Background(theme.BgDeep).Render(content)
+	}
+
+	title, sub := "Transcript", ""
+	switch st := m.agents[m.focus]; {
+	case m.view == "usage":
+		title, sub = "Usage", fmt.Sprintf("%d calls · %s", m.totals.Calls, m.spend())
+	case m.viewer != nil:
+		title = m.viewer.path
+		sub = fmt.Sprintf("%d lines · read-only · e edit · esc close", len(m.viewer.lines))
+		if n := len(m.changed[m.viewer.path]); n > 0 {
+			sub = fmt.Sprintf("%d lines · ▎%d changed this session · e edit · esc close", len(m.viewer.lines), n)
+		}
+	case st != nil:
+		title, sub = st.avatar+" "+st.cfg.Role, fmt.Sprintf("%s/%s · %s tok", st.cfg.Provider, st.cfg.Model, fmtTok(st.tokens))
+	default:
+		sub = fmt.Sprintf("%d agents · %s tok", len(m.order), fmtTok(m.totals.InputTokens+m.totals.OutputTokens))
+	}
+	if r := m.runningLine(); r != "" && m.viewer == nil {
+		sub = r
+	}
+	if m.scrollBack > 0 {
+		sub = fmt.Sprintf("scrolled back · %d new below · G follows", m.unseen)
+	}
+	return ui.Panel{Title: title, Subtitle: sub, Focused: m.context() == regionTranscript}.Render(content, mw, h)
 }
 
-// tabBar is the always-visible VS-Code-style strip for jumping between agent windows: ctrl+g opens
-// a picker, alt+1..9 jumps directly, esc (while focused) returns here to the stacked overview.
+// tabBar lists the agents' views, posting-style: the active one bold with an underline, the rest
+// muted. ctrl+g / alt+1…9 / the Agents panel switch between them; esc returns to All agents.
 func (m Model) tabBar(w int) string {
 	bg := theme.BgDeep
-	segs := make([]string, 0, len(m.order)+1)
-	overview := "≡ overview"
-	if m.focus == "" {
-		segs = append(segs, txt(theme.BgDeep, theme.Accent).Bold(true).Render(" "+overview+" "))
-	} else {
-		segs = append(segs, txt(theme.Muted, bg).Render(" "+overview+" "))
+	tab := func(label string, active bool, c lipgloss.Color) string {
+		if active {
+			return lipgloss.NewStyle().Foreground(c).Background(bg).Bold(true).Underline(true).Render(label) + txt(theme.Fg, bg).Render("   ")
+		}
+		return txt(theme.Muted, bg).Render(label + "   ")
 	}
+	segs := []string{tab("≡ All agents", m.focus == "" && m.viewer == nil, theme.Fg)}
 	for _, id := range m.order {
 		st := m.agents[id]
-		label := fmt.Sprintf(" %s %s ", st.avatar, st.cfg.Role)
-		if id == m.focus {
-			segs = append(segs, txt(theme.BgDeep, st.color).Bold(true).Render(label))
-		} else {
-			segs = append(segs, txt(st.color, bg).Render(label))
-		}
+		segs = append(segs, tab(st.avatar+" "+st.cfg.Role, id == m.focus && m.viewer == nil, st.color))
+	}
+	if m.viewer != nil {
+		segs = append(segs, tab("▤ "+filepath.Base(m.viewer.path), true, theme.Accent))
 	}
 	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).Render(truncate(strings.Join(segs, ""), w))
 }
@@ -435,7 +514,7 @@ func (m Model) workView(w, h int) string {
 		// slicing every one of them down to a single unreadable line.
 		per = minAgentRow
 		if fits := max(h/per-1, 1); fits < len(shown) {
-			note = fmt.Sprintf("… %d more agent(s) — tab for /usage", len(shown)-fits)
+			note = fmt.Sprintf("… %d more agent(s) — ^g opens one", len(shown)-fits)
 			shown = shown[:fits]
 		}
 	}
@@ -455,25 +534,44 @@ func (m Model) workView(w, h int) string {
 func (m Model) agentBlock(st *agentState, w, per int) string {
 	bg := theme.BgDeep
 	lines := []string{agentHeader(st, w, bg)}
+	// The checklist stays pinned under the header while steps remain — it's the one thing that says
+	// how far along the agent is, so it shouldn't scroll away.
+	lines = append(lines, todoLines(st.todos, w, bg)...)
 
-	body := st.log
+	body := make([]string, 0, len(st.log)+8)
+	for _, l := range st.log {
+		if visible(l, m.expanded) {
+			body = append(body, l)
+		}
+	}
 	if st.pending != "" {
-		body = append(append([]string{}, body...), st.pending) // the line still being streamed
+		body = append(body, st.pending) // the line still being streamed
 	}
 	if st.running != "" {
-		body = append(append([]string{}, body...), spinner(m.prefs["reduceMotion"])+" "+st.running+"…")
+		elapsed := ""
+		if !st.runStart.IsZero() {
+			elapsed = " · " + fmtDur(time.Since(st.runStart))
+		}
+		body = append(body, spinner(m.prefs["reduceMotion"])+" "+st.running+"…"+elapsed)
+		// A running command's latest output, live — what makes a long test run watchable.
+		for _, o := range st.runOut {
+			if strings.TrimSpace(o) != "" {
+				body = append(body, string(mkOut)+"    "+o)
+			}
+		}
 	}
 	if len(body) == 0 {
 		body = []string{"—"}
 	}
 	gutter := txt(st.color, bg).Render("│ ")
-	rows := max(per-2, 1) // -2: the header, plus a blank row separating this block from the next
-	for i := max(len(body)-rows, 0); i < len(body); i++ {
-		style := lineStyle(body[i], bg)
-		if st.pending != "" && i == len(body)-1 {
-			style = txt(theme.Muted, bg) // dimmed: this line hasn't finished arriving
+	rows := max(per-2-len(st.todos), 1) // -2: the header, plus a blank row separating this block from the next
+	end := max(len(body)-m.scrollBack, min(rows, len(body))) // scrolled back: stop short of the newest
+	for i := max(end-rows, 0); i < end; i++ {
+		line := renderLine(body[i], max(w-2, 0), bg)
+		if st.pending != "" && body[i] == st.pending && i == len(body)-1 && st.running == "" {
+			line = txt(theme.Muted, bg).Render(truncate(plainLine(body[i]), max(w-2, 0))) // dimmed: still arriving
 		}
-		lines = append(lines, gutter+style.Render(truncate(body[i], max(w-2, 0))))
+		lines = append(lines, gutter+line)
 	}
 	return exactly(lines, min(len(lines)+1, per)) // +1 for the separating blank row
 }
@@ -512,27 +610,6 @@ func (m Model) usageView(w, h int) string {
 
 // --- bottom strips ---
 
-func (m Model) tasksStrip(w int) string {
-	bg := theme.BgDeep
-	glyphs := map[string]string{"done": "●", "in_progress": "◐", "failed": "✖"}
-	var parts []string
-	used := 1
-	for i, t := range m.tasks {
-		g := glyphs[t.Status]
-		if g == "" {
-			g = "○"
-		}
-		chip := g + " " + t.ID
-		if used+lipgloss.Width(chip)+2 > w-6 { // leave room for the "+N" overflow marker
-			parts = append(parts, txt(theme.Muted, bg).Render(fmt.Sprintf("+%d", len(m.tasks)-i)))
-			break
-		}
-		used += lipgloss.Width(chip) + 2
-		parts = append(parts, txt(theme.StatusColor(t.Status), bg).Render(chip))
-	}
-	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).Render(" " + strings.Join(parts, "  "))
-}
-
 // The agent-to-agent traffic — niti's whole point, so it keeps a permanent strip rather than
 // living only behind /graph.
 func (m Model) commFeed(w, lineCount int) string {
@@ -552,44 +629,88 @@ func (m Model) menuView(w, rows int) string {
 		Render(m.menu.Render(max(w-1, 1), rows, bg))
 }
 
-func (m Model) inputBar(w int) string {
-	bg := theme.BgPane
-	c := theme.Accent
-	if m.mode == "plan" {
-		c = theme.Alt
+// promptPanel is the prompt, framed: the border names the mode (Build in the accent, Plan in the
+// secondary color) and carries the latest status message in its bottom edge, so a one-line command
+// answer or a warning never competes with the key hints for the footer. With an approval pending
+// it becomes the approval banner instead.
+func (m Model) promptPanel(w, rows int, compact bool) string {
+	if len(m.approvals) > 0 {
+		return m.approvalBanner(w, rows, compact)
 	}
-	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).
-		Render(txt(c, bg).Bold(true).Render(" ▸ ") + m.input.View())
-}
-
-func (m Model) approvalBar(w int) string {
-	bg := theme.BgPane
-	r := m.approvals[0]
-	keys := "  [y]es  [a]lways  [n]o"
-	head := fmt.Sprintf(" ⚠ %s wants to run %s %v", r.AgentID, r.Tool, r.Input)
-	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).Render(
-		txt(theme.Amber, bg).Bold(true).Render(truncate(head, max(w-len(keys), 0))) +
-			txt(theme.Muted, bg).Render(keys))
-}
-
-func (m Model) footer(w int) string {
+	mode, mc := "Build", theme.Accent
+	if m.mode == "plan" {
+		mode, mc = "Plan", theme.Alt
+	}
 	bg := theme.BgDeep
-	next := "plan"
-	if m.mode == "plan" {
-		next = "build"
+	line := txt(mc, bg).Bold(true).Render("▸ ") + m.input.View()
+	if compact {
+		return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(theme.BgPane).Render(" " + line)
 	}
-	hints := fmt.Sprintf("tab: %s · ctrl+p: models · ctrl+g: agent · shift+tab: %s · ctrl+t: %s · /help for commands",
-		m.view, next, theme.Current())
-	// The status is what a one-line command result (e.g. /agents with a single teammate, /cost,
-	// /export) lands in — see show() in output.go. It goes FIRST: the whole line gets truncated to
-	// the terminal width below, and on a narrow terminal the static hints used to eat the budget,
-	// silently truncating the answer the user just asked for off the end of the line.
-	line := " " + hints
-	if s := strings.TrimSpace(m.status); s != "" {
-		line = " " + s + " · " + hints
+	p := ui.Panel{Title: mode, Subtitle: strings.TrimSpace(m.status), Focused: m.context() == regionPrompt || m.context() == "menu", TitleLeft: true, Color: mc}
+	return p.Render(line, w, rows)
+}
+
+// approvalBanner is posting's "editing row" banner, for a decision: tinted in the warning color,
+// saying who wants to run what in words — the footer carries the y/a/n keys.
+func (m Model) approvalBanner(w, rows int, compact bool) string {
+	r := m.approvals[0]
+	bg := theme.BgDeep
+	text := txt(theme.Fg, bg).Bold(true).Render(r.AgentID) + txt(theme.Fg, bg).Render(" wants to run ") +
+		txt(theme.Amber, bg).Bold(true).Render(approvalCall(r.Tool, r.Input))
+	if compact {
+		return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(theme.Tint(theme.Amber)).Render(" ⚠ " + truncate(r.AgentID+" wants to run "+approvalCall(r.Tool, r.Input), w-3))
 	}
-	return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(bg).
-		Render(txt(theme.Muted, bg).Render(truncate(line, w)))
+	sub := ""
+	if n := len(m.approvals); n > 1 {
+		sub = fmt.Sprintf("%d more waiting", n-1)
+	}
+	return ui.Panel{Title: "Approval needed", Subtitle: sub, Focused: true, TitleLeft: true, Color: theme.Amber}.Render(text, w, rows)
+}
+
+// approvalCall renders a tool call the way a person would say it — `shell: git commit -m "x"`,
+// `write_file: src/a.ts` — instead of Go's `map[command:git args:[commit -m x]]`.
+func approvalCall(tool string, input map[string]any) string {
+	str := func(k string) string {
+		if v, ok := input[k].(string); ok {
+			return v
+		}
+		return ""
+	}
+	switch {
+	case str("command") != "":
+		parts := []string{str("command")}
+		if args, ok := input["args"].([]any); ok {
+			for _, a := range args {
+				s := fmt.Sprint(a)
+				if strings.ContainsAny(s, " \t\"'") {
+					s = fmt.Sprintf("%q", s)
+				}
+				parts = append(parts, s)
+			}
+		}
+		return tool + ": " + strings.Join(parts, " ")
+	case str("path") != "":
+		return tool + ": " + str("path")
+	}
+	keys := make([]string, 0, len(input))
+	for k := range input {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, input[k]))
+	}
+	return strings.TrimSpace(tool + " " + strings.Join(parts, " "))
+}
+
+// footer lists the keys that work right now (keys.go). In compact mode there is no prompt border
+// to carry the status, so a fresh status message takes the footer's place.
+func (m Model) footer(w int, compact bool) string {
+	if s := strings.TrimSpace(m.status); compact && s != "" {
+		return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(theme.BgDeep).Render(txt(theme.Muted, theme.BgDeep).Render(truncate(" "+s, w)))
+	}
+	return m.footerLine(w)
 }
 
 // Line kind by leading glyph (set in humanize): actions and outcomes recede so the agent's own

@@ -89,7 +89,7 @@ export function shell(
   root: string,
   command: string,
   args: string[],
-  limits: { timeoutMs?: number; maxOutput?: number } = {}, // overridden only by the tests, which can't wait 120s
+  limits: { timeoutMs?: number; maxOutput?: number; onOutput?: (chunk: string) => void } = {}, // timeouts: tests; onOutput: live view
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const timeoutMs = limits.timeoutMs ?? SHELL_TIMEOUT_MS;
   const maxOutput = limits.maxOutput ?? SHELL_MAX_OUTPUT;
@@ -116,8 +116,14 @@ export function shell(
     });
     const stdout = new HeadTail(maxOutput);
     const stderr = new HeadTail(maxOutput);
-    child.stdout.on("data", (d) => stdout.add(String(d)));
-    child.stderr.on("data", (d) => stderr.add(String(d)));
+    child.stdout.on("data", (d) => {
+      stdout.add(String(d));
+      limits.onOutput?.(String(d));
+    });
+    child.stderr.on("data", (d) => {
+      stderr.add(String(d));
+      limits.onOutput?.(String(d));
+    });
     child.on("close", (code, signal) => {
       // node kills a timed-out child with killSignal; nothing else in this process sends SIGKILL.
       const timedOut = signal === "SIGKILL";
@@ -207,7 +213,7 @@ async function listFiles(root: string, dir: string): Promise<string[]> {
       if (e.isDirectory()) {
         if (!IGNORED_DIRS.has(e.name)) stack.push(abs);
       } else if (e.isFile()) {
-        out.push(relative(root, abs));
+        out.push(relative(root, abs).split(sep).join("/")); // "/" on every OS — it's what the model and the globs speak
         if (out.length >= MAX_WALK_FILES) break;
       }
     }
@@ -310,6 +316,7 @@ export async function runTool(
   call: ToolCall,
   allowed: string[],
   root: string = process.cwd(),
+  hooks: { onOutput?: (chunk: string) => void } = {}, // shell output as it arrives, for the live view
 ): Promise<string> {
   if (!allowed.includes(call.tool)) {
     throw new Error(`tool '${call.tool}' not allowed for this agent`);
@@ -353,7 +360,7 @@ export async function runTool(
       if (!call.command.trim()) {
         return "error: shell was called with an empty command. Give the program to run in `command` (for example command: \"npm\", args: [\"run\", \"typecheck\"]).";
       }
-      const r = await shell(root, call.command, call.args);
+      const r = await shell(root, call.command, call.args, { onOutput: hooks.onOutput });
       return `exit ${r.code}\n${r.stdout}${r.stderr}`;
     }
   }
@@ -555,6 +562,120 @@ export function snippetDiff(path: string, before: string | null, after: string, 
   ].join("\n");
 }
 
+// --- the live view: what a finished tool call and a file change look like on screen ---
+
+export interface DiffLine {
+  k: "+" | "-" | " ";
+  t: string;
+  o?: number; // line number in the old file (context and removed lines)
+  n?: number; // line number in the new file (context and added lines)
+}
+export interface Hunk {
+  lines: DiffLine[];
+}
+
+// A line diff as hunks with real line numbers on both sides, for the TUI's diff blocks. Common
+// prefix/suffix are trimmed first (most edits touch a small middle), then the middle gets an LCS so
+// scattered changes come out as separate hunks instead of one block of "everything changed".
+// ponytail: O(n·m) LCS, bounded to 1,200×1,200 middles; larger rewrites fall back to one hunk.
+export function diffHunks(before: string | null, after: string, ctx = 2, maxLines = 120): { hunks: Hunk[]; added: number; removed: number; more: number } {
+  // A final "\n" ends the last line; it doesn't start an empty one (a 2-line file is +2, not +3).
+  const lines = (text: string | null) => (!text ? [] : text.replace(/\n$/, "").split("\n"));
+  const a = lines(before);
+  const b = lines(after);
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let s = 0;
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  const am = a.slice(p, a.length - s);
+  const bm = b.slice(p, b.length - s);
+  const ops: DiffLine[] = [];
+  if (am.length <= 1200 && bm.length <= 1200) {
+    const L = Array.from({ length: am.length + 1 }, () => new Uint16Array(bm.length + 1));
+    for (let i = am.length - 1; i >= 0; i--)
+      for (let j = bm.length - 1; j >= 0; j--) L[i]![j] = am[i] === bm[j] ? L[i + 1]![j + 1]! + 1 : Math.max(L[i + 1]![j]!, L[i]![j + 1]!);
+    let i = 0;
+    let j = 0;
+    while (i < am.length || j < bm.length) {
+      if (i < am.length && j < bm.length && am[i] === bm[j]) ops.push({ k: " ", t: am[i]!, o: p + ++i, n: p + ++j });
+      else if (j < bm.length && (i === am.length || L[i]![j + 1]! >= L[i + 1]![j]!)) ops.push({ k: "+", t: bm[j]!, n: p + ++j });
+      else ops.push({ k: "-", t: am[i]!, o: p + ++i });
+    }
+  } else {
+    am.forEach((t, i) => ops.push({ k: "-", t, o: p + i + 1 }));
+    bm.forEach((t, j) => ops.push({ k: "+", t, n: p + j + 1 }));
+  }
+  const added = ops.filter((l) => l.k === "+").length;
+  const removed = ops.filter((l) => l.k === "-").length;
+  // Surrounding context from the untouched prefix/suffix, then split wherever more than 2·ctx
+  // unchanged lines separate two changes.
+  const all: DiffLine[] = [
+    ...a.slice(Math.max(0, p - ctx), p).map((t, i) => ({ k: " " as const, t, o: p - Math.min(ctx, p) + i + 1, n: p - Math.min(ctx, p) + i + 1 })),
+    ...ops,
+    ...b.slice(b.length - s, b.length - s + ctx).map((t, i) => ({ k: " " as const, t, o: a.length - s + i + 1, n: b.length - s + i + 1 })),
+  ];
+  const hunks: Hunk[] = [];
+  let cur: DiffLine[] = [];
+  let run: DiffLine[] = [];
+  for (const l of all) {
+    if (l.k === " ") {
+      run.push(l);
+      continue;
+    }
+    if (cur.length && run.length > 2 * ctx) {
+      hunks.push({ lines: [...cur, ...run.slice(0, ctx)] });
+      cur = run.slice(-ctx);
+    } else {
+      cur.push(...(cur.length ? run : run.slice(-ctx)));
+    }
+    run = [];
+    cur.push(l);
+  }
+  if (cur.length) hunks.push({ lines: [...cur, ...run.slice(0, ctx)] });
+  // Bounded for the event stream; the rest is a count the view can print as "… N more lines".
+  let budget = maxLines;
+  let more = 0;
+  const kept: Hunk[] = [];
+  for (const h of hunks) {
+    if (budget <= 0) {
+      more += h.lines.length;
+      continue;
+    }
+    kept.push({ lines: h.lines.slice(0, budget) });
+    more += Math.max(0, h.lines.length - budget);
+    budget -= h.lines.length;
+  }
+  return { hunks: kept, added, removed, more };
+}
+
+// The one-line result a finished tool call leaves in the transcript, plus a few lines of its
+// output for the collapsed view: "48 passed, 0 failed", "exit 1", "12 matches", "340 lines".
+export function summarizeResult(tool: string, output: string): { outcome: string; lines: number; head: string[]; tail: string[]; body: string[]; exitCode?: number } {
+  let body = output;
+  let exitCode: number | undefined;
+  if (tool === "shell") {
+    const m = /^exit (-?\d+)\n?/.exec(output);
+    if (m) {
+      exitCode = Number(m[1]);
+      body = output.slice(m[0].length);
+    }
+  }
+  const all = body.replace(/\s+$/, "").split("\n");
+  const lines = body.trim() ? all.length : 0;
+  const head = all.slice(0, 4);
+  const tail = lines > 8 ? all.slice(-4) : [];
+  let outcome: string;
+  if (tool === "shell") {
+    const last = [...all].reverse().find((l) => l.trim()) ?? "";
+    outcome = exitCode === 0 ? (last.trim() ? last.trim().slice(0, 100) : "done") : `exit ${exitCode}${last.trim() ? ` · ${last.trim().slice(0, 80)}` : ""}`;
+  } else if (tool === "grep") outcome = `${lines} match${lines === 1 ? "" : "es"}`;
+  else if (tool === "glob" || tool === "list_dir") outcome = `${lines} entr${lines === 1 ? "y" : "ies"}`;
+  else outcome = `${lines} line${lines === 1 ? "" : "s"}`;
+  // What "expand" shows: all of it up to 60 lines, else the first and last 30 around a gap marker.
+  const shown = !lines ? [] : lines <= 60 ? all : [...all.slice(0, 30), `… ${lines - 60} lines …`, ...all.slice(-30)];
+  return { outcome, lines, head: lines ? head : [], tail, body: shown, exitCode };
+}
+
 // Tool definitions exposed to the model, keyed by allowedTools name. (No additionalProperties —
 // Gemini's schema subset rejects it, and the others don't need it.)
 const SPECS: Record<string, ToolSpec> = {
@@ -700,7 +821,10 @@ export function splitCommand(line: string): string[] {
       else cur += c;
     } else if (quote === '"') {
       if (c === '"') quote = null;
-      else if (posix && c === "\\" && i + 1 < line.length && '"\\$`'.includes(line[i + 1]!)) cur += line[++i]!;
+      // \" is a literal quote on both platforms (Windows' CommandLineToArgvW agrees); the other
+      // POSIX escapes (\\ \$ \`) stay POSIX-only, where a backslash is not a path separator.
+      else if (c === "\\" && line[i + 1] === '"') cur += line[++i]!;
+      else if (posix && c === "\\" && i + 1 < line.length && "\\$`".includes(line[i + 1]!)) cur += line[++i]!;
       else cur += c;
     } else if (c === "'" || c === '"') {
       quote = c;

@@ -103,3 +103,31 @@ test("replan falls back to accept after repeated invalid output", async () => {
   const plan = await replan(lead, { goal: "goal", roles, board: "", failed, error: "boom" });
   expect(plan).toEqual({ action: "accept" });
 });
+
+test("a greeting routes to a reply and a question to an answer — neither becomes tasks", async () => {
+  const hi = await makePlan(fakeLead(['{"reply":"Hi! What should we build?"}']), "hi", roles);
+  expect(hi.reply).toBe("Hi! What should we build?");
+  expect(hi.tasks).toEqual([]);
+  const q = await makePlan(fakeLead(['{"question":"Where is auth handled?"}']), "where's auth?", roles);
+  expect(q.question).toBe("Where is auth handled?");
+  expect(q.tasks).toEqual([]);
+});
+
+test("the planner sees recent exchanges, so a follow-up can refer back", async () => {
+  let seen = "";
+  const lead: PlannerAgent = { config: { id: "orchestrator" }, ask: async (p) => ((seen = p), '[{"description":"add tests","role":"backend"}]') };
+  await makePlan(lead, "now add tests for it", roles, [{ goal: "build a cart", outcome: "Built src/cart.ts with total()" }]);
+  expect(seen).toContain("build a cart");
+  expect(seen).toContain("Built src/cart.ts");
+  expect(seen).toContain("now add tests for it");
+  expect(seen).toContain("never invent work"); // the old prompt forced 2-6 tasks out of anything
+});
+
+test("a follow-up is planned against the unfinished board, so it adjusts the plan instead of replacing it blind", async () => {
+  let seen = "";
+  const lead: PlannerAgent = { config: { id: "orchestrator" }, ask: async (p) => ((seen = p), '[{"description":"b","role":"backend"}]') };
+  await makePlan(lead, "skip the first one", roles, [], ["t1 (frontend, failed): build the header", "t2 (backend, pending): add the API"]);
+  expect(seen).toContain("Unfinished tasks from the current plan");
+  expect(seen).toContain("t2 (backend, pending): add the API");
+  expect(seen).toContain("keep the tasks the user still wants");
+});

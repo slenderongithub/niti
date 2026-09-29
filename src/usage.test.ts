@@ -9,8 +9,8 @@ test("UsageTracker accumulates per-agent and totals", () => {
   u.record("b", 200, 40);
 
   const snap = Object.fromEntries(u.snapshot().map((s) => [s.agentId, s.usage]));
-  expect(snap.a).toEqual({ inputTokens: 150, outputTokens: 30, calls: 2, lastInput: 50, cacheReadTokens: 0, cacheWriteTokens: 0 });
-  expect(snap.b).toEqual({ inputTokens: 200, outputTokens: 40, calls: 1, lastInput: 200, cacheReadTokens: 0, cacheWriteTokens: 0 });
+  expect(snap.a).toEqual({ inputTokens: 150, outputTokens: 30, calls: 2, lastInput: 50, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
+  expect(snap.b).toEqual({ inputTokens: 200, outputTokens: 40, calls: 1, lastInput: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
   expect(u.totals()).toEqual({ inputTokens: 350, outputTokens: 70, calls: 3, cacheReadTokens: 0, cacheWriteTokens: 0 });
 });
 

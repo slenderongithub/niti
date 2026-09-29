@@ -7,7 +7,7 @@
 //
 // Layers are consulted in order (agent config → project config → --auto → built-in defaults); the
 // first layer with a matching pattern decides. Unmatched everywhere → "ask".
-import { normalize } from "node:path";
+import { posix } from "node:path";
 
 export type Decision = "allow" | "ask" | "deny";
 export type ToolRules = Record<string, Decision>; // pattern → decision
@@ -62,8 +62,9 @@ export const SAFE_SHELL_RULES: PermissionRules = {
     "echo *": "allow",
     "grep *": "allow",
     "rg *": "allow",
-    // `find` earns its place (agents reach for it constantly) but `find -delete`/`-exec` is caught
-    // by isDangerousShellCall, which force-asks regardless of anything decided here.
+    // `find` and `rg` earn their place (agents reach for them constantly). Their program-running
+    // and file-writing flags (`find -exec/-delete/-fprint`, `rg --pre`) and git's `--output=` /
+    // `branch -D` are caught by isDangerousShellCall, which force-asks regardless of this list.
     "find *": "allow",
   },
 };
@@ -80,7 +81,15 @@ export function subject(tool: string, input: Record<string, unknown>): string {
   // resolved later by safePath. Unnormalized, `./secret.txt` slipped past a `secret*` deny and
   // `src/../.niti/agents.yaml` satisfied an `src/**` allow — both writing the same file the rule
   // was protecting.
-  return typeof input.path === "string" ? normalize(input.path) : "";
+  return typeof input.path === "string" ? normalizePath(input.path) : "";
+}
+
+// Rules and grants are written with "/" (`src/**`), and Bun.Glob matches on "/". node:path's
+// normalize() uses the *platform* separator, so on Windows it turned `src/a.ts` into `src\a.ts` —
+// a `src/secrets/**` deny never matched there, and a "this folder" grant fell back to the root.
+// Normalize to forward slashes everywhere instead.
+export function normalizePath(p: string): string {
+  return posix.normalize(p.replace(/\\/g, "/"));
 }
 
 // Path subjects use real glob semantics (`src/*` ≠ `src/**`, as in approval.ts). Command lines are

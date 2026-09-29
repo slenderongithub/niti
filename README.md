@@ -36,6 +36,22 @@ model, name, and a one-line job description. **29 providers / 152 models** from 
 OpenAI-compatible endpoint. Keys live in `~/.config/niti/auth.json` (0600) and your OS keychain —
 never a server.
 
+The footer always shows the keys that work where you are, and `f1` explains them (and every
+transcript glyph). The ones worth knowing on day one:
+
+| Key | Does |
+|---|---|
+| `^p` | Command palette — every command, theme, view and agent, fuzzy-searchable |
+| `tab` | Move focus: prompt → transcript (scroll it with ↑↓ / pgup, `G` to follow) → agents |
+| `⇧tab` | Switch BUILD ↔ PLAN |
+| `^l` | Switch an agent's model |
+| `^t` | Theme picker with live preview (themes: graphite, ember, tide, dusk, moss, paper — or your own in `~/.config/niti/themes/*.json`) |
+| `f1` | Help for whatever has focus |
+| `ctrl+o` | Unfold full command output and whole diffs |
+| `esc` | While agents work: interrupt them. Anything you type mid-run steers the working agent |
+| `↑` / `^r` | Recall or search earlier prompts |
+| `@path` | Mention a project file in the prompt · `!cmd` runs a command right here |
+
 Type `/` for the full command list:
 
 <img src="readme_images/commands.png" alt="the / command palette, listing every slash command" width="100%">
@@ -65,7 +81,7 @@ Both pages retheme live with whatever theme (`ctrl+t` / `/theme`) the TUI has ac
 
 ## Everything, at a glance
 
-`/settings` (or `tab`) opens Status, Config, Usage, and Stats panes without leaving the session:
+`/settings` opens Status, Config, Usage, and Stats panes without leaving the session:
 
 <table>
 <tr>
@@ -152,7 +168,7 @@ mcpServers:
     command: code-review-graph
     args: [--stdio]
 
-theme: niti          # ctrl+t / /theme opens a live carousel, synced to any open dashboard/graph tab
+theme: graphite      # ctrl+t / /theme / ^p opens a live preview, synced to any open dashboard/graph tab
 auto: false          # approve anything not explicitly denied
 maxAgents: 6
 ```

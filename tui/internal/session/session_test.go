@@ -169,13 +169,13 @@ func TestPlanModeTogglesAndIsSubmitted(t *testing.T) {
 // name must not blank the UI.
 func TestThemeCommandIsLocal(t *testing.T) {
 	m := model(1)
-	if cmd := m.submit("/theme desert static"); cmd != nil || theme.Current() != "desert static" {
+	if cmd := m.submit("/theme ember"); cmd != nil || theme.Current() != "ember" {
 		t.Errorf("/theme should switch locally, current=%q cmd=%v", theme.Current(), cmd)
 	}
-	if cmd := m.submit("/theme nonsense"); cmd != nil || theme.Current() != "desert static" {
+	if cmd := m.submit("/theme nonsense"); cmd != nil || theme.Current() != "ember" {
 		t.Errorf("an unknown theme must be refused and leave the current one, got %q", theme.Current())
 	}
-	theme.Use("neon graveyard")
+	theme.Use("graphite")
 }
 
 // Slash commands are dispatched against the server's registry, not a hardcoded switch.
@@ -281,10 +281,10 @@ func TestCarouselSwitchesTheModel(t *testing.T) {
 
 	m := model(1)
 	m.client = api.New(srv.URL, "tok")
-	opened, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	opened, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlL})
 	m = opened.(Model)
 	if !m.car.open || m.car.stage != "model" || cmd == nil {
-		t.Fatalf("ctrl+p with one agent should open straight on models, open=%v stage=%q", m.car.open, m.car.stage)
+		t.Fatalf("ctrl+l with one agent should open straight on models, open=%v stage=%q", m.car.open, m.car.stage)
 	}
 	m.setCarouselModels(modelsLoadedMsg{options: []modelOption{
 		{provider: "anthropic", model: "claude-opus-4-8"},
@@ -315,7 +315,7 @@ func TestCarouselSwitchesTheModel(t *testing.T) {
 // With more than one agent the carousel asks who first, and esc closes it without switching.
 func TestCarouselPicksAnAgentFirstAndEscCloses(t *testing.T) {
 	m := model(3)
-	opened, _ := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	opened, _ := m.onKey(tea.KeyMsg{Type: tea.KeyCtrlL})
 	m = opened.(Model)
 	if m.car.stage != "agent" || m.car.list.Len() != 3 {
 		t.Fatalf("expected an agent list of 3, stage=%q len=%d", m.car.stage, m.car.list.Len())
@@ -350,7 +350,7 @@ func TestMenuAndCarouselStayInsideTheTerminal(t *testing.T) {
 		base = sized.(Model)
 
 		withMenu := typing(base, "/")
-		opened, _ := base.onKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+		opened, _ := base.onKey(tea.KeyMsg{Type: tea.KeyCtrlL})
 		withCarousel := opened.(Model)
 		withCarousel.setCarouselModels(modelsLoadedMsg{options: []modelOption{{provider: "anthropic", model: "claude-opus-4-8"}}})
 
@@ -394,10 +394,10 @@ func TestTranscriptCommandOpensTheFullLogInThePager(t *testing.T) {
 	}
 }
 
-// A stray follow-up typed while a half-finished plan is still on the board used to silently
-// replace it: the core plans every plain message from scratch, so the original detailed goal was
-// gone and a terse sentence became the whole spec. The first enter now explains and holds.
-func TestNewGoalIsHeldWhileTheBoardHasUnfinishedWork(t *testing.T) {
+// With unfinished tasks on the board, a message still goes straight through: "hi" or a question
+// never touches the board, and a work message is planned against it by the core (see planner.ts
+// boardBlock). The old double-enter guard held every one of them — including "hi".
+func TestMessagesSendAtOnceEvenWithUnfinishedWork(t *testing.T) {
 	var submitted int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		submitted++
@@ -407,75 +407,35 @@ func TestNewGoalIsHeldWhileTheBoardHasUnfinishedWork(t *testing.T) {
 
 	m := model(1)
 	m.client = api.New(srv.URL, "tok")
-	m.tasks = []api.Task{{ID: "t1", Status: "failed"}, {ID: "t2", Status: "done"}}
-	m.input.SetValue("alright skip the first prompt")
-
-	held, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
-	m = held.(Model)
-	if cmd != nil {
-		t.Fatal("the first enter must not submit while unfinished tasks are on the board")
-	}
-	if !strings.Contains(m.status, "unfinished") || !strings.Contains(m.status, "/resume") {
-		t.Errorf("the warning should name the unfinished work and point at /resume, got %q", m.status)
-	}
-	if m.input.Value() == "" {
-		t.Error("the typed goal must survive the warning — retyping it is the whole thing we're avoiding")
-	}
-
-	// Second press inside the window commits, exactly like the ctrl+c quit confirmation.
-	confirmed, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
-	m = confirmed.(Model)
+	m.tasks = []api.Task{{ID: "t1", Status: "failed"}, {ID: "t2", Status: "pending"}}
+	m.input.SetValue("hi")
+	_, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("a second enter should start the new goal")
+		t.Fatal("hi must be sent, not held behind a warning")
 	}
 	cmd()
 	if submitted != 1 {
-		t.Errorf("expected exactly one submit after confirming, got %d", submitted)
+		t.Errorf("expected one submit, got %d", submitted)
 	}
 }
 
-// The guard is about *new goals*. A finished board, a running session, and slash commands all
-// have to stay on the fast path — /resume above all, since that's what the warning recommends.
-func TestUnfinishedGuardLeavesCommandsAndCleanBoardsAlone(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"ok":true,"message":"resuming"}`))
-	}))
-	defer srv.Close()
-
-	m := model(1)
-	m.client = api.New(srv.URL, "tok")
-	m.tasks = []api.Task{{ID: "t1", Status: "failed"}}
-
-	// /resume is a command: never held, even with a failed board.
-	m.input.SetValue("/resume")
-	if _, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
-		t.Error("/resume must not be blocked by the unfinished-board guard")
-	}
-
-	// An all-done board is finished work — a fresh goal on top of it is exactly what was meant.
-	done := model(1)
-	done.client = api.New(srv.URL, "tok")
-	done.tasks = []api.Task{{ID: "t1", Status: "done"}}
-	done.input.SetValue("now add tests")
-	if _, cmd := done.onKey(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
-		t.Error("a completed board should submit a new goal straight away")
-	}
-}
-
-// The grey sidebar runs from the mode stripe down; the agent tab bar lives in the dark column
-// beside it, so on the tab row the sidebar's cells come first and the tabs start after them.
+// The Agents panel runs down the left; the agent tabs live inside the Transcript panel beside it,
+// so on the tab row the sidebar's frame comes first and the tabs start after it.
 func TestTabBarSitsBesideTheSidebarNotAcrossIt(t *testing.T) {
 	m := model(2)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = updated.(Model)
 	lines := strings.Split(ansi.Strip(m.View()), "\n")
-	tabRow := lines[headerRows]
-	col := strings.Index(tabRow, "overview")
+	if !strings.Contains(lines[headerRows], "Agents") || !strings.Contains(lines[headerRows], "Transcript") {
+		t.Fatalf("expected both panel titles on the first body row, got %q", lines[headerRows])
+	}
+	tabRow := lines[headerRows+1]
+	col := strings.Index(tabRow, "All agents")
 	if col < sidebarMin {
 		t.Fatalf("tabs start at column %d, inside the sidebar (min width %d): %q", col, sidebarMin, tabRow)
 	}
-	if !strings.Contains(tabRow[:col], "CONTEXT") {
-		t.Fatalf("the sidebar should begin on the tab row, got %q", tabRow)
+	if !strings.HasPrefix(tabRow, "│") {
+		t.Fatalf("the Agents panel should frame the left of the tab row, got %q", tabRow)
 	}
 	if got := len(lines); got > 30 {
 		t.Fatalf("layout is %d rows tall in a 30-row terminal", got)

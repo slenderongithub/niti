@@ -1,6 +1,11 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join, dirname, extname, basename } from "node:path";
+import { join, extname, basename, posix } from "node:path";
+
+// Graph ids are repo-relative and always "/"-separated (the walk builds them that way, and git
+// reports them that way). Resolving imports with node:path's platform join produced "src\\a.ts"
+// on Windows, which matched no id — every edge vanished there. Filesystem access still uses join.
+const dirname = posix.dirname;
 
 // The project's file-dependency graph: nodes are source files, edges are intra-project imports.
 // Built by scanning import statements — no build system, no AST, just the specifiers, resolved back
@@ -48,6 +53,34 @@ export function trackedFiles(root: string, includeUntracked = false): string[] |
   } catch {
     return undefined;
   }
+}
+
+// Every file in the project a person would browse — the TUI's Files panel and @-mentions. git's
+// list when there is one (tracked + untracked, .gitignore honoured), else a walk; either way held
+// to IGNORE (rule 3 in CLAUDE.md: ide/, desktop/, node_modules… never appear) and bounded.
+export function projectFiles(root: string, max = 5000): { files: string[]; truncated: boolean } {
+  let files = trackedFiles(root, true);
+  if (!files) {
+    files = [];
+    const walkAll = (rel: string) => {
+      if (files!.length > max) return;
+      let entries;
+      try {
+        entries = readdirSync(join(root, rel), { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (e.name === ".git" || IGNORE.has(e.name)) continue;
+        const child = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) walkAll(child);
+        else files!.push(child);
+      }
+    };
+    walkAll("");
+  }
+  const kept = files.filter((f) => !ignored(f)).sort();
+  return { files: kept.slice(0, max), truncated: kept.length > max };
 }
 
 // What the graph reads: source files, plus go.mod (needed to resolve Go imports, never a node).
@@ -143,7 +176,7 @@ const JS_EXT = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 // and index-file fallbacks. Bare specifiers (npm packages) are external → dropped.
 function resolveJs(from: string, spec: string, set: Set<string>): string | undefined {
   if (!spec.startsWith(".")) return undefined;
-  const base = normalizeRel(join(dirname(from), spec));
+  const base = normalizeRel(posix.join(dirname(from), spec));
   const candidates = [
     ...JS_EXT.map((e) => base + e),
     ...JS_EXT.filter(Boolean).map((e) => `${base}/index${e}`),

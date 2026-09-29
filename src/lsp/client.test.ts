@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { test, expect } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +7,7 @@ import { LspClient, hoverText, languageId } from "./client.ts";
 import { LspRegistry } from "./registry.ts";
 import { runLspTool, lspToolSpecs, formatDiagnostics } from "../tools/lsp-tools.ts";
 
-const FAKE = new URL("./fake-server.ts", import.meta.url).pathname;
+const FAKE = fileURLToPath(new URL("./fake-server.ts", import.meta.url)); // .pathname is "/D:/…" on Windows
 const fakeServer = { name: "fake", command: process.execPath, args: [FAKE], extensions: [".ts"] };
 
 function project(): string {

@@ -232,3 +232,10 @@ test("saving config preserves comments and unrecognised keys", () => {
   expect(themed).toContain("# my team, do not delete"); // survives the carousel too
   expect(loadOptions(themed.includes("theme") ? path : path).theme).toBe("neon graveyard");
 });
+
+test("an auto-discovered AGENTS.md is capped, a deliberately listed one is not", () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-inst-"));
+  writeFileSync(join(dir, "AGENTS.md"), "x".repeat(100_000));
+  expect(loadInstructions([], dir, true).length).toBeLessThan(40_000); // resent on every call, nobody opted in
+  expect(loadInstructions(["AGENTS.md"], dir, true).length).toBeGreaterThan(100_000);
+});

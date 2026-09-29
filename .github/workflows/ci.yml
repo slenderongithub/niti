@@ -7,10 +7,17 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch: # run it on any branch: gh workflow run ci.yml --ref <branch>
 
 jobs:
+  # win32-x64 ships in every release, so it is tested — and a Windows failure fails the build.
   core:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20 # a hung test fails the job in minutes instead of the 6-hour default
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -23,7 +30,12 @@ jobs:
       - run: bun test src web
 
   tui:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20 # a hung test fails the job in minutes instead of the 6-hour default
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -45,6 +57,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20 # a hung test fails the job in minutes instead of the 6-hour default
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

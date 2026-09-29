@@ -6,11 +6,14 @@ const params = new URLSearchParams(location.search);
 const TOKEN = params.get("token") || "";
 // Theme-derived (avatar.js's themeColors(), loaded first) — see graph.js's identical setup for why.
 let KIND_COLORS, STATUS_FILL, INK, MUTED, ACCENT;
+let MUTED_RGB, WORKING_RGB;
 function refreshAppTheme() {
   const t = themeColors();
   KIND_COLORS = { question: t.amber, answer: t.green, handoff: t.blue, artifact: t.blue, review: t.pink, broadcast: t.violet };
   STATUS_FILL = { idle: t.muted, working: t.blue, done: t.green, failed: t.red };
   INK = t.ink; MUTED = t.muted; ACCENT = t.violet;
+  // Canvas strokes come from the theme too — fixed dark greys vanished on the light themes.
+  MUTED_RGB = hexToRgbTriplet(t.muted); WORKING_RGB = hexToRgbTriplet(t.blue);
 }
 refreshAppTheme();
 const PULSE_MS = 2200;
@@ -71,18 +74,18 @@ function connect() {
   // blip replays only what was missed instead of the whole 2000-event buffer.
   const es = new EventSource(`/events?token=${encodeURIComponent(TOKEN)}`);
   let everOpened = false;
-  es.onopen = () => { everOpened = true; conn.textContent = ""; };
+  es.onopen = () => { everOpened = true; conn.textContent = "live"; conn.className = "chip conn live"; };
   es.onerror = () => {
     // A bad/absent token and an unplugged network both land here, and "reconnecting…" forever is
     // a miserable way to learn the URL was missing its ?token=. If we never once connected, the
     // token is the overwhelmingly likely cause — say so instead of retrying silently.
     if (!everOpened) {
       conn.textContent = TOKEN ? "unauthorized — check the ?token= in this URL" : "no token in this URL";
-      conn.className = "conn dead";
+      conn.className = "chip conn dead";
       return;
     }
     conn.textContent = "reconnecting…";
-    conn.className = "conn dead";
+    conn.className = "chip conn dead";
   };
   es.onmessage = (ev) => {
     let e;
@@ -172,7 +175,12 @@ function onOrch(ev) {
   }
 }
 
+// Live-only events: a running command's latest output (several a second) and bare call ends. The
+// TUI animates them; here they would bury the agent's log under repeats of the same four lines.
+const LIVE_ONLY = new Set(["tool_output", "tool_end"]);
+
 function onAgentEvent(ae) {
+  if (LIVE_ONLY.has(ae.type)) return;
   const n = ensureNode(ae.agentId);
   if (!n) return;
   if (ae.type === "delta" || ae.type === "tool_call" || ae.type === "message" || ae.type === "thought") n.status = n.status === "done" ? "done" : "working";
@@ -205,27 +213,33 @@ function feedDelta(n, chunk) {
 // ---------- panels ----------
 function setTaskStatus(id, st) { const t = tasks.find((x) => x.id === id); if (t) { t.status = st; renderTasks(); } }
 
+// An intentionally empty region: hatched, with the message on clear ground — same as the TUI.
+const emptyState = (msg) => `<div class="empty"><span>${esc(msg)}</span></div>`;
+
+// The TUI's task glyphs, so a task reads the same in the terminal and here.
+const TASK_GLYPH = { done: "●", in_progress: "◐", failed: "✖", pending: "○" };
+
 function renderTasks() {
   const el = $("tab-tasks");
-  if (!tasks.length) { el.innerHTML = '<div class="empty">No plan yet.</div>'; return; }
+  if (!tasks.length) { el.innerHTML = emptyState("No plan yet"); return; }
   el.innerHTML = tasks
-    .map(
-      (t) => `<div class="task"><div class="row"><span class="id">${esc(t.id)}</span>
-        <span class="st ${esc(t.status)}">${esc(String(t.status ?? "").replace("_", " "))}</span></div>
-        <div class="who">→ ${esc(t.role)}</div>
+    .map((t) => {
+      const st = String(t.status ?? "pending");
+      const deps = t.dependsOn && t.dependsOn.length ? ` · after ${esc(t.dependsOn.join(", "))}` : "";
+      return `<div class="task ${esc(st)}"><span class="g">${TASK_GLYPH[st] || "○"}</span><div>
         <div class="desc">${esc(t.description)}</div>
-        ${t.dependsOn && t.dependsOn.length ? `<div class="deps">depends on ${esc(t.dependsOn.join(", "))}</div>` : ""}</div>`,
-    )
+        <div class="meta">${esc(t.id)} → ${esc(t.role)} · ${esc(st.replace("_", " "))}${deps}</div></div></div>`;
+    })
     .join("");
 }
 
 function renderMessages() {
   const el = $("tab-messages");
-  if (!messages.length) { el.innerHTML = '<div class="empty">No agent-to-agent messages yet.</div>'; return; }
+  if (!messages.length) { el.innerHTML = emptyState("No agent-to-agent messages yet"); return; }
   el.innerHTML = messages
     .map(
-      (m) => `<div class="msg kind-${esc(m.kind)}"><div class="h">${esc(m.from)} → ${esc(m.to)} · ${esc(m.kind)}</div>
-        <div class="sub">${esc(m.subject)}</div></div>`,
+      (m) => `<div class="msg kind-${esc(m.kind)}"><span class="edge">${esc(m.from)} <b>─${esc(m.kind)}→</b> ${esc(m.to)}</span>
+        <span class="sub">${esc(m.subject)}</span></div>`,
     )
     .join("");
 }
@@ -236,7 +250,7 @@ function renderUsage() {
     .map(([id, u]) => `<div class="urow"><span class="n">${esc(id)}</span><span>${(u.inputTokens + u.outputTokens).toLocaleString()} tok · ${u.calls} calls</span></div>`)
     .join("");
   el.innerHTML =
-    (rows || '<div class="empty">No usage yet.</div>') +
+    (rows || emptyState("No usage yet")) +
     `<div class="utotal urow"><span>total</span><span>${(totals.inputTokens + totals.outputTokens).toLocaleString()} tok · ${totals.calls} calls</span></div>`;
 }
 
@@ -273,7 +287,7 @@ function renderAgentPanel() {
   $("ap-title").textContent = `${n.role} (${n.id}) — ${n.status}`;
   const lines = n.pending ? [...n.log, n.pending] : n.log;
   const log = $("ap-log");
-  log.innerHTML = lines.length ? lines.map((l) => `<div>${esc(l)}</div>`).join("") : '<div class="empty">nothing yet</div>';
+  log.innerHTML = lines.length ? lines.map((l) => `<div>${esc(l)}</div>`).join("") : emptyState("Nothing yet");
   log.scrollTop = log.scrollHeight;
   // Mid-task messaging only makes sense while the agent is actually running — the server enforces
   // this too (409 otherwise), this just avoids a click that's guaranteed to fail.
@@ -318,6 +332,17 @@ $("ap-model-apply").addEventListener("click", async () => {
   }
 });
 
+// A call the way a person would say it (the TUI's approvalCall): `edit on src/a.ts`,
+// `shell: git commit -m "x"` — never a JSON blob in the headline.
+function describeCall(tool, input) {
+  if (input && typeof input.path === "string") return `${tool} on ${input.path}`;
+  if (input && typeof input.command === "string") {
+    const args = Array.isArray(input.args) ? input.args.map((a) => (/[\s"']/.test(String(a)) ? JSON.stringify(String(a)) : String(a))) : [];
+    return `${tool}: ${[input.command, ...args].join(" ")}`;
+  }
+  return tool;
+}
+
 // ---------- tool-approval popup (POST /approval — the same FIFO queue the TUI answers from, so
 // answering here unblocks a concurrently open TUI session and vice versa) ----------
 function renderApproval() {
@@ -325,21 +350,42 @@ function renderApproval() {
   if (!pendingApprovals.length) { el.classList.add("hidden"); return; }
   el.classList.remove("hidden");
   const r = pendingApprovals[0];
-  const path = r.input && typeof r.input.path === "string" ? ` on ${r.input.path}` : "";
-  $("approval-head").textContent = `${r.agentId} wants to run ${r.tool}${path}`;
+  $("approval-head").textContent = `${r.agentId} wants to run ${describeCall(r.tool, r.input)}`;
   const diff = r.input && typeof r.input.diff === "string" ? r.input.diff : "";
   $("approval-diff").innerHTML = diff
     ? diff.split("\n").map((l) => `<div class="${l.startsWith("+") ? "plus" : l.startsWith("-") ? "minus" : l.startsWith("@@") ? "hunk" : ""}">${esc(l)}</div>`).join("")
-    : `<div class="empty">${esc(JSON.stringify(r.input ?? {}))}</div>`;
+    : `<div class="hunk">${esc(JSON.stringify(r.input ?? {}, null, 2))}</div>`;
 }
 function answerApproval(ok, scope) {
-  authedFetch("/approval", { ok, scope }).catch(() => {});
+  const answered = pendingApprovals[0];
   pendingApprovals = pendingApprovals.slice(1); // mirrors the TUI: pop locally, don't wait on the round trip
   renderApproval();
+  // …but if the answer never arrived the agent is still waiting, so put the request back and say so
+  // rather than leaving the user believing they approved.
+  authedFetch("/approval", { ok, scope })
+    .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); })
+    .catch((err) => {
+      if (!answered) return;
+      pendingApprovals = [answered, ...pendingApprovals];
+      renderApproval();
+      $("approval-head").textContent += ` — answer not delivered (${err.message}); try again`;
+    });
 }
 $("approval-yes").addEventListener("click", () => answerApproval(true));
 $("approval-always").addEventListener("click", () => answerApproval(true, "agent"));
 $("approval-no").addEventListener("click", () => answerApproval(false));
+
+// The TUI's keys work here too: y / a / n answer the approval on screen, esc closes the agent panel.
+document.addEventListener("keydown", (e) => {
+  const typing = e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA");
+  if (pendingApprovals.length && !typing && !e.metaKey && !e.ctrlKey) {
+    const k = e.key.toLowerCase();
+    if (k === "y") { e.preventDefault(); answerApproval(true); return; }
+    if (k === "a") { e.preventDefault(); answerApproval(true, "agent"); return; }
+    if (k === "n" || k === "escape") { e.preventDefault(); answerApproval(false); return; }
+  }
+  if (e.key === "Escape" && openAgentId) closeAgentPanel();
+});
 
 // ---------- prompt bar: submit a whole-team goal (POST /prompt) ----------
 function setPromptEnabled() {
@@ -462,7 +508,7 @@ function draw() {
 
   // faint base edges: orchestrator ↔ each agent
   if (lead) {
-    ctx.strokeStyle = "rgba(120,130,160,0.15)";
+    ctx.strokeStyle = `rgba(${MUTED_RGB},0.25)`;
     ctx.lineWidth = 1;
     for (const n of nodes.values()) {
       if (n === lead) continue;
@@ -492,7 +538,7 @@ function draw() {
     const x = px(n), y = py(n), r = AVATAR_R; // every avatar is the same size — lead gets a ring, not a bigger sprite
     if (n.status === "working") {
       const t = (now % 1200) / 1200;
-      ctx.strokeStyle = "rgba(96,165,250,0.5)"; ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(${WORKING_RGB},0.5)`; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, y, r + 4 + t * 8, 0, Math.PI * 2); ctx.globalAlpha = 1 - t; ctx.stroke(); ctx.globalAlpha = 1;
     }
     drawPixelAvatar(ctx, x, y, r * 2, n.colorIndex);

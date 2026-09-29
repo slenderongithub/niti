@@ -126,7 +126,7 @@ export class SessionStore {
       this.db
         .query(
           `INSERT INTO messages (id, session_id, role, seq, input_tokens, output_tokens, reasoning_tokens, cache_tokens, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -135,6 +135,7 @@ export class SessionStore {
           next.n,
           usage?.inputTokens ?? 0,
           usage?.outputTokens ?? 0,
+          usage?.reasoningTokens ?? 0,
           // Combined read+write — the schema's cache_tokens column is singular, not split. The
           // live UsageTracker keeps the read/write split in memory for /cost; this column is for
           // the persisted per-message record, not a second source of truth for the split.

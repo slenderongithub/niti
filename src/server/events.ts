@@ -14,7 +14,26 @@ export type ServerEventBody =
   | { kind: "approval_request"; requests: { agentId: string; tool: string; input: Record<string, unknown> }[] }
   | { kind: "lock"; holders: { path: string; holder: string }[] }
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
-  | { kind: "theme"; theme: string };
+  | { kind: "theme"; theme: string }
+  // The end of a run, as one card: the lead's summary, suggested next prompts, what changed, and
+  // what it took. Published once per work run (not for a chat reply or an answered question).
+  | {
+      kind: "turn_summary";
+      goal: string;
+      ok: boolean; // every task finished
+      cancelled: boolean;
+      summary: string;
+      next: string[];
+      files: { path: string; added: number; removed: number }[];
+      durationMs: number;
+      tokens: number;
+      cost: number;
+      costKnown: boolean;
+    }
+  // Sent to one reconnecting client (never published) when the events it asked to replay have
+  // already left the ring buffer — its view is incomplete, and it should say so rather than
+  // present a partial history as the whole one.
+  | { kind: "resync"; missed: number };
 
 export type ServerEvent = ServerEventBody & { seq: number; time: number };
 
@@ -37,6 +56,12 @@ export class EventHub {
   // Events with seq strictly greater than `fromSeq` (0 = everything still buffered).
   replay(fromSeq: number): ServerEvent[] {
     return this.buffer.filter((e) => e.seq > fromSeq);
+  }
+
+  // How many events after `fromSeq` fell out of the buffer before a client came back for them.
+  missedSince(fromSeq: number): number {
+    const oldest = this.buffer[0]?.seq;
+    return fromSeq > 0 && oldest !== undefined && oldest > fromSeq + 1 ? oldest - fromSeq - 1 : 0;
   }
 
   lastSeq(): number {
