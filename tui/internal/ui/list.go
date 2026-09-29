@@ -236,7 +236,9 @@ func (l *List) row(it Item, selected bool, w int, bg lipgloss.Color) string {
 	marker, fg := "  ", theme.Fg
 	rowBg := bg
 	if selected {
-		marker, fg, rowBg = "▸ ", theme.BgDeep, theme.Accent
+		// A soft tint, as in the palette and the Agents panel — a solid accent bar was the loudest
+		// thing on screen, on every list in the app.
+		marker, fg, rowBg = "▸ ", theme.Fg, theme.Tint(theme.Accent)
 	}
 	label := it.Label
 	if it.Tag != "" {
@@ -246,9 +248,6 @@ func (l *List) row(it Item, selected bool, w int, bg lipgloss.Color) string {
 	line := head
 	if it.Desc != "" {
 		descFg := theme.Muted
-		if selected {
-			descFg = theme.BgPane
-		}
 		line += lipgloss.NewStyle().Foreground(descFg).Background(rowBg).Render("  " + it.Desc)
 	}
 	// The selected row is a filled bar across the pane, so it reads as a highlight rather than as

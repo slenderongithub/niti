@@ -561,11 +561,11 @@ func sanitize(s string) string {
 }
 
 func renderRoles(roles []api.AgentConfig) string {
-	bg := theme.BgPane
+	bg := theme.BgDeep
 	if len(roles) == 0 {
-		return section("TEAM") + "\n" + lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("  (nobody yet)")
+		return section("Team") + "\n" + lipgloss.NewStyle().Foreground(theme.Line).Background(bg).Render("  (nobody yet)")
 	}
-	parts := []string{section("TEAM")}
+	parts := []string{section("Team")}
 	for i, r := range roles {
 		lead := ""
 		if r.Lead {
@@ -599,12 +599,12 @@ func (m Picker) View() string {
 	}
 	if m.stage == "error" {
 		// The hint is the whole point: without it the screen states a problem and offers no verb.
-		return screen(m.width, m.height, "pick your team", fit(m.width, widest(m.err)),
-			lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.BgPane).Render(m.err),
+		return screen(m.width, m.height, "Something went wrong", fit(m.width, widest(m.err)),
+			lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.BgDeep).Render(m.err),
 			"enter retries · ctrl+c quits", "")
 	}
 	if m.stage == "loading" {
-		return screen(m.width, m.height, "pick your team", cardMin, "loading…", "", "")
+		return screen(m.width, m.height, "Loading", cardMin, lipgloss.NewStyle().Foreground(theme.Muted).Background(theme.BgDeep).Render("loading the provider catalog…"), "", "")
 	}
 
 	// Two passes: work out how wide the card wants to be from the text that will go in it, then draw
@@ -642,14 +642,14 @@ func (m Picker) View() string {
 		}
 	}
 	listRows := m.list.Rows(clamp(m.height-other, 3, 14))
-	body := head
+	body := ""
 	switch {
 	case fixed != "":
-		body += "\n  " + fixed
+		body = lipgloss.NewStyle().Foreground(theme.Fg).Background(theme.BgDeep).Render(fixed)
 	case m.listStage():
-		body += "\n" + m.list.Render(inner, listRows, theme.BgPane)
+		body = m.list.Render(inner, listRows, theme.BgDeep)
 		if len(details) > 0 {
-			muted := lipgloss.NewStyle().Foreground(theme.Muted).Background(theme.BgPane)
+			muted := lipgloss.NewStyle().Foreground(theme.Muted).Background(theme.BgDeep)
 			body += "\n"
 			for _, l := range details {
 				body += "\n" + muted.Render("  "+l)
@@ -662,7 +662,7 @@ func (m Picker) View() string {
 	// The prompt is the last line of the card, so it gets the card's width and no more — a textinput
 	// sized to the terminal is what used to blow the card out to full width before anything was typed.
 	m.input.Width = max(inner-2, 8)
-	return screen(m.width, m.height, "pick your team", cardW, body, hint, m.input.View())
+	return screen(m.width, m.height, head, cardW, body, hint, m.input.View())
 }
 
 // stageText is the per-stage copy: the section heading, the hint under the body, and — for the
@@ -670,23 +670,25 @@ func (m Picker) View() string {
 func (m Picker) stageText() (head, hint, fixed string) {
 	switch m.stage {
 	case "error":
-		return section("PROBLEM"), "enter retries · ctrl+c quits", ""
+		return "Something went wrong", "enter retries · ctrl+c quits", ""
 	case "team":
-		return section("YOUR TEAM"), "enter keeps the saved team · ↑↓ to re-pick instead", ""
+		return "Your team", "enter keeps the saved team · ↑↓ to re-pick instead", ""
 	case "size":
-		return section("HOW MANY"), "↑↓ choose · enter confirms — each teammate gets its own model", ""
+		return "How many teammates?", "↑↓ choose · enter confirms — each teammate gets its own model", ""
 	case "provider":
-		return section("PROVIDER"), "↑↓ choose · type to filter · esc goes back", ""
+		return "Provider", "↑↓ choose · type to filter · esc goes back", ""
 	case "key":
-		return section("PROVIDER"), "paste the API key (or a local base URL) — stored outside the repo", m.provider
+		return "API key", "paste the API key (or a local base URL) — stored outside the repo", m.provider
 	case "model":
-		return section(strings.ToUpper(m.provider)), "↑↓ choose · type any model id the catalog doesn't list", ""
+		return "Model · " + m.provider, "↑↓ choose · type any model id the catalog doesn't list", ""
 	case "role":
-		return section("MODEL"), "what is this teammate called? (e.g. Architect, Backend Designer)", m.provider + "/" + m.pendModel
+		return "Name this teammate", "what is this teammate called? (e.g. Architect, Backend Designer)", m.provider + "/" + m.pendModel
 	case "desc":
-		return section(strings.ToUpper(m.pendRole)), "describe its job — it becomes this agent's system prompt", m.provider + "/" + m.pendModel
+		return "What does " + m.pendRole + " do?", "describe its job — it becomes this agent's system prompt", m.provider + "/" + m.pendModel
+	case "mode":
+		return "Approvals", "how should agents ask before changing files or running commands?", ""
 	case "orchestrator":
-		return section("ORCHESTRATOR"), "which one looks over everything and decides the chronology?", ""
+		return "Lead", "which one looks over everything and decides the chronology?", ""
 	}
 	return "", "", ""
 }

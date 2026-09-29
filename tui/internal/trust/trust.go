@@ -6,7 +6,7 @@
 package trust
 
 import (
-	"fmt"
+	"strings"
 
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
@@ -65,20 +65,26 @@ func (m Model) View() string {
 	if h == 0 {
 		h = 30
 	}
-	why := "niti hasn't run in this directory before."
+	why := "niti hasn't run in this folder before."
 	if m.Changed {
-		why = "This directory's MCP server config has changed since you last trusted it."
+		why = "This folder's MCP server config changed since you last trusted it."
 	}
-	body := fmt.Sprintf(
-		"%s\n\n"+
-			"Trusting a folder lets niti read its .niti/agents.yaml, spawn any MCP servers it\n"+
-			"configures, and run agents against its code.\n\n"+
-			"  %s\n\n"+
-			"[1] Yes, proceed\n[2] Yes, and remember this folder\n[3] No, exit",
-		why, m.Root,
-	)
-	base := lipgloss.NewStyle().Width(w).Height(h).Background(theme.BgDeep).Render("")
-	boxW := ui.Clamp(w-10, 40, 70)
-	box := ui.Box("TRUST THIS FOLDER?", body, "1/enter: proceed · 2: remember · 3/esc: exit", boxW)
-	return ui.Overlay(base, box, w, h)
+	bg := theme.BgDeep
+	st := func(c lipgloss.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(c).Background(bg) }
+	option := func(key, label, note string) string {
+		return st(theme.Accent).Bold(true).Render(" "+key+" ") + st(theme.Fg).Render(label) + st(theme.Muted).Render(note)
+	}
+	body := strings.Join([]string{
+		st(theme.Fg).Bold(true).Render(why),
+		"",
+		st(theme.Muted).Render("Trusting it lets niti read .niti/agents.yaml, start the MCP"),
+		st(theme.Muted).Render("servers it configures, and run agents against this code."),
+		"",
+		st(theme.Accent).Render("  " + m.Root),
+		"",
+		option("1", "Trust once", "  — for this session"),
+		option("2", "Trust and remember", "  — don't ask again for this folder"),
+		option("3", "Exit", ""),
+	}, "\n")
+	return ui.SetupScreen(w, h, "Trust this folder?", "Trust this folder?", 68, body, "", "", []ui.Key{{"1", "Trust once"}, {"2", "Remember"}, {"3", "Exit"}, {"esc", "Exit"}})
 }
