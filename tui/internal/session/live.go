@@ -156,23 +156,23 @@ func (s *agentState) pushDiff(ae api.AgentEvent) {
 					if paired {
 						text, _ = markChange(dels[d].T, adds[d].T)
 					}
-					rows = append(rows, fmt.Sprintf("%c%4d - %s", mkDel, dels[d].O, text))
+					rows = append(rows, fmt.Sprintf("%c%4d - %s", mkDel, dels[d].O, highlight(text, ae.Path)))
 				}
 				for a := range adds {
 					text := adds[a].T
 					if paired {
 						_, text = markChange(dels[a].T, adds[a].T)
 					}
-					rows = append(rows, fmt.Sprintf("%c%4d + %s", mkAdd, adds[a].N, text))
+					rows = append(rows, fmt.Sprintf("%c%4d + %s", mkAdd, adds[a].N, highlight(text, ae.Path)))
 				}
 				i = k - 1
 				continue
 			}
 			switch lines[i].K {
 			case "+":
-				rows = append(rows, fmt.Sprintf("%c%4d + %s", mkAdd, lines[i].N, lines[i].T))
+				rows = append(rows, fmt.Sprintf("%c%4d + %s", mkAdd, lines[i].N, highlight(lines[i].T, ae.Path)))
 			default:
-				rows = append(rows, fmt.Sprintf("%c%4d   %s", mkCtx, lines[i].N, lines[i].T))
+				rows = append(rows, fmt.Sprintf("%c%4d   %s", mkCtx, lines[i].N, highlight(lines[i].T, ae.Path)))
 			}
 		}
 	}
@@ -263,7 +263,7 @@ func renderLine(line string, w int, bg lipgloss.Color) string {
 		return fill(truncate(out, w), w, rowBg)
 	case mkCtx:
 		gutter, rest := splitGutter(body())
-		return truncate(txt(theme.Line, bg).Render(gutter)+txt(theme.Muted, bg).Render(rest), w)
+		return truncate(txt(theme.Line, bg).Render(gutter)+inline(rest, txt(theme.Muted, bg), txt(theme.Muted, bg)), w)
 	case mkOut:
 		return truncate(txt(theme.Muted, bg).Render(body()), w)
 	case mkOutErr:
@@ -287,34 +287,58 @@ func blendTint(c lipgloss.Color) lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(theme.Fg).Background(theme.Blend(c, theme.BgDeep, 0.55)).Bold(true)
 }
 
-// inline renders a line's inline spans: **bold**, `code` and the diff highlight.
+// inline renders a line's inline spans: **bold**, `code`, the diff's changed-words tint, and syntax
+// color. They are independent states — a keyword can sit inside a changed-words span — so each run
+// of text is styled from all of them at once.
 func inline(s string, base lipgloss.Style, hi lipgloss.Style) string {
-	if !strings.ContainsAny(s, string([]rune{mkBold, mkCode, mkHi})) {
+	if !strings.ContainsFunc(s, func(r rune) bool { return r >= '\uE010' && r <= '\uE0FF' }) {
 		return base.Render(s)
 	}
-	var b strings.Builder
-	var cur strings.Builder
-	style := base
+	var b, cur strings.Builder
+	bold, code, high := false, false, false
+	var syn rune
+	style := func() lipgloss.Style {
+		st := base
+		if high {
+			st = hi
+		}
+		switch {
+		case code:
+			st = st.Foreground(theme.Accent)
+		case syn == mkSynKw:
+			st = st.Foreground(theme.Alt)
+		case syn == mkSynStr:
+			st = st.Foreground(theme.Amber)
+		case syn == mkSynNum:
+			st = st.Foreground(theme.Blue)
+		case syn == mkSynCom:
+			st = st.Foreground(theme.Muted).Italic(true)
+		}
+		return st.Bold(bold || high)
+	}
 	flush := func() {
 		if cur.Len() > 0 {
-			b.WriteString(style.Render(cur.String()))
+			b.WriteString(style().Render(cur.String()))
 			cur.Reset()
 		}
 	}
 	for _, r := range s {
 		switch r {
-		case mkBold:
+		case mkBold, mkBoldEnd:
 			flush()
-			style = base.Bold(true)
-		case mkCode:
+			bold = r == mkBold
+		case mkCode, mkCodeEnd:
 			flush()
-			style = base.Foreground(theme.Accent)
-		case mkHi:
+			code = r == mkCode
+		case mkHi, mkHiEnd:
 			flush()
-			style = hi
-		case mkBoldEnd, mkCodeEnd, mkHiEnd:
+			high = r == mkHi
+		case mkSynKw, mkSynStr, mkSynNum, mkSynCom:
 			flush()
-			style = base
+			syn = r
+		case mkSynEnd:
+			flush()
+			syn = 0
 		default:
 			cur.WriteRune(r)
 		}

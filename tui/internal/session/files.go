@@ -340,7 +340,7 @@ func (m Model) viewerBody(w, h int) string {
 		}
 		num := txt(theme.Line, bg).Render(fmt.Sprintf("%*d ", numW, i+1))
 		text := strings.ReplaceAll(v.lines[i], "\t", "    ")
-		out = append(out, bar+num+txt(theme.Fg, bg).Render(truncate(text, max(w-numW-2, 1))))
+		out = append(out, bar+num+truncate(inline(highlight(text, v.path), txt(theme.Fg, bg), txt(theme.Fg, bg)), max(w-numW-2, 1)))
 	}
 	return strings.Join(out, "\n")
 }

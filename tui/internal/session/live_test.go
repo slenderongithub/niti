@@ -80,7 +80,9 @@ func TestFileChangeShowsNumberedRowsAndTheChangedWords(t *testing.T) {
 			added = l
 		}
 	}
-	if !strings.Contains(added, string(mkHi)+"2"+string(mkHiEnd)) {
+	_, afterHi, _ := strings.Cut(added, string(mkHi))
+	inHi, _, _ := strings.Cut(afterHi, string(mkHiEnd))
+	if plainLine(inHi) != "2" { // syntax markers may sit inside the span; the text must be just the digit
 		t.Errorf("only the changed digit should be highlighted, got %q", added)
 	}
 }
@@ -132,5 +134,25 @@ func TestFailedRunCardSaysSo(t *testing.T) {
 	m.apply(api.Event{Kind: "turn_summary", Ok: false, Summary: "• t2 failed", DurationMs: 5000})
 	if v := screen(m); !strings.Contains(v, "Finished with failures · 5.0s") {
 		t.Errorf("card title should say the run had failures:\n%s", v)
+	}
+}
+
+func TestSyntaxHighlightMarksTokensAndKeepsTheText(t *testing.T) {
+	got := highlight(`const total = 20; // "done"`, "src/cart.ts")
+	if plainLine(got) != `const total = 20; // "done"` {
+		t.Fatalf("highlighting must not change the text, got %q", plainLine(got))
+	}
+	for _, want := range []string{string(mkSynKw) + "const" + string(mkSynEnd), string(mkSynNum) + "20" + string(mkSynEnd), string(mkSynCom) + `// "done"` + string(mkSynEnd)} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+	if highlight("const x", "notes.md") != "const x" {
+		t.Error("unknown extensions stay plain")
+	}
+	// The changed-words markers pass through a string token intact.
+	in := `x = "a` + string(mkHi) + `b` + string(mkHiEnd) + `c"`
+	if plainLine(highlight(in, "a.py")) != `x = "abc"` || !strings.ContainsRune(highlight(in, "a.py"), mkHi) {
+		t.Error("changed-words highlight lost inside a string")
 	}
 }
