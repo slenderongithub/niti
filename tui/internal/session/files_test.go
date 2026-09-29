@@ -29,7 +29,7 @@ func TestFilesTreeShowsFoldersFirstAndMarksWhatAgentsTouched(t *testing.T) {
 		t.Errorf("touched = %v", m.touched)
 	}
 	v := screen(m)
-	if !strings.Contains(v, "Files") || !strings.Contains(v, "cart.ts") || !strings.Contains(v, "3 touched · c") {
+	if !strings.Contains(v, "Files") || !strings.Contains(v, "cart.ts") || !strings.Contains(v, "3 touched") {
 		t.Errorf("files panel missing from:\n%s", v)
 	}
 	m.changedOnly = true

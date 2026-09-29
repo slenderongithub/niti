@@ -11,6 +11,7 @@ import (
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Layout — posting's shape: titled panels whose borders carry the live detail, a prompt panel whose
@@ -49,7 +50,7 @@ func (m Model) compact() bool {
 
 func (m Model) sidebarShown() bool { return m.width == 0 || m.width >= sidebarHide }
 
-func (m Model) View() string {
+func (m Model) View() (frame string) {
 	if m.quitting {
 		return "bye.\n"
 	}
@@ -60,6 +61,9 @@ func (m Model) View() string {
 	if h == 0 {
 		h = 30
 	}
+	// Whatever any view below returns, it leaves here no wider or taller than the terminal: a row
+	// that wraps pushes every panel down a line and leaves stale copies of the bottom rows behind.
+	defer func() { frame = ui.Frame(frame, w, h) }()
 
 	// The settings overlay paints over the whole TUI — like the ctrl+p palette it takes the screen
 	// while open rather than tiling into the layout.
@@ -94,6 +98,9 @@ func (m Model) View() string {
 	if m.menuOpen && m.menu.Len() > 0 {
 		menuRows = clamp(m.menu.Len(), 1, 6)
 	}
+	if len(m.approvals) > 0 && !compact {
+		promptRows = 3 + len(m.approvalCallLines(w)) // border, "who wants to run:", the call, border
+	}
 	fixed := headerRows + promptRows + 1 // +1: the footer
 	bodyH := h - fixed - feedRows - menuRows
 	if bodyH < 3 {
@@ -121,9 +128,8 @@ func (m Model) View() string {
 		rows = append(rows, m.menuView(w, menuRows))
 	}
 	rows = append(rows, m.promptPanel(w, promptRows, compact), m.footer(w, compact))
-	// One ANSI-aware guarantee that nothing overflows the terminal, however long a streamed line or
-	// a registry command list turns out to be.
-	out := lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(strings.Join(rows, "\n"))
+	// Clamped before the popups go on, so they overlay rows that are already the right width.
+	out := ui.Frame(strings.Join(rows, "\n"), w, h)
 	// At most one popup is reachable at a time (onKey gives whichever is open the keyboard), so the
 	// order here is only about which one wins if two flags are somehow set.
 	switch {
@@ -466,7 +472,10 @@ func (m Model) mainPane(mw, h int, compact bool) string {
 		sub = r
 	}
 	if m.scrollBack > 0 {
-		sub = fmt.Sprintf("scrolled back · %d new below · G follows", m.unseen)
+		sub = "scrolled back · G follows"
+		if m.unseen > 0 {
+			sub = fmt.Sprintf("scrolled back · %d new below · G follows", m.unseen)
+		}
 	}
 	return ui.Panel{Title: title, Subtitle: sub, Focused: m.context() == regionTranscript}.Render(content, mw, h)
 }
@@ -655,8 +664,12 @@ func (m Model) promptPanel(w, rows int, compact bool) string {
 func (m Model) approvalBanner(w, rows int, compact bool) string {
 	r := m.approvals[0]
 	bg := theme.BgDeep
-	text := txt(theme.Fg, bg).Bold(true).Render(r.AgentID) + txt(theme.Fg, bg).Render(" wants to run ") +
-		txt(theme.Amber, bg).Bold(true).Render(approvalCall(r.Tool, r.Input))
+	// The whole call, wrapped: a long command cut at the panel edge hid the part being approved.
+	lines := []string{txt(theme.Fg, bg).Bold(true).Render(r.AgentID) + txt(theme.Fg, bg).Render(" wants to run:")}
+	for _, l := range m.approvalCallLines(w) {
+		lines = append(lines, txt(theme.Amber, bg).Bold(true).Render(l))
+	}
+	text := strings.Join(lines, "\n")
 	if compact {
 		return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(theme.Tint(theme.Amber)).Render(" ⚠ " + truncate(r.AgentID+" wants to run "+approvalCall(r.Tool, r.Input), w-3))
 	}
@@ -665,6 +678,20 @@ func (m Model) approvalBanner(w, rows int, compact bool) string {
 		sub = fmt.Sprintf("%d more waiting", n-1)
 	}
 	return ui.Panel{Title: "Approval needed", Subtitle: sub, Focused: true, TitleLeft: true, Color: theme.Amber}.Render(text, w, rows)
+}
+
+// approvalCallLines is the pending call wrapped to the banner's width, at most four lines; a longer
+// one ends in "…".
+func (m Model) approvalCallLines(w int) []string {
+	const most = 4
+	r := m.approvals[0]
+	iw := max(w-4, 10)
+	lines := strings.Split(ansi.Hardwrap(ansi.Wordwrap(ui.Clean(approvalCall(r.Tool, r.Input)), iw, " /"), iw, true), "\n")
+	if len(lines) > most {
+		lines = lines[:most]
+		lines[most-1] = ui.Truncate(lines[most-1], iw-1) + "…"
+	}
+	return lines
 }
 
 // approvalCall renders a tool call the way a person would say it — `shell: git commit -m "x"`,

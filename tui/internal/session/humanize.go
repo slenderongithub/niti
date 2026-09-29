@@ -93,6 +93,11 @@ func describeCall(name, args string) string {
 			return verb + " " + m[1]
 		}
 	}
+	if verb == "Run" {
+		// The start payload is cut at 180 characters, and a model that sends "args" before
+		// "command" leaves nothing to name — a bare "Run" then finished as "Ran Run".
+		return "Run a command"
+	}
 	return verb
 }
 

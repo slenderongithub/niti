@@ -71,7 +71,7 @@ type agentState struct {
 const agentLogMax = 600
 
 func (s *agentState) push(line string) {
-	if line = strings.TrimRight(line, " \t\r"); line == "" {
+	if line = strings.TrimRight(ui.Clean(line), " "); line == "" {
 		return
 	}
 	if len(s.log) > 0 && s.log[len(s.log)-1] == line { // a retry loop repeating itself is one line, not ten

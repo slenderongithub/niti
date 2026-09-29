@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/niti/tui/internal/api"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func ev(t *testing.T, raw string) api.AgentEvent {
@@ -154,5 +157,51 @@ func TestSyntaxHighlightMarksTokensAndKeepsTheText(t *testing.T) {
 	in := `x = "a` + string(mkHi) + `b` + string(mkHiEnd) + `c"`
 	if plainLine(highlight(in, "a.py")) != `x = "abc"` || !strings.ContainsRune(highlight(in, "a.py"), mkHi) {
 		t.Error("changed-words highlight lost inside a string")
+	}
+}
+
+// A second hunk's "⋮" separator used to be cut mid-rune, and agent text can carry tabs, \r, color
+// codes, broken bytes and joined emoji. Any of them made a row wider than it measured: it wrapped,
+// the frame grew a line and every panel below shifted. The frame must stay exactly the terminal.
+func TestHostileTextNeverOverflowsTheFrame(t *testing.T) {
+	const w, h = 100, 30
+	// With colors off the two halves of a cut rune sit side by side and rejoin; a real terminal gets
+	// a color code between them, which is what broke the row.
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	m := sized(1, w, h)
+	m.goal = "x"
+	m.applyAgentEvent(ev(t, `{"agentId":"a","type":"file_edit","payload":"edit","path":"src/ui.js","callId":"c1","phase":"end","tool":"edit","ok":true,"added":1,"removed":1,
+		"hunks":[{"lines":[{"k":" ","t":"a\tb\r","o":1,"n":1}]},{"lines":[{"k":"-","t":"x = \"\u001b[31mred\u001b[0m\"","o":16},{"k":"+","t":"x = \"👩‍💻 ⏱️\"","n":16}]}]}`))
+	m.applyAgentEvent(ev(t, `{"agentId":"a","type":"tool_output","payload":"out\r\n\u001b[32mok\u001b[0m\tdone","callId":"c2","tool":"shell"}`))
+	m.agents["a"].push("bad \xff\xfe bytes")
+	v := m.View()
+	lines := strings.Split(v, "\n")
+	if len(lines) != h {
+		t.Fatalf("frame is %d rows, want %d", len(lines), h)
+	}
+	for i, l := range lines {
+		if ansi.StringWidth(l) > w || !utf8.ValidString(l) || strings.ContainsAny(ansi.Strip(l), "\r\t�") {
+			t.Errorf("row %d is %d wide or holds a raw control/broken byte: %q", i, ansi.StringWidth(l), ansi.Strip(l))
+		}
+	}
+	if !strings.Contains(ansi.Strip(v), "⋮") {
+		t.Error("the hunk separator should survive intact")
+	}
+}
+
+// A long command was cut at the banner's edge — the tail, often the part that matters, was never
+// shown before the user pressed y. It now wraps, and the frame still fits the terminal.
+func TestApprovalShowsTheWholeLongCommand(t *testing.T) {
+	const w, h = 80, 30
+	m := sized(1, w, h)
+	m.approvals = []api.Approval{{AgentID: "builder", Tool: "shell", Input: map[string]any{
+		"command": "node", "args": []any{"-e", "['a.js','b.js'].forEach(f => { const lines = require('fs').readFileSync(f,'utf8').split('\\n').length; if (lines > 60) process.exit(1) }) && rm -rf ./tmp-end"}}}}
+	v := m.View()
+	if n := len(strings.Split(v, "\n")); n != h {
+		t.Fatalf("frame is %d rows, want %d", n, h)
+	}
+	if plain := strings.ReplaceAll(ansi.Strip(v), "\n", ""); !strings.Contains(plain, "tmp-end") {
+		t.Errorf("the end of the command should be visible:\n%s", ansi.Strip(v))
 	}
 }

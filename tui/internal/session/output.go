@@ -34,7 +34,7 @@ func (m *Model) show(title, message string) {
 		m.status = title + ": " + message
 		return
 	}
-	m.out = output{open: true, title: title, lines: strings.Split(message, "\n")}
+	m.out = output{open: true, title: title, lines: strings.Split(ui.Clean(message), "\n")}
 }
 
 func (m *Model) outputKey(k tea.KeyMsg) tea.Cmd {

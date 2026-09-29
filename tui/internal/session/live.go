@@ -7,6 +7,7 @@ import (
 
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -106,7 +107,7 @@ func (s *agentState) onToolEnd(ae api.AgentEvent) bool {
 // pushFolded adds a command's output: the first few lines always, the rest only when expanded.
 func (s *agentState) pushFolded(body []string, total int) {
 	for i, l := range body {
-		line := string(mkOut) + "    " + l
+		line := string(mkOut) + "    " + ui.Clean(l)
 		if i >= foldOutput {
 			line = string(mkExp) + line
 		}
@@ -131,6 +132,11 @@ func (s *agentState) pushDiff(ae api.AgentEvent) {
 	}
 	s.push(fmt.Sprintf("✔ %s %s (%s)", verb, ae.Path, counts))
 
+	for _, h := range ae.Hunks {
+		for i := range h.Lines {
+			h.Lines[i].T = ui.Clean(h.Lines[i].T)
+		}
+	}
 	var rows []string
 	for hi, h := range ae.Hunks {
 		if hi > 0 {
@@ -274,10 +280,12 @@ func renderLine(line string, w int, bg lipgloss.Color) string {
 	return truncate(inline(line, lineStyle(line, bg), lipgloss.NewStyle().Background(bg)), w)
 }
 
-// splitGutter separates "  12 + " (number and sign) from the row's text.
+// splitGutter separates "  12 + " (number and sign) from the row's text. It counts runes: the
+// hunk separator "      ⋮" is 7 runes but 9 bytes, and a byte cut split the ⋮ into two broken
+// bytes the terminal drew but the width count skipped — the row wrapped and shifted every panel.
 func splitGutter(s string) (string, string) {
-	if len(s) >= 7 {
-		return s[:7], s[7:]
+	if r := []rune(s); len(r) >= 7 {
+		return string(r[:7]), string(r[7:])
 	}
 	return s, ""
 }

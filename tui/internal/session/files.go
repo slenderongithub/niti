@@ -204,12 +204,13 @@ func (m Model) filesPanel(w, h int) string {
 		}
 		body = ui.Hatch(msg, iw, max(h-2, 1), bg)
 	}
-	// Short: the sidebar is ~20 columns inside. `c` toggles the filter (the footer spells it out).
+	// Short: the sidebar is ~20 columns inside. `c` toggles the filter; the footer says so when the
+	// panel has focus (a bare "· c" here read as a cut-off word).
 	sub := fmt.Sprintf("%d files", len(m.files))
 	if n := len(m.touched); n > 0 {
-		sub = fmt.Sprintf("%d touched · c", n)
+		sub = fmt.Sprintf("%d touched", n)
 		if m.changedOnly {
-			sub = "only touched · c"
+			sub = "only touched"
 		}
 	}
 	return ui.Panel{Title: "Files", Subtitle: sub, Focused: focused}.Render(body, w, h)
@@ -301,7 +302,7 @@ func (m *Model) onFileLoaded(msg fileLoadedMsg) {
 		m.viewer.err = msg.err.Error()
 		return
 	}
-	m.viewer.lines = strings.Split(strings.TrimSuffix(msg.content, "\n"), "\n")
+	m.viewer.lines = strings.Split(strings.TrimSuffix(ui.Clean(msg.content), "\n"), "\n")
 	// Open on the first changed line, when there is one — that's why most files get opened.
 	first := 0
 	for n := range m.changed[msg.path] {
