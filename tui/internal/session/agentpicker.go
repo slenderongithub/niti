@@ -57,5 +57,5 @@ func (m Model) agentPickerView(w, h int) string {
 	rows := m.ap.list.Rows(clamp(h-8, 3, 12))
 	boxW := clamp(m.ap.list.NaturalWidth()+6, 30, max(w-6, 30))
 	body := m.ap.list.Render(boxW-4, rows, theme.BgPane)
-	return ui.Box("Switch agent window", body, "↑↓ choose · enter select · esc cancel", boxW)
+	return ui.Box("SWITCH AGENT WINDOW", body, "↑↓ choose · enter select · esc cancel", boxW)
 }

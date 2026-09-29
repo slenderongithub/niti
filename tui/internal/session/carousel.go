@@ -190,14 +190,14 @@ func (m *Model) carouselConfirm() tea.Cmd {
 // nine rows of nothing under them.
 func (m Model) carouselView(w, h int) string {
 	rows := m.car.list.Rows(clamp(h-10, 4, 14))
-	title, hint := "Switch model — pick a teammate", "↑↓ choose · enter confirms · esc cancels"
+	title, hint := "SWITCH MODEL — pick a teammate", "↑↓ choose · enter confirms · esc cancels"
 	if m.car.stage == "model" {
 		st := m.agents[m.car.agentID]
 		who := m.car.agentID
 		if st != nil {
 			who = st.cfg.Role
 		}
-		title = "Switch model — " + who
+		title = "SWITCH MODEL — " + who
 		hint = "↑↓ choose · type to filter · esc cancels"
 		if m.car.loading {
 			hint = "loading models… · esc cancels"

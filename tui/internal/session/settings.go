@@ -181,7 +181,7 @@ func (m Model) settStatus(w int) []string {
 	lines = append(lines, "", txt(theme.Accent, bg).Bold(true).Render("Models"))
 	for _, id := range m.order {
 		st := m.agents[id]
-		lines = append(lines, txt(theme.Fg, bg).Render(truncate(fmt.Sprintf("  %-14s %s/%s", st.cfg.Role, st.cfg.Provider, st.cfg.Model), w)))
+		lines = append(lines, txt(theme.Fg, bg).Render(truncate(fmt.Sprintf("  %s %-14s %s/%s", st.avatar, st.cfg.Role, st.cfg.Provider, st.cfg.Model), w)))
 	}
 	return lines
 }
@@ -215,7 +215,7 @@ func (m Model) settConfig(w int) []string {
 			lead = " ★"
 		}
 		lines = append(lines,
-			txt(st.color, bg).Render(truncate(fmt.Sprintf("  %s%s", st.cfg.Role, lead), max(w/2, 8)))+
+			txt(st.color, bg).Render(truncate(fmt.Sprintf("  %s %s%s", st.avatar, st.cfg.Role, lead), max(w/2, 8)))+
 				txt(theme.Muted, bg).Render(truncate("  "+st.cfg.Provider+"/"+st.cfg.Model, max(w/2, 8))))
 	}
 	return append(lines, "", txt(theme.Muted, bg).Render(truncate("ctrl+l (or ^p → model) switches an agent's model.", w)))
@@ -238,8 +238,8 @@ func (m Model) settUsage(w int) []string {
 	}
 	for _, id := range m.order {
 		st := m.agents[id]
-		lines = append(lines, txt(theme.Fg, bg).Render(truncate(fmt.Sprintf("  %-14s %6s in · %6s out",
-			st.cfg.Role, fmtTok(st.in), fmtTok(st.out)), w)))
+		lines = append(lines, txt(theme.Fg, bg).Render(truncate(fmt.Sprintf("  %s %-14s %6s in · %6s out",
+			st.avatar, st.cfg.Role, fmtTok(st.in), fmtTok(st.out)), w)))
 	}
 	// ponytail: no plan-limit / weekly bars like the screenshot — niti runs on your own API keys, so
 	// there is no quota to draw a percentage against. Add if a hosted plan ever gates usage.
@@ -385,7 +385,7 @@ func (m Model) avatarRow(w int) string {
 	var parts []string
 	for _, id := range m.order {
 		st := m.agents[id]
-		parts = append(parts, st.chip())
+		parts = append(parts, txt(st.color, bg).Bold(true).Render(st.avatar))
 	}
 	if len(parts) == 0 {
 		return ""

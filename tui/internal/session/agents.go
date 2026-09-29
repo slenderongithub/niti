@@ -7,6 +7,14 @@ import (
 	"github.com/niti/tui/internal/theme"
 )
 
+// agentName is the role, with the lead's star.
+func agentName(st *agentState) string {
+	if st.cfg.Lead {
+		return st.cfg.Role + " ★"
+	}
+	return st.cfg.Role
+}
+
 // The /agents window: the team as the sidebar shows it, plus what the sidebar has no room for —
 // the model each teammate runs on, its state, and the tools it is allowed to use.
 func (m Model) agentLines() []string {
@@ -15,7 +23,7 @@ func (m Model) agentLines() []string {
 	roleW, modelW, statusW := 4, 5, 7
 	for _, id := range m.order {
 		st := m.agents[id]
-		roleW = max(roleW, min(lipgloss.Width(st.label()), 18))
+		roleW = max(roleW, min(lipgloss.Width(agentName(st)), 18))
 		modelW = max(modelW, min(lipgloss.Width(st.cfg.Provider+"/"+st.cfg.Model), 34))
 	}
 	toolW := max(cw-3-1-roleW-modelW-statusW-6, 12)
@@ -34,7 +42,7 @@ func (m Model) agentLines() []string {
 		if len(st.cfg.AllowedTools) > 0 {
 			tools = strings.Join(st.cfg.AllowedTools, ", ")
 		}
-		out = append(out, row(st.chip(), cell(st.label(), st.color, roleW, true), cell(st.cfg.Provider+"/"+st.cfg.Model, theme.Fg, modelW, false),
+		out = append(out, row(cell(st.avatar, st.color, 3, true), cell(agentName(st), st.color, roleW, true), cell(st.cfg.Provider+"/"+st.cfg.Model, theme.Fg, modelW, false),
 			cell(st.status, theme.StatusColor(st.status), statusW, false), cell(tools, theme.Muted, toolW, false)))
 	}
 	return out

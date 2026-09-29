@@ -275,7 +275,7 @@ func renderLine(line string, w int, bg lipgloss.Color) string {
 	case mkOutErr:
 		return truncate(txt(theme.Red, bg).Render(body()), w)
 	case mkMore:
-		return truncate(txt(theme.Muted, bg).Render(body()), w)
+		return truncate(txt(theme.Line, bg).Render(body()), w)
 	}
 	return truncate(inline(line, lineStyle(line, bg), lipgloss.NewStyle().Background(bg)), w)
 }

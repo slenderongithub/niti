@@ -61,22 +61,7 @@ type agentState struct {
 	runOut   []string   // the in-flight command's latest output lines (tool_output), under its spinner
 	todos    []api.Todo // the agent's checklist while steps remain, pinned under its header
 	color    lipgloss.Color
-	avatar   string // the badge letter (theme.Monogram)
-}
-
-// chip is the agent's badge: its letter in its own colour on a tint of it, one cell either side.
-// Unlike the plain-text label it carries a background, so it is composed next to the name rather
-// than inside a string that gets styled as a whole.
-func (s *agentState) chip() string {
-	return lipgloss.NewStyle().Foreground(s.color).Background(theme.Tint(s.color)).Bold(true).Render(" " + s.avatar + " ")
-}
-
-// label is the agent's role as text, with the lead's star.
-func (s *agentState) label() string {
-	if s.cfg.Lead {
-		return s.cfg.Role + " ★"
-	}
-	return s.cfg.Role
+	avatar   string
 }
 
 // Per-agent scrollback. Only the tail is rendered in the pane, but /transcript pages through all
@@ -231,15 +216,10 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	for k, v := range sess.Prefs {
 		m.prefs[k] = v
 	}
-	letters := map[string]bool{}
 	for i, c := range sess.Agents {
 		m.order = append(m.order, c.ID)
-		badge := theme.Monogram(c.Role, letters)
-		if badge == "" {
-			badge = theme.Avatar(i)
-		}
 		m.agents[c.ID] = &agentState{
-			cfg: c, status: "idle", color: theme.AgentColor(i), avatar: badge,
+			cfg: c, status: "idle", color: theme.AgentColor(i), avatar: theme.Avatar(i),
 			ctxLimit: sess.ContextLimits[c.ID], showDur: m.prefs["showTurnDuration"],
 		}
 	}
@@ -773,7 +753,7 @@ func (m *Model) submit(text string) tea.Cmd {
 		case "help":
 			// Client-side, because only the client knows the whole set: the server registry plus the
 			// commands that can only happen here (/quit, /theme, /graph, /dashboard, the settings tabs).
-			m.out = output{open: true, title: "Commands", lines: m.helpLines()}
+			m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
 			return nil
 		case "tasks":
 			// The board is already here, kept current by the orchestration events: draw that rather

@@ -43,7 +43,7 @@ func TestPopupsAreSizedToTheirContent(t *testing.T) {
 // the Agents panel's frame survives on every row the box covers.
 func TestOverlayKeepsTheSidebarPainted(t *testing.T) {
 	m := sized(2, 120, 34)
-	m.out = output{open: true, title: "Commands", lines: m.helpLines()}
+	m.out = output{open: true, title: "COMMANDS", lines: m.helpLines()}
 	frame := strings.Split(ansi.Strip(m.View()), "\n")
 	covered := 0
 	for i, line := range frame {

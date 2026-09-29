@@ -150,7 +150,7 @@ func (m Model) apiKeyView(w, h int) string {
 	boxW := clamp(max(m.akp.list.NaturalWidth()+6, 56), 30, max(w-6, 30))
 	if m.akp.stage == "provider" {
 		rows := m.akp.list.Rows(clamp(h-8, 3, 12))
-		return ui.Box("Change API key", m.akp.list.Render(boxW-4, rows, theme.BgPane), "↑↓ choose · enter select · esc cancel", boxW)
+		return ui.Box("CHANGE API KEY", m.akp.list.Render(boxW-4, rows, theme.BgPane), "↑↓ choose · enter select · esc cancel", boxW)
 	}
 	in := m.akp.input
 	in.Width = boxW - 8
@@ -162,5 +162,5 @@ func (m Model) apiKeyView(w, h int) string {
 	if m.akp.status != "" {
 		lines = append(lines, "", txt(theme.Amber, theme.BgPane).Render(m.akp.status))
 	}
-	return ui.Box("Change API key", strings.Join(lines, "\n"), "enter save · esc back", boxW)
+	return ui.Box("CHANGE API KEY", strings.Join(lines, "\n"), "enter save · esc back", boxW)
 }

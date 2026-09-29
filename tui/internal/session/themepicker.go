@@ -103,5 +103,5 @@ func (m Model) themePickerView(w, h int) string {
 	}
 	hint := "← → preview · enter confirm · esc cancel"
 	boxW := clamp(lipgloss.Width(body)+6, 34, max(w-6, 34))
-	return ui.Box("Theme", body, hint, boxW)
+	return ui.Box("THEME", body, hint, boxW)
 }

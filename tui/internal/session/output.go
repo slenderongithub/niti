@@ -82,9 +82,9 @@ func (m Model) outputView(w, h int) string {
 
 	// The hint is finished before the box is measured, so a long "(12–34 of 90)" widens the box
 	// rather than being truncated by it.
-	hint := "esc close"
+	hint := "esc closes"
 	if len(all) > rows {
-		hint = fmt.Sprintf("↑↓ scroll · esc close · %d–%d of %d", top+1, min(top+rows, len(all)), len(all))
+		hint = fmt.Sprintf("↑↓ scroll · esc closes   (%d–%d of %d)", top+1, min(top+rows, len(all)), len(all))
 	}
 	// Width follows the content, capped by the terminal — a two-column list shouldn't get a box
 	// sized for the widest command output imaginable.
