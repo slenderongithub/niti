@@ -8,7 +8,9 @@ name: Release
 #   bun run bump 0.3.4 && git commit -am "Bump version to 0.3.4" && git tag v0.3.4 && git push --tags
 #
 # Needs an NPM_TOKEN repository secret (an npm automation token). --provenance links each tarball
-# to this workflow run, so users can verify where a binary was built.
+# to this workflow run, so users can verify where a binary was built. Without the secret the job
+# still checks, tests and builds the tag, then skips publishing with a notice — releases published
+# by hand used to leave a red X on every tag.
 on:
   push:
     tags: ["v*"]
@@ -20,6 +22,8 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      CAN_PUBLISH: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -58,7 +62,12 @@ jobs:
 
       # Idempotent: a re-run after a partial failure skips what is already published instead of
       # failing on "cannot publish over the previously published version".
+      - name: no NPM_TOKEN — publish by hand
+        if: env.CAN_PUBLISH != 'true'
+        run: echo "::notice::NPM_TOKEN is not set, so nothing was published. Run the npm publish commands from build:release by hand."
+
       - name: publish platform packages
+        if: env.CAN_PUBLISH == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -74,12 +83,17 @@ jobs:
           done
 
       - name: every platform package is on the registry
+        if: env.CAN_PUBLISH == 'true'
         run: |
           set -euo pipefail
           node -p 'Object.entries(require("./package.json").optionalDependencies).map(([n,v]) => n+"@"+v).join("\n")' |
             while read -r spec; do npm view "$spec" version >/dev/null || { echo "::error::$spec is not published"; exit 1; }; done
 
       - name: publish the root package
+        if: env.CAN_PUBLISH == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: |
+          set -euo pipefail
+          spec=$(node -p 'const p = require("./package.json"); p.name + "@" + p.version')
+          if npm view "$spec" version >/dev/null 2>&1; then echo "$spec already published — skipping"; else npm publish --provenance --access public; fi
