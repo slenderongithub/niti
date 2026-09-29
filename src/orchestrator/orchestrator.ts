@@ -35,10 +35,11 @@ export class Orchestrator {
     return this.tasks as TaskNode[];
   }
 
-  // /clear — drop all tasks so the next submission starts a fresh board. IDs keep counting up.
+  // /clear — drop all tasks so the next submission starts a fresh board, numbered from t1 again.
   clear(): void {
     this.tasks = [];
     this.plannedGoal = undefined;
+    this.nextId = 1;
   }
 
   // Returns the next pending task this agent may claim, marked in_progress, or undefined.

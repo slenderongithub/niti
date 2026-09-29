@@ -68,9 +68,9 @@ test("checkpoint → undo restores an overwritten file and deletes a created one
   s.checkpoint(id, created, null); // creation: nothing was there
   writeFileSync(created, "brand new");
 
-  expect(s.undoLast(id)).toEqual({ path: created, action: "deleted" }); // LIFO: newest write first
+  expect(s.undoLast(id)).toMatchObject({ path: created, action: "deleted" }); // LIFO: newest write first
   expect(existsSync(created)).toBe(false);
-  expect(s.undoLast(id)).toEqual({ path: existing, action: "restored" });
+  expect(s.undoLast(id)).toMatchObject({ path: existing, action: "restored" });
   expect(readFileSync(existing, "utf8")).toBe("original");
   expect(s.undoLast(id)).toBeUndefined(); // nothing left to undo
 });
@@ -103,7 +103,7 @@ test("rewindN reverts the last n writes at once, oldest of the n restored last",
   writeFileSync(file, "v3");
 
   const results = s.rewindN(2, id);
-  expect(results).toEqual([
+  expect(results).toMatchObject([
     { path: file, action: "restored" },
     { path: file, action: "restored" },
   ]);
@@ -120,7 +120,7 @@ test("rewindN stops early (not partially applied past what exists) when fewer th
   s.checkpoint(id, file, "v1");
   writeFileSync(file, "v2");
 
-  expect(s.rewindN(5, id)).toEqual([{ path: file, action: "restored" }]);
+  expect(s.rewindN(5, id)).toMatchObject([{ path: file, action: "restored" }]);
   expect(readFileSync(file, "utf8")).toBe("v1");
 });
 
@@ -204,14 +204,14 @@ test("a full persistence round-trip: turn in, turn out, checkpoint, undo", () =>
   s.checkpoint(id, file, "original\n");
   writeFileSync(file, "agent's version\n");
   const undone = s.undoLast(id);
-  expect(undone).toEqual({ path: file, action: "restored" });
+  expect(undone).toMatchObject({ path: file, action: "restored" });
   expect(readFileSync(file, "utf8")).toBe("original\n");
 
   // A file that did not exist before is deleted rather than restored, and undo is LIFO-exhaustible.
   const fresh = join(dir, "new.ts");
   writeFileSync(fresh, "created by the agent\n");
   s.checkpoint(id, fresh, null);
-  expect(s.undoLast(id)).toEqual({ path: fresh, action: "deleted" });
+  expect(s.undoLast(id)).toMatchObject({ path: fresh, action: "deleted" });
   expect(existsSync(fresh)).toBe(false);
   expect(s.undoLast(id)).toBeUndefined(); // nothing left to undo
 });

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CommandRegistry, BUILTIN_COMMANDS, loadCommands } from "./registry.ts";
@@ -23,12 +23,6 @@ test("view commands are a pure client-side switch", async () => {
   expect(await r.run(engine(), "usage")).toEqual({ ok: true, message: "", view: "usage" });
 });
 
-test("/undo reports what it reverted (or that there's nothing to revert)", async () => {
-  const store = new SessionStore(openDb(":memory:"));
-  const r = new CommandRegistry(BUILTIN_COMMANDS);
-  expect(await r.run(engine(store), "undo")).toEqual({ ok: true, message: "nothing to undo" });
-});
-
 test("/rewind defaults to one step and reports nothing to rewind when the queue is empty", async () => {
   const store = new SessionStore(openDb(":memory:"));
   const r = new CommandRegistry(BUILTIN_COMMANDS);
@@ -48,6 +42,34 @@ test("/rewind n pops n checkpoints in one call", async () => {
   expect(res.message).toContain("rewound 1 step");
 });
 
+test("/rewind only reaches this session's writes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-rewind-scope-"));
+  const file = join(dir, "f.txt");
+  writeFileSync(file, "v2");
+  const db = openDb(":memory:");
+  const store = new SessionStore(db);
+  const sid = store.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  store.checkpoint(sid, file, "v1");
+  const e = engine(store);
+  // A checkpoint from before this engine started belongs to an earlier launch.
+  db.query("UPDATE checkpoints SET created_at = 1").run();
+  expect(e.rewind(1)).toBe("nothing to rewind");
+  expect(readFileSync(file, "utf8")).toBe("v2");
+});
+
+test("/rewind keeps going past a checkpoint whose directory is gone", () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-rewind-gone-"));
+  const file = join(dir, "f.txt");
+  writeFileSync(file, "v2");
+  const store = new SessionStore(openDb(":memory:"));
+  const sid = store.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  store.checkpoint(sid, file, "v1");
+  store.checkpoint(sid, join(dir, "gone", "x.txt"), "old"); // e.g. a discarded worktree
+  const msg = engine(store).rewind(2);
+  expect(msg).toContain("skipped");
+  expect(readFileSync(file, "utf8")).toBe("v1");
+});
+
 test("/branch requires a name and a git repo", async () => {
   const r = new CommandRegistry(BUILTIN_COMMANDS);
   expect(await r.run(engine(), "branch", "")).toEqual({ ok: false, message: "usage: /branch <name>" });
@@ -63,26 +85,72 @@ test("/debate requires two known agents and a question", async () => {
   expect(await r.run(engine(), "debate", "a ghost is this a good idea?")).toEqual({ ok: false, message: "no such agent: ghost" });
 });
 
-test("/debate alternates two agents and returns the full exchange plus a synthesis", async () => {
+function twoAgentEngine(replies: string[], onSend?: (n: number) => void) {
   let n = 0;
-  const replies = ["point 1", "point 2", "point 3", "point 4", "point 5", "point 6", "final synthesis"];
-  const twoAgentStub: Provider = { async send() { return { text: replies[n++] ?? "done", toolCalls: [] }; } };
-  const twoAgentEngine = new Engine({
+  const stub: Provider = {
+    async send() {
+      onSend?.(n);
+      return { text: replies[n++] ?? "done", toolCalls: [] };
+    },
+  };
+  return new Engine({
     configs: [
       { id: "a", provider: "anthropic", model: "m", role: "r", systemPrompt: "s" },
       { id: "b", provider: "openai", model: "m", role: "r", systemPrompt: "s" },
     ],
-    makeProvider: () => twoAgentStub,
+    makeProvider: () => stub,
   });
+}
 
+const sevenReplies = ["point 1", "point 2", "point 3", "point 4", "point 5", "point 6", "final synthesis"];
+
+test("/debate starts in the background instead of holding the request open for seven model calls", async () => {
+  const e = twoAgentEngine(sevenReplies);
   const r = new CommandRegistry(BUILTIN_COMMANDS);
-  const res = await r.run(twoAgentEngine, "debate", "a b should we use REST or gRPC?");
-  expect(res.ok).toBe(true);
-  expect(res.message).toContain("## Debate: a vs b");
-  expect(res.message).toContain("point 1");
-  expect(res.message).toContain("point 6");
-  expect(res.message).toContain("## Synthesis");
-  expect(res.message).toContain("final synthesis");
+  const res = await r.run(e, "debate", "a b should we use REST or gRPC?");
+  expect(res).toEqual({ ok: true, message: expect.stringContaining("debate started: a vs b") });
+  expect(await r.run(e, "debate", "a b again?")).toEqual({ ok: false, message: expect.stringContaining("running") });
+  while (e.running) await new Promise((r) => setTimeout(r, 5));
+});
+
+test("engine.debate alternates two agents, streams each turn, and finishes both agents", async () => {
+  const e = twoAgentEngine(sevenReplies);
+  const seen: string[] = [];
+  e.bus.subscribe((ev) => seen.push(`${ev.agentId}:${ev.type}`));
+  const out = await e.debate("a", "b", "REST or gRPC?");
+  expect(out).toContain("## Debate: a vs b");
+  expect(out).toContain("point 1");
+  expect(out).toContain("point 6");
+  expect(out).toContain("## Synthesis");
+  expect(out).toContain("final synthesis");
+  expect(seen.filter((s) => s.endsWith(":message"))).toHaveLength(7);
+  expect(seen.slice(-2)).toEqual(["a:done", "b:done"]); // otherwise the TUI leaves both stuck on "working"
+  expect(e.running).toBe(false);
+});
+
+test("a provider failure ends a debate early but keeps what was said", async () => {
+  const e = twoAgentEngine(sevenReplies, (n) => {
+    if (n === 3) throw new Error("rate limited");
+  });
+  const out = await e.debate("a", "b", "q");
+  expect(out).toContain("point 3");
+  expect(out).not.toContain("point 4");
+  expect(out).toContain("Stopped early: rate limited");
+  expect(e.running).toBe(false);
+});
+
+test("/cancel stops a debate between turns, and a cancelled run does not poison the next ask", async () => {
+  const e = twoAgentEngine(sevenReplies, (n) => {
+    if (n === 2) e.cancel();
+  });
+  const out = await e.debate("a", "b", "q");
+  expect(out).toContain("Stopped early: cancelled");
+  expect(e.running).toBe(false);
+  // The aborted controller is dropped, so a later debate starts clean instead of throwing "interrupted".
+  const again = await twoAgentEngine(sevenReplies).debate("a", "b", "q");
+  expect(again).toContain("## Synthesis");
+  const next = await e.debate("a", "b", "q");
+  expect(next).not.toContain("interrupted");
 });
 
 test("/model validates its arguments before touching the engine", async () => {
@@ -131,17 +199,17 @@ test("a file without frontmatter still works, named after the file", () => {
 
 test("a user command overrides a built-in of the same name", async () => {
   const dir = mkdtempSync(join(tmpdir(), "niti-cmds-"));
-  writeFileSync(join(dir, "undo.md"), "---\ndescription: mine\n---\nbody\n");
+  writeFileSync(join(dir, "rewind.md"), "---\ndescription: mine\n---\nbody\n");
   const r = new CommandRegistry([...BUILTIN_COMMANDS, ...loadCommands(dir)]);
-  expect(r.list().find((c) => c.name === "undo")?.description).toBe("mine");
-  expect(r.list().filter((c) => c.name === "undo")).toHaveLength(1);
+  expect(r.list().find((c) => c.name === "rewind")?.description).toBe("mine");
+  expect(r.list().filter((c) => c.name === "rewind")).toHaveLength(1);
 });
 
 test("list() is what a client renders for autocomplete", () => {
   const names = new CommandRegistry(BUILTIN_COMMANDS).list().map((c) => c.name);
   // Order matters: it's the order the TUI's "/" menu offers them in, and /help is appended last.
   expect(names).toEqual([
-    "usage", "auto", "manual", "cancel", "undo", "rewind", "branch", "model", "sessions",
+    "usage", "auto", "manual", "cancel", "rewind", "branch", "model", "sessions",
     "agents", "tasks", "skills", "mcp", "lsp", "permissions", "cost", "status", "debate", "export", "resume", "clear", "init",
     "help",
   ]);
@@ -198,7 +266,31 @@ test("/clear empties the board, and refuses while work is running", async () => 
   e.orch.addTask("write the parser");
   e.orch.addTask("write its tests");
 
-  expect(await r.run(e, "clear")).toEqual({ ok: true, message: "cleared 2 task(s)" });
+  expect(await r.run(e, "clear")).toEqual({ ok: true, message: "session cleared (2 tasks dropped)" });
   expect(e.orch.all).toHaveLength(0);
   expect((await r.run(e, "resume")).message).toMatch(/nothing left to resume/);
+});
+
+test("/clear is a full reset: ids, usage, notes, undo stack, stored sessions and the replay buffer", async () => {
+  const store = new SessionStore(openDb(":memory:"));
+  const e = engine(store);
+  const r = new CommandRegistry(BUILTIN_COMMANDS);
+  e.orch.addTask("one");
+  e.history.push({ goal: "g", outcome: "o" });
+  e.usage.record("a", 1000, 200);
+  e.messageBus.remember("a", "k", "v");
+  const sid = store.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  store.checkpoint(sid, join(tmpdir(), "niti-clear-x"), null);
+  e.hub.publish({ kind: "theme", theme: "old" });
+
+  await r.run(e, "clear");
+
+  expect(e.history).toHaveLength(0);
+  expect(e.usage.totals().calls).toBe(0);
+  expect(e.messageBus.recall()).toEqual([]);
+  expect(e.orch.addTask("fresh").id).toBe("t1");
+  expect(store.listSessions()).toHaveLength(0); // archived, so hidden
+  expect(store.listCheckpoints()).toHaveLength(0);
+  // What survives in the replay buffer is the reset marker and the zeroed usage that follows it.
+  expect(e.hub.replay(0).map((ev) => ev.kind)).toEqual(["session_reset", "usage"]);
 });

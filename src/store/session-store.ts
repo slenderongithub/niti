@@ -1,4 +1,5 @@
-import { rmSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { Turn, ToolCall, ToolResult, Usage } from "../providers/provider.ts";
 import type { AgentMessage } from "../messaging/message-bus.ts";
@@ -10,6 +11,12 @@ export type PartType = "text" | "tool_call" | "tool_result" | "raw" | "file_ref"
 export interface Part {
   type: PartType;
   content: unknown; // stored as JSON
+}
+
+export interface RewindStep {
+  path: string; // absolute
+  action: "restored" | "deleted" | "skipped"; // skipped: the file's directory no longer exists
+  agentId?: string; // whose write this reverted, when the session is known
 }
 
 export interface SessionInput {
@@ -293,23 +300,41 @@ export class SessionStore {
       .run(CHECKPOINT_KEEP);
   }
 
-  // Revert the most recent recorded write (LIFO) — one undo = one prior write, not "undo the whole
+  // Revert the most recent recorded write (LIFO) — one step = one prior write, not "undo the whole
   // task". Restores content, or deletes the file if it didn't exist before. Doing the filesystem
-  // work here keeps every caller (CLI, server, TUI) from re-implementing it.
-  undoLast(sessionId?: string): { path: string; action: "restored" | "deleted" } | undefined {
-    const row = (
-      sessionId
-        ? this.db.query("SELECT id, path, content FROM checkpoints WHERE session_id = ? ORDER BY id DESC LIMIT 1").get(sessionId)
-        : this.db.query("SELECT id, path, content FROM checkpoints ORDER BY id DESC LIMIT 1").get()
-    ) as { id: number; path: string; content: string | null } | null;
-    if (!row) return undefined;
-    this.db.query("DELETE FROM checkpoints WHERE id = ?").run(row.id);
-    if (row.content === null) {
-      rmSync(row.path, { force: true });
-      return { path: row.path, action: "deleted" };
+  // work here keeps every caller (CLI, server, TUI) from re-implementing it. `since` bounds it to
+  // this session's writes: the table outlives restarts, and a fresh launch must not be able to
+  // revert last week's edit. The row goes only after the file work lands, so a failed write
+  // leaves the step on the stack; a checkpoint whose directory is gone (a merged or discarded
+  // worktree) can never succeed, so it is dropped and reported as skipped rather than blocking
+  // every step behind it.
+  undoLast(sessionId?: string, since = 0): RewindStep | undefined {
+    const where = ["c.created_at >= ?"];
+    const args: (string | number)[] = [since];
+    if (sessionId) {
+      where.push("c.session_id = ?");
+      args.push(sessionId);
     }
-    writeFileSync(row.path, row.content);
-    return { path: row.path, action: "restored" };
+    const row = this.db
+      .query(
+        `SELECT c.id, c.path, c.content, s.agent_id AS agent_id FROM checkpoints c
+         LEFT JOIN sessions s ON s.id = c.session_id WHERE ${where.join(" AND ")} ORDER BY c.id DESC LIMIT 1`,
+      )
+      .get(...args) as { id: number; path: string; content: string | null; agent_id: string | null } | null;
+    if (!row) return undefined;
+    const agentId = row.agent_id ?? undefined;
+    let action: RewindStep["action"];
+    if (!existsSync(dirname(row.path))) {
+      action = "skipped";
+    } else if (row.content === null) {
+      rmSync(row.path, { force: true });
+      action = "deleted";
+    } else {
+      writeFileSync(row.path, row.content);
+      action = "restored";
+    }
+    this.db.query("DELETE FROM checkpoints WHERE id = ?").run(row.id);
+    return { path: row.path, action, agentId };
   }
 
   // Read-only preview of what a rewind would touch, most-recent write first.
@@ -322,19 +347,32 @@ export class SessionStore {
     return rows.map((r) => ({ id: r.id, path: r.path, createdAt: r.created_at }));
   }
 
-  // /rewind: the same restore-then-delete undoLast does, n times, in one transaction — either the
-  // whole rewind applies or (on a DB error) none of it does. Stops early if there are fewer than n
-  // checkpoints to pop.
-  rewindN(n: number, sessionId?: string): { path: string; action: "restored" | "deleted" }[] {
-    const results: { path: string; action: "restored" | "deleted" }[] = [];
+  // /rewind: undoLast n times in one transaction, stopping early if there are fewer than n
+  // checkpoints. The transaction covers the checkpoint rows only — files already restored stay
+  // restored if a later step throws, and re-running is safe since a restore is idempotent.
+  rewindN(n: number, sessionId?: string, since = 0): RewindStep[] {
+    const results: RewindStep[] = [];
     const run = this.db.transaction(() => {
       for (let i = 0; i < n; i++) {
-        const r = this.undoLast(sessionId);
+        const r = this.undoLast(sessionId, since);
         if (!r) break;
         results.push(r);
       }
     });
     run();
     return results;
+  }
+
+  // /clear: forget the undo stack, the agent-to-agent trail and the team notes, and archive every
+  // live conversation (listSessions already hides archived rows). The audit log is deliberately
+  // untouched — it is tamper-evident, and "clear my screen" must not be a way to erase it.
+  clearSession(): void {
+    const now = Date.now();
+    this.db.transaction(() => {
+      this.db.query("DELETE FROM checkpoints").run();
+      this.db.query("DELETE FROM bus_messages").run();
+      this.db.query("DELETE FROM notes").run();
+      this.db.query("UPDATE sessions SET time_archived = ?, updated_at = ? WHERE time_archived IS NULL").run(now, now);
+    })();
   }
 }

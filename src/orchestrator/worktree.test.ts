@@ -1,9 +1,9 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isGitRepo, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree } from "./worktree.ts";
+import { isGitRepo, snapshotBranch, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree } from "./worktree.ts";
 
 function initRepo(): string {
   const root = mkdtempSync(join(tmpdir(), "niti-worktree-"));
@@ -112,4 +112,34 @@ test("mergeFiles with an empty selection fails clearly instead of silently doing
   const result = await mergeFiles(repo, handle.branch, []);
   expect(result.ok).toBe(false);
   expect(result.message).toContain("no files selected");
+});
+
+test("snapshotBranch records uncommitted and untracked work on a branch without touching the tree", async () => {
+  const repo = initRepo();
+  writeFileSync(join(repo, "README.md"), "edited by an agent\n");
+  writeFileSync(join(repo, "new.txt"), "brand new\n");
+  const git = (...a: string[]) => execFileSync("git", a, { cwd: repo, encoding: "utf8" }).trim();
+  const headBefore = git("rev-parse", "HEAD");
+  const branchBefore = git("rev-parse", "--abbrev-ref", "HEAD");
+
+  const r = await snapshotBranch(repo, "before-rewind");
+
+  expect(r.ok).toBe(true);
+  // The work is still exactly where the agents left it…
+  expect(readFileSync(join(repo, "README.md"), "utf8")).toBe("edited by an agent\n");
+  expect(existsSync(join(repo, "new.txt"))).toBe(true);
+  expect(git("rev-parse", "HEAD")).toBe(headBefore);
+  expect(git("rev-parse", "--abbrev-ref", "HEAD")).toBe(branchBefore);
+  expect(git("status", "--porcelain")).toContain("?? new.txt"); // still untracked: the real index wasn't used
+  // …and also reachable from the branch.
+  expect(git("show", "before-rewind:README.md")).toBe("edited by an agent");
+  expect(git("show", "before-rewind:new.txt")).toBe("brand new");
+  expect(git("rev-parse", "before-rewind^")).toBe(headBefore);
+});
+
+test("snapshotBranch on a clean tree points the branch at HEAD, and refuses names that exist or are invalid", async () => {
+  const repo = initRepo();
+  expect((await snapshotBranch(repo, "clean")).message).toContain("nothing uncommitted");
+  expect((await snapshotBranch(repo, "clean")).ok).toBe(false); // already exists
+  expect((await snapshotBranch(repo, "bad name..")).ok).toBe(false);
 });

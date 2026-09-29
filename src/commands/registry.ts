@@ -63,15 +63,8 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
-    name: "undo",
-    description: "Revert the most recent file write an agent made",
-    async run(engine) {
-      return { ok: true, message: engine.undo() };
-    },
-  },
-  {
     name: "rewind",
-    description: "Revert the last N file writes at once (default 1): /rewind [n]",
+    description: "Revert the last N file writes an agent made this session (default 1; files only, not shell effects): /rewind [n]",
     async run(engine, args) {
       const n = Math.max(1, parseInt(args.trim(), 10) || 1);
       return { ok: true, message: engine.rewind(n) };
@@ -241,14 +234,19 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: "debate",
-    description: "Have two agents debate a question and return a synthesis: /debate <agentA> <agentB> <question>",
+    description: "Have two agents debate a question, streaming the exchange and ending in a synthesis: /debate <agentA> <agentB> <question>",
     async run(engine, args) {
       const m = args.trim().match(/^(\S+)\s+(\S+)\s+(.+)$/s);
       if (!m) return { ok: false, message: "usage: /debate <agentA> <agentB> <question>" };
       const [, a, b, question] = m;
       if (!engine.configs.some((c) => c.id === a)) return { ok: false, message: `no such agent: ${a}` };
       if (!engine.configs.some((c) => c.id === b)) return { ok: false, message: `no such agent: ${b}` };
-      return { ok: true, message: await engine.debate(a, b, question) };
+      if (a === b) return { ok: false, message: "a debate needs two different agents" };
+      if (engine.running) return { ok: false, message: "a task is running — cancel it first, or wait for it to finish" };
+      // Seven sequential model calls: far too long for one HTTP request, so it runs in the
+      // background and each turn streams into the two agents' panes. /cancel stops it.
+      engine.debate(a, b, question).catch(reportRunFailure(engine));
+      return { ok: true, message: `debate started: ${a} vs ${b} — turns stream into their panes; /cancel stops it` };
     },
   },
   {
@@ -271,14 +269,12 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: "clear",
-    description: "Empty the task board and start from a clean slate",
+    description: "Wipe this session — board, conversation context, usage and screen — and start clean",
     async run(engine) {
       if (engine.running) return { ok: false, message: "cancel the running task first" };
-      const n = engine.orch.all.length;
-      engine.orch.clear();
-      engine.history.length = 0; // a clean slate means the planner forgets the conversation too
+      const n = engine.resetSession();
       saveTasks([]); // otherwise a restart resurrects the board this just cleared
-      return { ok: true, message: `cleared ${n} task(s)` };
+      return { ok: true, message: n ? `session cleared (${n} task${n === 1 ? "" : "s"} dropped)` : "session cleared" };
     },
   },
   {

@@ -15,6 +15,9 @@ export type ServerEventBody =
   | { kind: "lock"; holders: { path: string; holder: string }[] }
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
   | { kind: "theme"; theme: string }
+  // /clear: the session was wiped. A client drops everything it is showing (transcripts, board,
+  // totals, files) — replay can't carry this, because clear() below also empties the buffer.
+  | { kind: "session_reset" }
   // The end of a run, as one card: the lead's summary, suggested next prompts, what changed, and
   // what it took. Published once per work run (not for a chat reply or an answered question).
   | {
@@ -51,6 +54,12 @@ export class EventHub {
     if (this.buffer.length > BUFFER_MAX) this.buffer.shift();
     for (const fn of this.subs) fn(e);
     return e;
+  }
+
+  // Forget every buffered event (seq keeps counting, so a client's cursor stays valid). Without
+  // this a reconnecting client would replay the very history /clear just wiped.
+  clear(): void {
+    this.buffer = [];
   }
 
   // Events with seq strictly greater than `fromSeq` (0 = everything still buffered).

@@ -217,7 +217,7 @@ test("commands are listed and dispatched over HTTP — one registry for every cl
   const { h } = setup();
   track(h);
   const list = await (await fetch(`${h.url}/commands?token=${h.token}`)).json();
-  expect(list.commands.map((c: { name: string }) => c.name)).toContain("undo");
+  expect(list.commands.map((c: { name: string }) => c.name)).toContain("rewind");
 
   const run = async (name: string, args = "") =>
     (await fetch(`${h.url}/commands/${name}?token=${h.token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ args }) })).json();

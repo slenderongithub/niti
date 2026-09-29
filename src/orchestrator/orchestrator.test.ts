@@ -18,14 +18,14 @@ function makeAgent(id: string, bus: Bus): Agent {
   return new Agent(cfg, stub, bus);
 }
 
-test("clear() drops all tasks but keeps id numbering moving forward", () => {
+test("clear() drops all tasks and numbers the next board from t1 again", () => {
   const orch = new Orchestrator();
   orch.addTask("a");
   orch.addTask("b");
   orch.clear();
   expect(orch.all).toHaveLength(0);
   const t = orch.addTask("c");
-  expect(t.id).toBe("t3"); // ids keep counting up, not reused
+  expect(t.id).toBe("t1"); // /clear is a fresh session, so the board starts over
 });
 
 test("claimTask hands one task to one agent, and requeue excludes the agent that failed it", () => {

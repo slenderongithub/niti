@@ -341,6 +341,7 @@ export class Engine {
       stopWatching();
       saveTasks(this.orch.all); // persist so `niti resume` can reload
       this.busy = false;
+      this.abortCtl = undefined; // an aborted controller left behind made every later ask() throw "interrupted"
       if (this.worktreeEnabled) for (const a of this.agents) a.setRoot(this.root); // LSP/watcher never left the real root
       this.emitUsage();
       if (summarize()) {
@@ -456,29 +457,56 @@ export class Engine {
     this.approvals.denyAll();
   }
 
-  // Revert the most recent file write an agent made (LIFO, one write per call). Returns a
-  // human-readable result — there's nothing to undo before any agent has written anything.
-  undo(): string {
-    const result = this.store?.undoLast();
-    if (!result) return this.store ? "nothing to undo" : "undo needs a session store (run through the CLI or server)";
-    const shown = relative(this.root, result.path) || result.path;
-    const message = `${result.action} ${shown}`;
-    this.bus.publish({ agentId: "orchestrator", type: "file_edit", payload: `undo: ${message}`, time: Date.now() });
-    return message;
+  // When this session began — construction, or the last /clear. /rewind only reaches writes from
+  // after it: the checkpoint table outlives restarts, and a fresh launch must not be able to
+  // revert last week's edit.
+  private sessionStart = Date.now();
+
+  // /rewind [n]: revert the last n file writes an agent made this session (see
+  // SessionStore.rewindN). Files only — a shell command's effects were never checkpointed. Refused
+  // mid-run, where it would race the very writes it reverts. Each step is published under the
+  // agent that made the write, so the TUI's Files panel and that agent's transcript follow it.
+  rewind(n: number): string {
+    if (!this.store) return "rewind needs a session store (run through the CLI or server)";
+    if (this.busy) return "a task is running — cancel it first, or wait for it to finish";
+    const results = this.store.rewindN(n, undefined, this.sessionStart);
+    if (results.length === 0) return "nothing to rewind";
+    const shown = results.map((r) => ({ ...r, rel: relative(this.root, r.path) || r.path }));
+    for (const r of shown) {
+      this.bus.publish({
+        agentId: r.agentId ?? "orchestrator",
+        type: "file_edit",
+        payload: `rewind: ${r.action} ${r.rel}`,
+        time: Date.now(),
+        path: r.rel,
+        phase: "end",
+      });
+    }
+    const summary = shown.map((r) => (r.action === "skipped" ? `skipped ${r.rel} (its directory is gone)` : `${r.action} ${r.rel}`)).join("\n  ");
+    return results.length === 1 ? `rewound 1 step: ${summary}` : `rewound ${results.length} steps:\n  ${summary}`;
   }
 
-  // /rewind [n]: undo() extended to n steps, applied atomically (see SessionStore.rewindN). n=1
-  // behaves exactly like undo().
-  rewind(n: number): string {
-    const results = this.store?.rewindN(n);
-    if (!results) return "rewind needs a session store (run through the CLI or server)";
-    if (results.length === 0) return "nothing to rewind";
-    for (const r of results) {
-      const shown = relative(this.root, r.path) || r.path;
-      this.bus.publish({ agentId: "orchestrator", type: "file_edit", payload: `rewind: ${r.action} ${shown}`, time: Date.now() });
-    }
-    const summary = results.map((r) => `${r.action} ${relative(this.root, r.path) || r.path}`).join(", ");
-    return `rewound ${results.length} step(s): ${summary}`;
+  // /clear: a fresh session, not just an empty board. Everything that carries the last session
+  // forward is dropped — the board, the planner's conversation, token counters, agent-to-agent
+  // mail and team notes, the undo stack, the stored conversations (archived, not deleted) and the
+  // replay buffer — then one `session_reset` tells every connected client to wipe its view.
+  // Kept on purpose: the approval "always allow" scopes, the audit log, config and the roster.
+  resetSession(): number {
+    const n = this.orch.all.length;
+    this.orch.clear();
+    this.history.length = 0;
+    this.lastGoal = "";
+    this.lastSummary = undefined;
+    this.lastNext = [];
+    this.usage.reset();
+    this.messageBus.reset();
+    for (const a of this.agents) a.resetSession();
+    this.store?.clearSession();
+    this.sessionStart = Date.now();
+    this.hub.clear();
+    this.hub.publish({ kind: "session_reset" });
+    this.emitUsage(); // zeros, so a client's totals don't wait for the next call to update
+    return n;
   }
 
   // /debate: two agents (each already carrying its own provider/model, so this works cross-provider
@@ -487,37 +515,65 @@ export class Engine {
   // consensus recommendation. Each turn is published to the bus so it streams live in both the TUI
   // and the web dashboard, same as any agent message. Explicit agent ids only — no auto-selection
   // heuristic, since the caller (the /debate command) already knows the roster.
+  //
+  // It is a run like any other while it lasts: it holds `busy` (so a task, another debate or a
+  // model switch can't collide with it), announces itself with session events (so clients show a
+  // run in progress) and owns the abort controller (so /cancel stops it between model calls). A
+  // provider failure or a cancel ends it early, and what was said so far is still returned.
   async debate(agentAId: string, agentBId: string, question: string, rounds = 3): Promise<string> {
     const a = this.byId.get(agentAId);
     const b = this.byId.get(agentBId);
     if (!a || !b) return `no such agent: ${!a ? agentAId : agentBId}`;
     if (a === b) return "debate needs two different agents";
+    if (this.busy) return "a task is running — cancel it first, or wait for it to finish";
+
+    this.busy = true;
+    this.cancelled = false;
+    this.abortCtl = new AbortController();
+    this.hub.publish({ kind: "session", state: "started", goal: `debate: ${question}` });
 
     const turns: string[] = [];
-    for (let i = 0; i < rounds * 2; i++) {
-      const [speaker, speakerId, otherId] = i % 2 === 0 ? ([a, agentAId, agentBId] as const) : ([b, agentBId, agentAId] as const);
-      const prompt = [
-        `You are ${speakerId}, debating this question with ${otherId}:`,
-        question,
-        "",
-        turns.length ? `Conversation so far:\n${turns.join("\n\n")}` : "You go first.",
-        "",
-        "Respond to the other side's last point — agree or push back, with a reason. A few sentences, no tools.",
-      ].join("\n");
-      const reply = await speaker.ask(prompt);
-      turns.push(`${speakerId}: ${reply}`);
-      this.bus.publish({ agentId: speakerId, type: "message", payload: reply, time: Date.now() });
+    let synthesis = "";
+    let stopped: string | undefined;
+    try {
+      for (let i = 0; i < rounds * 2; i++) {
+        const [speaker, speakerId, otherId] = i % 2 === 0 ? ([a, agentAId, agentBId] as const) : ([b, agentBId, agentAId] as const);
+        const prompt = [
+          `You are ${speakerId}, debating this question with ${otherId}:`,
+          question,
+          "",
+          turns.length ? `Conversation so far:\n${turns.join("\n\n")}` : "You go first.",
+          "",
+          "Respond to the other side's last point — agree or push back, with a reason. A few sentences, no tools.",
+        ].join("\n");
+        const reply = await speaker.ask(prompt);
+        turns.push(`${speakerId}: ${reply}`);
+        this.bus.publish({ agentId: speakerId, type: "message", payload: reply, time: Date.now() });
+      }
+      synthesis = await a.ask(
+        [`Debate transcript on: ${question}`, "", turns.join("\n\n"), "", "Synthesize a consensus recommendation from this exchange — what should actually be done, and why."].join("\n"),
+      );
+      this.bus.publish({ agentId: agentAId, type: "message", payload: `[debate synthesis] ${synthesis}`, time: Date.now() });
+    } catch (err) {
+      stopped = this.cancelled ? "cancelled" : err instanceof Error ? err.message : String(err);
+      if (!this.cancelled) this.bus.publish({ agentId: agentAId, type: "error", payload: `debate stopped: ${stopped}`, time: Date.now() });
+    } finally {
+      this.busy = false;
+      this.abortCtl = undefined;
+      // `message` events mark an agent as working and nothing else marks it finished.
+      for (const id of [agentAId, agentBId]) this.bus.publish({ agentId: id, type: "done", payload: "", time: Date.now() });
+      this.hub.publish({ kind: "session", state: this.cancelled ? "cancelled" : "ended" });
     }
 
-    const synthesis = await a.ask(
-      [`Debate transcript on: ${question}`, "", turns.join("\n\n"), "", "Synthesize a consensus recommendation from this exchange — what should actually be done, and why."].join("\n"),
-    );
-    this.bus.publish({ agentId: agentAId, type: "message", payload: `[debate synthesis] ${synthesis}`, time: Date.now() });
-
     // The full exchange, not just the verdict — seeing how the two sides got there is the point of
-    // a debate. Also guarantees a multi-line result, so it opens the TUI's pager rather than being
-    // squeezed into the one-line footer.
-    return [`## Debate: ${agentAId} vs ${agentBId}`, "", turns.join("\n\n"), "", "## Synthesis", "", synthesis].join("\n");
+    // a debate.
+    return [
+      `## Debate: ${agentAId} vs ${agentBId}`,
+      "",
+      turns.join("\n\n"),
+      "",
+      ...(stopped ? [`## Stopped early: ${stopped}`] : ["## Synthesis", "", synthesis]),
+    ].join("\n");
   }
 
   // Web control center: inject a message into one specific already-running agent, so it's picked

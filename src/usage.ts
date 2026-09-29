@@ -33,6 +33,12 @@ export class UsageTracker {
     this.byAgent.set(agentId, u);
   }
 
+  // /clear: a fresh session starts its counters from zero. Rate limits are the provider's, not the
+  // session's, so they stay.
+  reset(): void {
+    this.byAgent.clear();
+  }
+
   recordRateLimit(provider: string, rl: { remainingTokens?: number; remainingRequests?: number }): void {
     this.rateLimits.set(provider, { provider, ...rl });
   }

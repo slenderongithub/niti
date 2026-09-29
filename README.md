@@ -180,7 +180,7 @@ Both pages follow the theme you pick in the terminal.
 - **Guarded tools** — `read_file`, `write_file`, `edit`, `shell` and read-only search, gated per
   agent and by a permission policy; paths are jailed to the project; dangerous commands always ask.
 - **Picks up where you left off** — every turn checkpoints to SQLite; `niti-core resume` continues
-  unfinished work, and `/undo` / `/rewind` revert writes.
+  unfinished work, and `/rewind [n]` reverts the last n file writes.
 - **Extensible** — MCP servers and language servers join the same tool loop, under the same gates.
 
 The full architecture record, the verification history and what is deliberately out of scope live

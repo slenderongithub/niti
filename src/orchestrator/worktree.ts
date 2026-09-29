@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 // Git isolation for a run: agents write into a throwaway worktree/branch instead of the real root,
@@ -14,9 +14,9 @@ export interface WorktreeHandle {
 
 // spawn (never exec/shell:true) with args as an array — no shell metacharacter injection, same
 // pattern as tools.ts's shell().
-function git(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+function git(cwd: string, args: string[], env?: Record<string, string>): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((res) => {
-    const child = spawn("git", args, { cwd });
+    const child = spawn("git", args, { cwd, env: env ? { ...process.env, ...env } : undefined });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -109,27 +109,46 @@ export async function commitPending(handle: WorktreeHandle, message = "niti: wor
   if (r.code !== 0) throw new Error(`git commit failed: ${r.stderr.trim() || r.stdout.trim()}`);
 }
 
-// /branch: snapshot the current working tree onto a new branch, then switch straight back — so
-// the current line of work is preserved before a /rewind discards it going forward. Not
-// multi-timeline branching (there's no per-checkpoint branch model in the schema); just a commit
-// reachable by name if the snapshot is ever wanted back.
+// /branch: record the working tree — uncommitted and untracked files included — as a commit on a
+// new branch, so this line of work stays reachable by name before a /rewind discards it going
+// forward. Read-only as far as the checkout goes: the commit is built from a scratch index, so
+// HEAD, the real index and every file in the tree are exactly as they were. (The first version
+// committed onto the new branch and checked the old one back out, which pulled the agents'
+// uncommitted work out of the tree it was meant to protect.)
 export async function snapshotBranch(root: string, name: string): Promise<{ ok: boolean; message: string }> {
-  const created = await git(root, ["checkout", "-b", name]);
-  if (created.code !== 0) return { ok: false, message: created.stderr.trim() || created.stdout.trim() };
-  await git(root, ["add", "-A"]);
-  const staged = await git(root, ["diff", "--cached", "--quiet"]); // exit 0 = nothing to commit
-  let message = `branch '${name}' created at the current commit (nothing uncommitted to snapshot)`;
-  if (staged.code !== 0) {
-    const commit = await git(root, ["commit", "-q", "-m", `niti: branch snapshot (${name})`]);
-    if (commit.code !== 0) {
-      await git(root, ["checkout", "-"]); // best-effort return before surfacing the failure
-      return { ok: false, message: commit.stderr.trim() || commit.stdout.trim() };
+  const valid = await git(root, ["check-ref-format", "--branch", name]);
+  if (valid.code !== 0) return { ok: false, message: `'${name}' is not a valid branch name` };
+  const exists = await git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]);
+  if (exists.code === 0) return { ok: false, message: `branch '${name}' already exists` };
+  const head = await git(root, ["rev-parse", "--verify", "HEAD"]);
+  if (head.code !== 0) return { ok: false, message: "nothing to snapshot yet: this repository has no commits" };
+
+  const gitDir = await git(root, ["rev-parse", "--absolute-git-dir"]);
+  const index = join(gitDir.stdout.trim(), `niti-snapshot-${process.pid}-${Date.now()}.index`);
+  const env = { GIT_INDEX_FILE: index };
+  try {
+    for (const step of [["read-tree", "HEAD"], ["add", "-A"]]) {
+      const r = await git(root, step, env);
+      if (r.code !== 0) return { ok: false, message: r.stderr.trim() || r.stdout.trim() };
     }
-    message = `snapshotted current state to branch '${name}'`;
+    const tree = await git(root, ["write-tree"], env);
+    if (tree.code !== 0) return { ok: false, message: tree.stderr.trim() || tree.stdout.trim() };
+    const headTree = await git(root, ["rev-parse", "HEAD^{tree}"]);
+    const clean = tree.stdout.trim() === headTree.stdout.trim();
+    const target = clean
+      ? head.stdout.trim()
+      : (await git(root, ["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", `niti: branch snapshot (${name})`])).stdout.trim();
+    const made = await git(root, ["branch", name, target]);
+    if (made.code !== 0) return { ok: false, message: made.stderr.trim() || made.stdout.trim() };
+    return {
+      ok: true,
+      message: clean
+        ? `branch '${name}' created at the current commit (nothing uncommitted to snapshot)`
+        : `snapshotted current state to branch '${name}' — your working tree is untouched`,
+    };
+  } finally {
+    rmSync(index, { force: true });
   }
-  const back = await git(root, ["checkout", "-"]);
-  if (back.code !== 0) return { ok: false, message: `branch created, but couldn't switch back: ${back.stderr.trim()}` };
-  return { ok: true, message };
 }
 
 // Selective merge: bring only the named files' content in from the worktree branch, leaving

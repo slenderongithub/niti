@@ -310,6 +310,15 @@ export class Agent {
   // finishing clear "busy" while the other is still active.
   private inFlightCount = 0;
   private lastNotesVersion = -1; // cursor into the shared notes board, so injectNotes only fires on change
+
+  // /clear: back to the state of a freshly built agent. Conversation turns are per-run locals, so
+  // only these few survive between runs.
+  resetSession(): void {
+    this.lastText = "";
+    this.lastError = "";
+    this.forkCount = 0;
+    this.lastNotesVersion = -1;
+  }
   private todos: TodoItem[] = []; // this run's working checklist (the `todo` tool)
   private todosLost = false; // set when compaction summarized the todo call away, cleared once re-stated
   // Cached and only rebuilt when something that could change the result actually has — a
@@ -1255,7 +1264,7 @@ export class Agent {
           if (checkpointing) {
             // Re-read under the lock. `before` was captured *before* the approval prompt, and the
             // user may well have edited the file while deciding — the write itself re-reads, so it
-            // applies correctly, but checkpointing the stale copy meant a later /undo silently
+            // applies correctly, but checkpointing the stale copy meant a later /rewind silently
             // reverted their edit too and reported success. The lock is held here, so nothing can
             // slip in between this snapshot and the write it protects.
             atWrite = await this.readForCheckpoint(writeRel!);
@@ -1282,7 +1291,7 @@ export class Agent {
       }
       // `file_edit` means a file changed. Publishing it for read_file, hover, diagnostics and shell
       // made the dashboard's edit feed and the TUI's activity line report reads as modifications —
-      // and /undo's affordance appear for calls that wrote nothing.
+      // and the rewind affordance appear for calls that wrote nothing.
       const kind = WRITE_TOOLS.has(call.name) ? "file_edit" : "tool_call";
       // Only reached when the write actually landed (runTool throws on a failed one), so a run
       // whose every edit missed is not sent off to a build that cannot have changed.

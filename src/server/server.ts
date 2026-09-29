@@ -361,7 +361,6 @@ export function startServer(
         return json({ ok: true });
       }
 
-      if (p === "/undo" && method === "POST") return json({ ok: true, message: engine.undo() });
 
       // Slash commands: one registry, every client. GET to populate a menu/autocomplete, POST to run.
       if (p === "/commands" && method === "GET") return json({ commands: commands.list() });

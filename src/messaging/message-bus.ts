@@ -45,6 +45,16 @@ export class MessageBus {
   private notes = new Map<string, AgentMessage>();
   private notesVersion = 0;
 
+  // /clear: forget every queued message, the notes board and the per-pair counters. The roster
+  // stays — the same agents are still on the team. notesVersion moves forward (never back to 0),
+  // so an agent that had already read the old board sees a change and drops what it cached.
+  reset(): void {
+    for (const id of this.inboxes.keys()) this.inboxes.set(id, []);
+    this.notes.clear();
+    this.counts.clear();
+    this.notesVersion++;
+  }
+
   // Track who exists so broadcasts know their recipients and unknown targets are rejected.
   register(agentId: string): void {
     this.roster.add(agentId);
