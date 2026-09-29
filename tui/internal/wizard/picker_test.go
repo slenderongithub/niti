@@ -362,15 +362,6 @@ func TestChoosingANewTeamFallsThroughToTheSizePrompt(t *testing.T) {
 	}
 }
 
-func TestBackingOutOfTheKeepPromptKeepsRatherThanQuitting(t *testing.T) {
-	client, _, _ := fakeCore(t)
-	next, _ := withExisting(t, client).back()
-	m := next.(Picker)
-	if !m.Completed || !m.Kept {
-		t.Fatalf("esc on the keep prompt should keep the team, got Completed=%v Kept=%v", m.Completed, m.Kept)
-	}
-}
-
 func TestWantsExit(t *testing.T) {
 	list, free := Picker{stage: "size"}, Picker{stage: "desc"}
 	for typed, want := range map[string]bool{"/exit": true, "Quit": true, "3": false} {
@@ -445,5 +436,40 @@ func TestSavedTeamShowsAWrappedBoundedDetailsBlock(t *testing.T) {
 	big.width, big.height = 90, 30
 	if after := cardRows(big.View()); after != before {
 		t.Fatalf("a bigger team changed the card height: %d -> %d", before, after)
+	}
+}
+
+// Before the session, only enter moves forward: esc steps back (and on the first step stays put),
+// and nothing but an explicit choice launches the team.
+func TestEscNeverLeavesSetupForTheSession(t *testing.T) {
+	client, saved, _ := fakeCore(t)
+	esc := tea.KeyMsg{Type: tea.KeyEsc}
+
+	m := withExisting(t, client)
+	next, cmd := m.Update(esc)
+	m = next.(Picker)
+	if m.Completed || m.stage != "team" || cmd != nil {
+		t.Fatalf("esc on 'Your team' must stay put, got stage=%q completed=%v", m.stage, m.Completed)
+	}
+
+	// Re-pick, go a few steps in, then esc all the way back: it must land on the first step, never
+	// in the session.
+	m.list.Move(1)
+	m = step(t, m, "")
+	for i := 0; i < 6; i++ {
+		next, _ = m.Update(esc)
+		m = next.(Picker)
+	}
+	if m.Completed || m.stage != "team" {
+		t.Fatalf("esc back through setup must end on the first step, got stage=%q completed=%v", m.stage, m.Completed)
+	}
+	if len(saved()) != 0 {
+		t.Error("backing out must not save a team")
+	}
+
+	fresh := loaded(t, client)
+	next, cmd = fresh.Update(esc)
+	if next.(Picker).quitting || cmd != nil {
+		t.Error("esc on a fresh first question must not quit niti")
 	}
 }

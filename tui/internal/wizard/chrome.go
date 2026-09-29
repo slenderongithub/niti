@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/niti/tui/internal/theme"
@@ -44,10 +45,14 @@ func widest(lines ...string) int {
 
 // screen is the setup frame — see ui.SetupScreen. The step name heads the panel, the hint sits
 // muted under the content, and the footer lists the keys for this kind of step.
-func screen(w, h int, title string, cardW int, body, hint, input string) string {
+// On the first step there is nothing to go back to, so esc is left out.
+func screen(w, h int, title string, cardW int, body, hint, input string, first bool) string {
 	keys := []ui.Key{{"↑↓", "Choose"}, {"enter", "Confirm"}, {"esc", "Back"}, {"^c", "Quit"}}
 	if input != "" && !strings.Contains(body, "▸ ") {
 		keys = []ui.Key{{"enter", "Confirm"}, {"↑↓", "Choose"}, {"esc", "Back"}, {"^c", "Quit"}}
+	}
+	if first {
+		keys = slices.DeleteFunc(keys, func(k ui.Key) bool { return k[0] == "esc" })
 	}
 	return ui.SetupScreen(w, h, "Set up your team", title, cardW+4, body, hint, input, keys)
 }

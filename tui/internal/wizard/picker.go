@@ -127,11 +127,8 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
-			// On the keep-or-repick stage, backing out means "I didn't want to change anything",
-			// not "quit niti" — the saved team is right there and refusing to use it is absurd.
-			if m.stage == "team" {
-				return m.keepExisting()
-			}
+			// Quit, as the footer says, from every setup step. Only enter moves on into the session —
+			// a key meant to back out used to launch the whole team with whatever was saved.
 			m.quitting = true
 			return m, tea.Quit
 		case "up", "ctrl+p", "shift+tab":
@@ -141,8 +138,11 @@ func (m Picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.Move(1)
 			return m, nil
 		case "esc":
-			if m.stage == "size" && len(m.existing) == 0 {
-				return m.quit() // first question, nowhere to go back to
+			// esc only ever goes back a step. On the first step there is nowhere to go, so it stays —
+			// it used to quit niti here, and on "Your team" it launched the session.
+			if m.firstStep() {
+				m.status = "this is the first step — enter to continue, ctrl+c to quit"
+				return m, nil
 			}
 			return m.back()
 		case "enter":
@@ -315,8 +315,6 @@ func (m Picker) back() (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.input.SetValue("")
 	switch m.stage {
-	case "team":
-		return m.keepExisting() // esc here is "leave it alone", same as ctrl+c
 	case "size":
 		// esc on the first question used to do nothing at all. With a saved roster there is now
 		// somewhere to go back *to*.
@@ -601,10 +599,10 @@ func (m Picker) View() string {
 		// The hint is the whole point: without it the screen states a problem and offers no verb.
 		return screen(m.width, m.height, "Something went wrong", fit(m.width, widest(m.err)),
 			lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.BgDeep).Render(m.err),
-			"enter retries · ctrl+c quits", "")
+			"enter retries · ctrl+c quits", "", true)
 	}
 	if m.stage == "loading" {
-		return screen(m.width, m.height, "Loading", cardMin, lipgloss.NewStyle().Foreground(theme.Muted).Background(theme.BgDeep).Render("loading the provider catalog…"), "", "")
+		return screen(m.width, m.height, "Loading", cardMin, lipgloss.NewStyle().Foreground(theme.Muted).Background(theme.BgDeep).Render("loading the provider catalog…"), "", "", true)
 	}
 
 	// Two passes: work out how wide the card wants to be from the text that will go in it, then draw
@@ -662,7 +660,7 @@ func (m Picker) View() string {
 	// The prompt is the last line of the card, so it gets the card's width and no more — a textinput
 	// sized to the terminal is what used to blow the card out to full width before anything was typed.
 	m.input.Width = max(inner-2, 8)
-	return screen(m.width, m.height, head, cardW, body, hint, m.input.View())
+	return screen(m.width, m.height, head, cardW, body, hint, m.input.View(), m.firstStep())
 }
 
 // stageText is the per-stage copy: the section heading, the hint under the body, and — for the
@@ -691,4 +689,9 @@ func (m Picker) stageText() (head, hint, fixed string) {
 		return "Lead", "which one looks over everything and decides the chronology?", ""
 	}
 	return "", "", ""
+}
+
+// firstStep is where setup opens: "Your team" with a saved roster, otherwise the size question.
+func (m Picker) firstStep() bool {
+	return m.stage == "team" || (m.stage == "size" && len(m.existing) == 0)
 }
