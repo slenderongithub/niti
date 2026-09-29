@@ -141,3 +141,25 @@ test("a theme event from another client (TUI carousel, another tab) is applied l
   expect(g.storage.get("niti-theme")).toBe("hazard tape");
   expect(g.elFor("theme-menu").innerHTML).toContain("hazard tape ✓");
 });
+
+test("the dropdown offers dark themes only, and light ones only while a light theme is active", async () => {
+  const PAL = [
+    { ...PALETTES[0], name: "graphite" },
+    { ...PALETTES[1], name: "tide" },
+    { ...PALETTES[0], name: "graphite light", light: true },
+    { ...PALETTES[1], name: "tide light", light: true },
+  ];
+  const names = async (serverTheme: string) => {
+    const orig = PALETTES.splice(0, PALETTES.length, ...PAL);
+    try {
+      const t = load({ serverTheme });
+      await settled();
+      await settled();
+      return [...t.elFor("theme-menu").innerHTML.matchAll(/<span>([^<]*)<\/span>/g)].map((m) => m[1].replace(" ✓", ""));
+    } finally {
+      PALETTES.splice(0, PALETTES.length, ...orig);
+    }
+  };
+  expect(await names("graphite")).toEqual(["graphite", "tide"]);
+  expect(await names("tide light")).toEqual(["graphite light", "tide light"]);
+});

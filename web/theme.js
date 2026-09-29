@@ -42,10 +42,15 @@
   // pushed by another client (TUI carousel, another tab) into the full palette object.
   let palettes = [];
 
+  // Dark themes normally, and only their light siblings while light mode is on — the TUI's own rule
+  // (theme.Choices). Light mode is a setting (Config → Light mode), not twenty-four entries in one
+  // dropdown: a browser can still *show* a light theme the TUI set, it just never offers one to pick.
   function renderMenu(current) {
     const menu = $("theme-menu");
     if (!menu) return;
+    const light = !!byName(current)?.light;
     menu.innerHTML = palettes
+      .filter((p) => !!p.light === light)
       .map(
         (p) => `<div class="theme-row" data-name="${esc(p.name)}">
           <span>${esc(p.name)}${p.name === current ? " ✓" : ""}</span>
