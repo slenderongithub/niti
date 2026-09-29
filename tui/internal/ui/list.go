@@ -54,8 +54,6 @@ func (l *List) SetQuery(q string) {
 	l.refilter()
 }
 
-func (l *List) Query() string { return l.query }
-
 func (l *List) refilter() {
 	l.shown = l.shown[:0]
 	q := strings.ToLower(strings.TrimSpace(l.query))

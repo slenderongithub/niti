@@ -403,11 +403,6 @@ func kv(w int, label, val string) string {
 	return truncate(l+txt(theme.Amber, bg).Render(val), w)
 }
 
-func kvHint(w int, label, val, hint string) string {
-	bg := theme.BgDeep
-	return truncate(kv(w, label, val)+txt(theme.Muted, bg).Render("   "+hint), w)
-}
-
 func pad(s string, n int) string {
 	if len(s) >= n {
 		return s
