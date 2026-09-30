@@ -130,18 +130,14 @@ model or message it mid-task. Approvals can be answered here too.
 
 `/graph` maps your project's imports — or, in **Models** mode, the team talking in real time.
 
-<table>
-<tr>
-<td width="33%"><img src="readme_images/graph-project.png" alt="project mode: every file, colored by directory"></td>
-<td width="33%"><img src="readme_images/graph-focus.png" alt="hovering a file highlights what it imports and what imports it"></td>
-<td width="34%"><img src="readme_images/graph-models.png" alt="models mode: each agent, colored by status"></td>
-</tr>
-<tr>
-<td align="center"><sub>Every file, colored by directory</sub></td>
-<td align="center"><sub>Hover to trace a file's imports</sub></td>
-<td align="center"><sub>Models mode: the team, live</sub></td>
-</tr>
-</table>
+<img src="readme_images/graph-project.png" alt="project mode: every file, colored by directory" width="100%">
+<p align="center"><sub><b>Project mode</b> — every file, colored by directory</sub></p>
+
+<img src="readme_images/graph-focus.png" alt="hovering a file highlights what it imports and what imports it" width="100%">
+<p align="center"><sub><b>Hover</b> — trace what a file imports and what imports it</sub></p>
+
+<img src="readme_images/graph-models.png" alt="models mode: each agent, colored by status" width="100%">
+<p align="center"><sub><b>Models mode</b> — the team talking, live</sub></p>
 
 Both pages follow the theme you pick in the terminal.
 
