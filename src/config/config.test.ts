@@ -1,9 +1,8 @@
 import { test, expect } from "bun:test";
 import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadAgents, loadOptions, loadInstructions, loadPermissions, loadMcpServers, saveAgents, setTheme, findProjectRoot } from "./config.ts";
+import { loadAgents, loadOptions, loadInstructions, loadPermissions, loadMcpServers, saveAgents, setTheme, isHomeDir } from "./config.ts";
 
 function writeYaml(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "niti-cfg-"));
@@ -171,16 +170,6 @@ agents:
   expect(loadMcpServers(path)).toEqual([{ name: "code-review", command: "crg", args: undefined }]);
 });
 
-test("findProjectRoot does not climb to an ancestor .niti or a bare .git marker", () => {
-  const root = mkdtempSync(join(tmpdir(), "niti-root-"));
-  mkdirSync(join(root, ".niti"), { recursive: true });
-  mkdirSync(join(root, ".git"), { recursive: true });
-  const deep = join(root, "src", "nested");
-  mkdirSync(deep, { recursive: true });
-  expect(findProjectRoot(deep, "/nonexistent-home")).toBe(deep);
-  expect(findProjectRoot(root, "/nonexistent-home")).toBe(root);
-});
-
 test("saving config preserves comments and unrecognised keys", () => {
   // The picker runs on every launch and the theme carousel writes on every keypress — so a
   // parse→stringify round-trip meant a user who documented their roster lost every comment the
@@ -228,49 +217,12 @@ test("an auto-discovered AGENTS.md is capped, a deliberately listed one is not",
   expect(loadInstructions(["AGENTS.md"], dir, true).length).toBeGreaterThan(100_000);
 });
 
-// The project is the folder niti is launched in; it climbs to a git repo only when launched inside
-// that repo's tracked files. Regression: a stray ~/.git, or a ~/.niti niti planted by itself, swallowed
-// every folder underneath, so an empty project showed a parent folder's files.
-function repo(): { top: string; src: string; fresh: string } {
-  const top = realpathSync(mkdtempSync(join(tmpdir(), "niti-repo-")));
-  mkdirSync(join(top, "src"));
-  mkdirSync(join(top, "fresh"));
-  writeFileSync(join(top, "src", "a.ts"), "x");
-  const run = (...a: string[]) => spawnSync("git", ["-C", top, ...a]);
-  run("init", "-q");
-  run("add", "src/a.ts");
-  return { top, src: join(top, "src"), fresh: join(top, "fresh") };
-}
-
-test("findProjectRoot: inside a repo's tracked files it climbs to the repo root", () => {
-  const { top, src } = repo();
-  expect(findProjectRoot(src, "/nonexistent-home")).toBe(top);
-});
-
-test("findProjectRoot: an untracked/new folder under a repo is its own project", () => {
-  const { fresh } = repo();
-  expect(findProjectRoot(fresh, "/nonexistent-home")).toBe(fresh);
-});
-
-test("findProjectRoot: a folder with its own .niti or .git is the root, and a stray .niti above is ignored", () => {
-  const { top, src } = repo();
-  mkdirSync(join(top, ".niti"));
-  expect(findProjectRoot(src, "/nonexistent-home")).toBe(top); // tracked → repo root, not via .niti
-  const own = join(top, "fresh", ".niti");
-  mkdirSync(own);
-  expect(findProjectRoot(join(top, "fresh"), "/nonexistent-home")).toBe(join(top, "fresh"));
-});
-
-test("findProjectRoot never climbs into $HOME, even a dotfiles repo that tracks the folder", () => {
-  const { top, src } = repo();
-  expect(findProjectRoot(src, top)).toBe(src);
-});
-
-test("the $HOME guard holds when $HOME is a symlink to the real home", () => {
-  const { top, src } = repo();
-  const link = top + "-link";
-  symlinkSync(top, link);
-  expect(findProjectRoot(src, link)).toBe(src);
+test("isHomeDir sees through a symlinked $HOME", () => {
+  const real = realpathSync(mkdtempSync(join(tmpdir(), "niti-home-")));
+  const link = real + "-link";
+  symlinkSync(real, link);
+  expect(isHomeDir(real, link)).toBe(true); // cwd is always a real path; $HOME may not be
+  expect(isHomeDir(join(real, "sub"), link)).toBe(false);
 });
 
 test("an empty agents.yaml does not crash the loaders", () => {
@@ -287,9 +239,3 @@ test("setTheme refuses to overwrite an agents.yaml that is not valid YAML", () =
 });
 
 
-test("findProjectRoot climbs from a large tracked folder (ls-files output exceeds spawnSync's buffer)", () => {
-  const { top, src } = repo();
-  for (let i = 0; i < 20000; i++) writeFileSync(join(src, `padding_for_a_long_listing_${String(i).padStart(6, "0")}.ts`), "");
-  spawnSync("git", ["-C", top, "add", "src"]);
-  expect(findProjectRoot(src, "/nonexistent-home")).toBe(top);
-}, 60_000);

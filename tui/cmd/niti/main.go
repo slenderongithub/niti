@@ -238,44 +238,14 @@ func openCoreLog() (*os.File, string) {
 	return f, path
 }
 
-// projectRoot mirrors the core's findProjectRoot (src/config/config.ts): the folder niti was
-// launched in, climbing to an enclosing git repo only when that folder holds files the repo tracks
-// (so `src/` of a real project finds the project, while a new folder under some stray repo is its
-// own project). $HOME is never climbed to. openCoreLog creates .niti/ here, so a disagreement with
-// the core would plant it in the wrong folder.
+// projectRoot is the folder niti was launched in — the same answer the core gives (it never
+// searches parent folders for a repo or a .niti/), so core.log lands beside the project's own config.
 func projectRoot() string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "."
 	}
-	for _, marker := range []string{".niti", ".git"} {
-		if _, err := os.Stat(filepath.Join(cwd, marker)); err == nil {
-			return cwd
-		}
-	}
-	out, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
-	top := strings.TrimSpace(string(out))
-	if err != nil || top == "" {
-		return cwd
-	}
-	if home, err := os.UserHomeDir(); err == nil && sameDir(top, home) {
-		return cwd
-	}
-	// --error-unmatch: exit 0 only if something under cwd is tracked.
-	if exec.Command("git", "-C", cwd, "ls-files", "--error-unmatch", "--", ".").Run() != nil {
-		return cwd
-	}
-	return top
-}
-
-// sameDir compares two paths through symlinks: cwd is always a real path, $HOME may not be.
-func sameDir(a, b string) bool {
-	ra, errA := filepath.EvalSymlinks(a)
-	rb, errB := filepath.EvalSymlinks(b)
-	if errA != nil || errB != nil {
-		return filepath.Clean(a) == filepath.Clean(b)
-	}
-	return ra == rb
+	return cwd
 }
 
 // streamWithReconnect keeps `events` fed for the life of ctx, reconnecting with backoff whenever

@@ -1,6 +1,5 @@
 import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { spawnSync } from "node:child_process";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { parse, parseDocument, type Document } from "yaml";
 import type { AgentConfig } from "../agent/agent.ts";
@@ -22,30 +21,6 @@ export function isHomeDir(dir: string, home = homedir()): boolean {
     }
   };
   return dir === home || real(dir) === real(home);
-}
-
-// stdout is piped only when the caller reads it: `ls-files` on a big tracked folder prints more than
-// spawnSync's buffer holds, which surfaced as a failure and read as "nothing tracked here".
-const git = (cwd: string, args: string[], wantOutput = false) =>
-  spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", wantOutput ? "pipe" : "ignore", "ignore"] });
-
-// The project is the folder you launched niti in. It climbs to an enclosing git repo only when you
-// are genuinely inside that repo — the launch folder holds files the repo tracks — so running from
-// `src/` of a real project still finds the project, while a new folder that merely happens to sit
-// under some repo (a stray ~/Developer/.git, a dotfiles repo) is its own project instead of being
-// swallowed by it. The earlier rule — nearest ancestor with .niti/ or .git/ — did swallow it, and
-// niti then planted its own .niti/ in the ancestor, so every sibling folder went the same way.
-// $HOME is never climbed to. Call this once at process start, before any loader runs.
-// ponytail: no git on PATH → the launch folder is the project; add a marker walk if that bites.
-export function findProjectRoot(from = process.cwd(), home = homedir()): string {
-  const start = resolvePath(from);
-  if (existsSync(join(start, ".niti")) || existsSync(join(start, ".git"))) return start;
-  const top = git(start, ["rev-parse", "--show-toplevel"], true);
-  const root = top.status === 0 ? top.stdout.trim() : "";
-  if (!root || isHomeDir(root, home)) return start;
-  // --error-unmatch: exit 0 only if something under here is tracked.
-  const tracked = git(start, ["ls-files", "--error-unmatch", "--", "."]);
-  return tracked.status === 0 ? root : start;
 }
 
 // Loads and validates .niti/agents.yaml. User-authored → validate required fields with clear errors.

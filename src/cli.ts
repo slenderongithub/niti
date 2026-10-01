@@ -4,7 +4,7 @@
 import pkg from "../package.json";
 import { makeProvider } from "./providers/factory.ts";
 import { Engine } from "./engine.ts";
-import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions, saveAgents, findProjectRoot } from "./config/config.ts";
+import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions, saveAgents } from "./config/config.ts";
 import { LspRegistry } from "./lsp/registry.ts";
 import { McpManager } from "./mcp/mcp.ts";
 import { setKey } from "./keystore/keystore.ts";
@@ -84,10 +84,9 @@ if (args.length === 1 && /^[a-z][a-z0-9-]*$/.test(args[0]!) && !SUBCOMMANDS.has(
   die(`unknown command '${args[0]}' — if you meant it as a task, quote it: niti-core "${args[0]}"`);
 }
 
-// Before any loader runs: every artefact (.niti/agents.yaml, the SQLite store, session.json) is
-// resolved from cwd, so running from a subdirectory created a stray second project there.
-const projectRoot = findProjectRoot();
-if (projectRoot !== process.cwd()) process.chdir(projectRoot);
+// The project is the folder niti was launched in — never a guess about an enclosing repo or parent
+// .niti/. Every artefact (.niti/agents.yaml, the SQLite store, session.json) resolves from here.
+const projectRoot = process.cwd();
 
 // Claude-Code-style "do you trust this folder?" — the first time niti is about to read this
 // directory's config, spawn its MCP servers, or run agents against its code, the human confirms it.

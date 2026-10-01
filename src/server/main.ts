@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { Engine } from "../engine.ts";
-import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions, findProjectRoot } from "../config/config.ts";
+import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions } from "../config/config.ts";
 import { LspRegistry } from "../lsp/registry.ts";
 import { makeProvider } from "../providers/factory.ts";
 import { McpManager } from "../mcp/mcp.ts";
@@ -22,14 +22,15 @@ export interface ServeResult {
 export async function serveMain(opts: { port?: number; interactive?: boolean; auto?: boolean; worktree?: boolean } = {}): Promise<ServeResult> {
   // A long-lived core with no handler dies on the first stray rejection or throw from a provider
   // stream, an MCP/LSP child or a timer — taking every running agent and the user's session with it,
-  // when the TUI has no way to tell why. Log it (stderr is .niti/core.log) and keep serving.
-  const survive = (what: string) => (err: unknown) =>
+  // when the TUI has no way to tell why. Log it (stderr is .niti/core.log), show the user a one-line
+  // error in the transcript so a failure is never silent, and keep serving.
+  let notify = (_msg: string) => {};
+  const survive = (what: string) => (err: unknown) => {
     console.error(`niti: ${what}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+    notify(`${what}: ${err instanceof Error ? err.message : String(err)} (details in .niti/core.log)`);
+  };
   process.on("unhandledRejection", survive("unhandled rejection"));
   process.on("uncaughtException", survive("uncaught exception"));
-  // Same root discovery as the CLI: the TUI spawns this directly, so it needs it too.
-  const projectRoot = findProjectRoot();
-  if (projectRoot !== process.cwd()) process.chdir(projectRoot);
   // Setup mode: with no config yet, start empty so the onboarding wizard can drive /auth and
   // /agents against a live server. Once agents.yaml exists we load it (invalid files still throw).
   const configs = existsSync(".niti/agents.yaml") ? loadAgents() : [];
@@ -45,7 +46,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   }
 
   const db = openDb();
-  const engine = new Engine({
+  const engine: Engine = new Engine({
     configs,
     makeProvider,
     mcp,
@@ -65,6 +66,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
     repoMap: options.repoMap,
     worktree: opts.worktree || options.worktree,
   });
+  notify = (payload) => engine.bus.publish({ agentId: "orchestrator", type: "error", payload, time: Date.now() });
   engine.orch.load(loadTasks()); // show any prior tasks on connect
 
   const server = startServer(engine, { port: opts.port, theme: options.theme, prefs: options });
