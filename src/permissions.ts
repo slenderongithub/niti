@@ -7,7 +7,7 @@
 //
 // Layers are consulted in order (agent config → project config → --auto → built-in defaults); the
 // first layer with a matching pattern decides. Unmatched everywhere → "ask".
-import { posix, relative, isAbsolute } from "node:path";
+import { posix, relative, isAbsolute, sep } from "node:path";
 
 export type Decision = "allow" | "ask" | "deny";
 export type ToolRules = Record<string, Decision>; // pattern → decision
@@ -91,7 +91,7 @@ export function subject(tool: string, input: Record<string, unknown>, root = pro
 export function projectRelative(p: string, root = process.cwd()): string {
   if (!isAbsolute(p)) return p;
   const rel = relative(root, p);
-  return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? p : rel;
+  return rel === "" || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel) ? p : rel;
 }
 
 // Rules and grants are written with "/" (`src/**`), and Bun.Glob matches on "/". node:path's

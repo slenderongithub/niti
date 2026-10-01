@@ -20,17 +20,16 @@ export interface ServeResult {
 // print the handshake line the Go TUI parses from stdout. Everything else logs to stderr so the
 // first stdout line is always the handshake.
 export async function serveMain(opts: { port?: number; interactive?: boolean; auto?: boolean; worktree?: boolean } = {}): Promise<ServeResult> {
-  // A long-lived core with no handler dies on the first stray rejection or throw from a provider
-  // stream, an MCP/LSP child or a timer — taking every running agent and the user's session with it,
-  // when the TUI has no way to tell why. Log it (stderr is .niti/core.log), show the user a one-line
-  // error in the transcript so a failure is never silent, and keep serving.
+  // A promise rejection nobody awaited — a provider stream, an MCP/LSP child, a timer — is a failure
+  // of that one operation, not of the core. Without a handler it killed the whole core, and with it
+  // every running agent. Log it (stderr is .niti/core.log), show it in the transcript, keep serving.
+  // A synchronous uncaught exception is deliberately NOT caught: the process state is unknown after
+  // one, so it exits, and the TUI reports "the core exited — see .niti/core.log".
   let notify = (_msg: string) => {};
-  const survive = (what: string) => (err: unknown) => {
-    console.error(`niti: ${what}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
-    notify(`${what}: ${err instanceof Error ? err.message : String(err)} (details in .niti/core.log)`);
-  };
-  process.on("unhandledRejection", survive("unhandled rejection"));
-  process.on("uncaughtException", survive("uncaught exception"));
+  process.on("unhandledRejection", (err: unknown) => {
+    console.error(`niti: unhandled rejection: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+    notify(`unhandled error: ${err instanceof Error ? err.message : String(err)} (details in .niti/core.log)`);
+  });
   // Setup mode: with no config yet, start empty so the onboarding wizard can drive /auth and
   // /agents against a live server. Once agents.yaml exists we load it (invalid files still throw).
   const configs = existsSync(".niti/agents.yaml") ? loadAgents() : [];

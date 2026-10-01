@@ -377,3 +377,11 @@ test("a shell timeout kills grandchildren too, instead of hanging on their open 
   expect(Date.now() - t0).toBeLessThan(5000);
   expect(r.stderr).toContain("timed out");
 });
+
+test("a command that leaves a background process holding its output returns when it exits, not at the timeout", async () => {
+  const t0 = Date.now();
+  const r = await shell(tmpdir(), "sh", ["-c", "echo started; sleep 30 &"], { timeoutMs: 20_000 });
+  expect(Date.now() - t0).toBeLessThan(5000);
+  expect(r.stdout).toContain("started");
+  expect(r.code).toBe(0);
+});

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // OS-level containment for the `shell` tool. Approvals decide what an agent *should* run; this is
 // what stops an approved command — or one a prompt injection talked the model into — from doing more
@@ -19,8 +19,15 @@ const HOME = homedir();
 export const SECRET_DIRS = [".ssh", ".aws", ".gnupg", ".kube", ".config/gcloud", ".config/gh", ".config/niti"].map((d) => join(HOME, d));
 export const SECRET_FILES = [".netrc", ".git-credentials", ".docker/config.json", ".pypirc"].map((f) => join(HOME, f));
 
-// Caches that package managers and compilers write outside the project on every run.
-const CACHE_DIRS = [".npm", ".cache", "Library/Caches", ".bun", "go", ".cargo", ".rustup", ".gradle", ".m2", ".pnpm-store", ".yarn"].map((d) => join(HOME, d));
+// Where tools keep caches and their own state outside the project. Package managers and compilers
+// write caches on every run, and CLIs (Next.js telemetry, Vercel, Firebase, gh, …) save settings
+// under ~/Library and ~/.config — blocking those failed ordinary commands. What stays protected is
+// what matters: the rest of $HOME (shell rc files, other projects, documents), ~/.ssh and friends
+// (unreadable, below), and everything outside $HOME.
+const CACHE_DIRS = [
+  ".npm", ".cache", ".bun", "go", ".cargo", ".rustup", ".gradle", ".m2", ".pnpm-store", ".yarn", ".config", ".local",
+  "Library/Caches", "Library/Preferences", "Library/Application Support", "Library/Logs", "Library/pnpm",
+].map((d) => join(HOME, d));
 
 const real = (p: string): string => {
   try {
@@ -47,14 +54,15 @@ const sbString = (p: string) => `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"'
 
 export function seatbeltProfile(root: string): string {
   const r = real(root);
-  const writable = [r, "/private/tmp", real(tmpdir()), ...gitWritable(root), ...CACHE_DIRS.map(real)];
+  // dirname(tmpdir) is the per-user /var/folders/… dir: T/ is temp, C/ is the cache dir clang/swift use.
+  const writable = [r, "/private/tmp", dirname(real(tmpdir())), ...gitWritable(root), ...CACHE_DIRS.map(real)];
   return [
     "(version 1)",
     "(allow default)",
     "(deny file-write*)",
     `(allow file-write* ${writable.map((p) => `(subpath ${sbString(p)})`).join(" ")} (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/(fd/[0-9]+|ttys[0-9]+|dtracehelper)$"))`,
-    // Later rules win: carve niti's own config back out of the writable project.
-    `(deny file-write* (subpath ${sbString(join(r, ".niti"))}))`,
+    // Later rules win: carve niti's own config and the credential stores back out of what is writable.
+    `(deny file-write* (subpath ${sbString(join(r, ".niti"))}) ${SECRET_DIRS.map((d) => `(subpath ${sbString(real(d))})`).join(" ")})`,
     `(deny file-read* ${SECRET_DIRS.map((d) => `(subpath ${sbString(real(d))})`).join(" ")} ${SECRET_FILES.map((f) => `(literal ${sbString(real(f))})`).join(" ")})`,
   ].join("\n");
 }
@@ -103,8 +111,8 @@ export function wrap(root: string, command: string, args: string[]): { command: 
 // What the model is told when the sandbox stopped a command, so its next attempt is a safer one
 // instead of a retry of the same thing or a claim that it worked.
 export const SANDBOX_NOTE =
-  "\n[blocked by niti's sandbox: shell commands can write only inside the project (plus temp and tool caches), " +
-  "cannot write .niti/, and cannot read credential stores (~/.ssh, ~/.aws, …). To change a file outside the project, " +
+  "\n[blocked by niti's sandbox: shell commands can write only inside the project (plus temp, tool caches and app settings), " +
+  "cannot write .niti/ or the rest of your home folder, and cannot read credential stores (~/.ssh, ~/.aws, …). To change a file outside the project, " +
   "use write_file/edit with its path — the user is asked to approve it.]";
 
 // The errors each sandbox produces. Only matched while that sandbox is active, so an ordinary

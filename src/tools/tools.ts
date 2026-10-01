@@ -190,6 +190,10 @@ export function shell(
       limits.onOutput?.(String(d));
     });
     child.on("close", (code) => finish(code ?? -1));
+    // "close" waits for the pipes, and a process the command left running in the background (a dev
+    // server started with `&`) holds them open indefinitely. Once the command itself has exited, give
+    // its output a moment to drain and report — rather than sitting out the whole timeout.
+    child.on("exit", (code) => setTimeout(() => finish(code ?? -1), 500).unref());
     child.on("error", (err) => finish(-1, String(err)));
   });
 }

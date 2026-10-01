@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Git isolation for a run: agents write into a throwaway worktree/branch instead of the real root,
 // merged back only on explicit user action (never automatically — this is a consequential action,
@@ -49,7 +49,7 @@ export async function createWorktree(root: string, id: string): Promise<Worktree
   // agents have to be pointed at the same folder within it, not at its top.
   const top = await git(root, ["rev-parse", "--show-toplevel"]);
   const sub = top.code === 0 ? relative(realpathSync(top.stdout.trim()), realpathSync(root)) : "";
-  const workDir = sub && !sub.startsWith("..") ? join(path, sub) : path;
+  const workDir = sub && sub !== ".." && !sub.startsWith(".." + sep) && !isAbsolute(sub) ? join(path, sub) : path;
   mkdirSync(workDir, { recursive: true }); // a folder git does not track yet is absent from the checkout
   return { path, workDir, branch, baseSha: head.stdout.trim() };
 }

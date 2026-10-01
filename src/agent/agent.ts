@@ -1207,17 +1207,17 @@ export class Agent {
     // A path outside the project (../, absolute, or through a symlink): allowed, because a person may
     // well ask for exactly that — "pull that file in", "change the one over there" — but only on
     // their say-so each time, and never waved through by --auto or a standing grant.
-    const viaLink = PATH_TOOLS.has(call.name) && typeof call.input.path === "string" && leavesProject(this.root, call.input.path);
+    const outside = PATH_TOOLS.has(call.name) && typeof call.input.path === "string" && leavesProject(this.root, call.input.path);
     const dangerous =
       isDangerousShellCall(call.name, call.input) ||
       isEgressShellCall(call.name, call.input) ||
       isSensitiveConfigWrite(call.name, call.input, this.root) ||
       leavesProjectRoot(call.name, call.input) ||
-      viaLink ||
+      outside ||
       touchesSecret(call.name, call.input, this.root);
     // The file as it stands right now — used for the approval diff and, once approved, the undo
     // checkpoint. Read once: re-reading after the prompt would race the user's own edits.
-    const before = WRITE_TOOLS.has(call.name) ? await this.readForCheckpoint(String(call.input.path ?? ""), viaLink) : undefined;
+    const before = WRITE_TOOLS.has(call.name) ? await this.readForCheckpoint(String(call.input.path ?? ""), outside) : undefined;
     // The diff is for the human, not the model. It used to be assigned onto call.input, which is
     // the same object pushed into `turns` and serialized verbatim by every OpenAI-compatible
     // provider — so overwriting a 1,500-line file sent that file three times per turn, forever,
@@ -1276,7 +1276,7 @@ export class Agent {
         // key worktree-aware, since setRoot repoints the root mid-session.
         writeRel = WRITE_TOOLS.has(sandboxCall.tool) && "path" in sandboxCall ? sandboxCall.path : undefined;
         const lockPath =
-          writeRel !== undefined ? safePath(this.root, writeRel, viaLink) : sandboxCall.tool === "shell" ? SHELL_LOCK : undefined;
+          writeRel !== undefined ? safePath(this.root, writeRel, outside) : sandboxCall.tool === "shell" ? SHELL_LOCK : undefined;
         if (lockPath && this.locks) await this.locks.acquire(lockPath, id);
         try {
           // Checkpoint under the lock and after approval: the write is next, so nothing can slip
@@ -1289,7 +1289,7 @@ export class Agent {
             // applies correctly, but checkpointing the stale copy meant a later /rewind silently
             // reverted their edit too and reported success. The lock is held here, so nothing can
             // slip in between this snapshot and the write it protects.
-            atWrite = await this.readForCheckpoint(writeRel!, viaLink);
+            atWrite = await this.readForCheckpoint(writeRel!, outside);
             if (before !== undefined && atWrite !== undefined && atWrite !== before) {
               this.bus.publish({
                 agentId: id,
@@ -1300,7 +1300,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: viaLink && !!this.approve, sandbox: this.sandbox }); // only ever past a human's yes
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox }); // only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo
@@ -1326,7 +1326,7 @@ export class Agent {
           if (!ctx.checkBaseline.has(writeRel)) ctx.checkBaseline.set(writeRel, before);
         }
       }
-      const after = writeRel !== undefined ? await this.readForCheckpoint(writeRel, viaLink) : undefined;
+      const after = writeRel !== undefined ? await this.readForCheckpoint(writeRel, outside) : undefined;
       const result = summarizeResult(call.name, output);
       const shellFailed = result.exitCode !== undefined && result.exitCode !== 0;
       this.bus.publish({
