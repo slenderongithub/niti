@@ -35,9 +35,12 @@ test("/rewind n pops n checkpoints in one call", async () => {
   writeFileSync(file, "v2");
   const store = new SessionStore(openDb(":memory:"));
   const sid = store.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  // The engine first: it only rewinds writes made after it started, so a checkpoint created in an
+  // earlier millisecond than the engine was "from an earlier launch" and the test failed under load.
+  const e = engine(store);
   store.checkpoint(sid, file, "v1");
   const r = new CommandRegistry(BUILTIN_COMMANDS);
-  const res = await r.run(engine(store), "rewind", "1");
+  const res = await r.run(e, "rewind", "1");
   expect(res.ok).toBe(true);
   expect(res.message).toContain("rewound 1 step");
 });

@@ -11,7 +11,7 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, normalizePath, projectRelative, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, escapesViaSymlink, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
@@ -1193,9 +1193,10 @@ export class Agent {
     // Always prompts, even with a standing "always allow" grant or --auto — none of these can be
     // waved through by config. leavesProjectRoot used to be excluded from this set despite its own
     // doc comment claiming otherwise, so a standing shell grant could silently wave it through.
-    // Inside the project by its spelling, outside it through a symlink: allowed, but only on a
-    // human's say-so, and never waved through by --auto or a standing grant.
-    const viaLink = PATH_TOOLS.has(call.name) && typeof call.input.path === "string" && escapesViaSymlink(this.root, call.input.path);
+    // A path outside the project (../, absolute, or through a symlink): allowed, because a person may
+    // well ask for exactly that — "pull that file in", "change the one over there" — but only on
+    // their say-so each time, and never waved through by --auto or a standing grant.
+    const viaLink = PATH_TOOLS.has(call.name) && typeof call.input.path === "string" && leavesProject(this.root, call.input.path);
     const dangerous =
       isDangerousShellCall(call.name, call.input) ||
       isEgressShellCall(call.name, call.input) ||
@@ -1285,7 +1286,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowSymlinkEscape: viaLink && !!this.approve }); // only ever past a human's yes
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: viaLink && !!this.approve }); // only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo

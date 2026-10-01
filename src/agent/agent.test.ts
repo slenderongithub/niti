@@ -1900,3 +1900,35 @@ test("a write through a symlink out of the project needs approval, and lands onl
   expect(await run(true)).toEqual([true]);
   expect(readFileSync(join(outside, "note.txt"), "utf8")).toBe("hi");
 });
+
+// "Bring that file in" / "change the one over there": a path outside the project is a prompt, not a wall.
+test("reading and editing a file outside the project works only after the user approves each call", async () => {
+  const outside = mkdtempSync(join(tmpdir(), "niti-elsewhere-"));
+  writeFileSync(join(outside, "notes.txt"), "from elsewhere\n");
+  const root = mkdtempSync(join(tmpdir(), "niti-proj-"));
+  const abs = join(outside, "notes.txt");
+  const script = [
+    { id: "1", name: "read_file", input: { path: abs } },
+    { id: "2", name: "write_file", input: { path: "copy.txt", content: "from elsewhere\n" } }, // bring it in
+    { id: "3", name: "edit", input: { path: abs, oldString: "from", newString: "FROM" } }, // change it in place
+  ];
+  const run = async (approve: boolean) => {
+    let n = 0;
+    const stub: Provider = { async send() { return n < script.length ? { text: "", toolCalls: [script[n++]!] } : { text: "done", toolCalls: [] }; } };
+    const asked: [string, boolean][] = [];
+    const a = new Agent({ ...cfg, allowedTools: ["read_file", "write_file", "edit"] }, stub, new Bus(), {
+      root,
+      approve: async (tool, _i, forceAsk) => (asked.push([tool, !!forceAsk]), approve),
+      permissionLayers: [{ "*": { "*": "allow" } }],
+    });
+    await a.run("go", { taskId: "t" });
+    return asked;
+  };
+  // refused: every outside call prompted (read_file and edit forced), nothing outside was touched
+  expect((await run(false)).filter(([t]) => t !== "write_file")).toEqual([["read_file", true], ["edit", true]]);
+  expect(readFileSync(abs, "utf8")).toBe("from elsewhere\n");
+  // approved: the file outside was changed in place
+  await run(true);
+  expect(readFileSync(abs, "utf8")).toBe("FROM elsewhere\n");
+  expect(existsSync(join(root, "copy.txt"))).toBe(true);
+});

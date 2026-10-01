@@ -23,19 +23,19 @@ test("write_file creates missing parent directories", async () => {
 test("write_file's mkdir never escapes the project root", async () => {
   await expect(
     runTool({ tool: "write_file", path: "../outside/x.txt", content: "x" }, ALL, root),
-  ).rejects.toThrow(/escapes project root/);
+  ).rejects.toThrow(/outside the project/);
   expect(existsSync(join(root, "..", "outside"))).toBe(false);
 });
 
 test("path traversal is rejected", () => {
-  expect(() => safePath(root, "../../etc/passwd")).toThrow(/escapes project root/);
-  expect(() => safePath(root, "/etc/passwd")).toThrow(/escapes project root/);
+  expect(() => safePath(root, "../../etc/passwd")).toThrow(/outside the project/);
+  expect(() => safePath(root, "/etc/passwd")).toThrow(/outside the project/);
 });
 
 test("a write via traversal never touches the target", async () => {
   await expect(
     runTool({ tool: "write_file", path: "../escape.txt", content: "x" }, ALL, root),
-  ).rejects.toThrow(/escapes project root/);
+  ).rejects.toThrow(/outside the project/);
   expect(existsSync(join(root, "..", "escape.txt"))).toBe(false);
 });
 
@@ -363,9 +363,9 @@ test("safePath rejects a write through a symlink that points outside the root", 
   symlinkSync(join(outside, "not-yet"), join(root, "dangling"));
   writeSync(join(outside, "secret"), "x");
   symlinkSync(join(outside, "secret"), join(root, "file-link"));
-  expect(() => safePath(root, "link/new.txt")).toThrow(/escapes/);
-  expect(() => safePath(root, "dangling")).toThrow(/escapes/);
-  expect(() => safePath(root, "file-link")).toThrow(/escapes/);
+  expect(() => safePath(root, "link/new.txt")).toThrow(/outside the project/);
+  expect(() => safePath(root, "dangling")).toThrow(/outside the project/);
+  expect(() => safePath(root, "file-link")).toThrow(/outside the project/);
   mkdirSyncFs(join(root, "src"));
   expect(safePath(root, "src/new/deep.ts")).toBe(join(root, "src/new/deep.ts")); // ordinary new paths still fine
 });

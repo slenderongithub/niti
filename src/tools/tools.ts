@@ -24,17 +24,24 @@ export const WRITE_TOOLS = new Set(["write_file", "edit"]);
 // latency — the model had already decided on all of them before the first one ran.
 export const READ_ONLY_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "repo_map", "diagnostics", "hover", "recall"]);
 
-// SECURITY BOUNDARY — do not simplify. Resolve the agent-supplied path and reject any escape.
-// A `../` escape is always refused. A path that is lexically inside the project but reaches outside
-// it through a symlink (a workspace link, `docs -> ../shared`) is refused unless the caller passes
-// `allowLink`, which the agent loop does only for a call a human just approved (see agent.ts).
-// ponytail: this is realpath-based containment, not an OS sandbox — `shell` is still unjailed.
-export function safePath(root: string, p: string, allowLink = false): string {
+// SECURITY BOUNDARY — do not simplify. Resolve the agent-supplied path against the project root.
+// A path that leaves the project — by `../`, by an absolute path, or through a symlink — is
+// refused unless the caller passes `allowOutside`, which the agent loop does only for a call a
+// human has just approved (it force-asks, even under --auto; see agent.ts). That is how an agent
+// can be told to read a file from elsewhere on the machine, or change one in place, and still never
+// do either on its own initiative.
+// ponytail: this is containment of the file tools, not an OS sandbox — `shell` is still unjailed.
+export function safePath(root: string, p: string, allowOutside = false): string {
   const abs = resolve(root, p);
-  if (abs !== root && !abs.startsWith(root + sep)) {
-    throw new Error(`path escapes project root: ${p}`);
+  const inside = abs === root || abs.startsWith(root + sep);
+  if (!inside) {
+    if (allowOutside) return abs;
+    throw new Error(`path is outside the project: ${p} — it needs the user's approval, which was not given`);
   }
-  if (!allowLink && linkEscape(root, abs)) throw new Error(`path escapes project root: ${p} (${linkEscape(root, abs)})`);
+  if (!allowOutside) {
+    const why = linkEscape(root, abs);
+    if (why) throw new Error(`path is outside the project: ${p} (${why}) — it needs the user's approval, which was not given`);
+  }
   return abs;
 }
 
@@ -61,11 +68,12 @@ function linkEscape(root: string, abs: string): string | undefined {
   }
 }
 
-// True when `p` is inside the project by its spelling but leaves it through a symlink.
-export function escapesViaSymlink(root: string, p: string): boolean {
+// True when `p` reaches outside the project, however it gets there. Such a call must be approved.
+export function leavesProject(root: string, p: string): boolean {
   try {
     const abs = resolve(root, p);
-    return (abs === root || abs.startsWith(root + sep)) && linkEscape(root, abs) !== undefined;
+    if (abs !== root && !abs.startsWith(root + sep)) return true;
+    return linkEscape(root, abs) !== undefined;
   } catch {
     return false;
   }
@@ -387,16 +395,16 @@ export async function runTool(
   call: ToolCall,
   allowed: string[],
   root: string = process.cwd(),
-  hooks: { onOutput?: (chunk: string) => void; allowSymlinkEscape?: boolean } = {}, // shell output as it arrives; an approved symlink escape
+  hooks: { onOutput?: (chunk: string) => void; allowOutside?: boolean } = {}, // shell output as it arrives; a human-approved path outside the project
 ): Promise<string> {
   if (!allowed.includes(call.tool)) {
     throw new Error(`tool '${call.tool}' not allowed for this agent`);
   }
   switch (call.tool) {
     case "read_file":
-      return await readCapped(safePath(root, call.path, hooks.allowSymlinkEscape), call.path, call.offset, call.limit);
+      return await readCapped(safePath(root, call.path, hooks.allowOutside), call.path, call.offset, call.limit);
     case "list_dir":
-      return await listDir(root, call.path ?? ".", hooks.allowSymlinkEscape);
+      return await listDir(root, call.path ?? ".", hooks.allowOutside);
     case "glob":
       return await globFiles(root, call.pattern, call.limit ?? 100);
     case "repo_map":
@@ -407,10 +415,10 @@ export async function runTool(
         glob: call.glob,
         limit: call.limit ?? 50,
         ignoreCase: call.ignoreCase,
-        allowLink: hooks.allowSymlinkEscape,
+        allowLink: hooks.allowOutside,
       });
     case "write_file": {
-      const abs = safePath(root, call.path, hooks.allowSymlinkEscape);
+      const abs = safePath(root, call.path, hooks.allowOutside);
       // Create the parent directories. Without this every `write_file src/api/routes.ts` into a
       // directory that doesn't exist yet failed with a bare ENOENT — which is most of what an
       // agent building something new does. The path is already jailed by safePath, so the
@@ -420,7 +428,7 @@ export async function runTool(
       return `wrote ${call.path}`;
     }
     case "edit": {
-      const abs = safePath(root, call.path, hooks.allowSymlinkEscape);
+      const abs = safePath(root, call.path, hooks.allowOutside);
       const before = await readFile(abs, "utf8");
       const after = applyEdit(before, call.oldString, call.newString, call.replaceAll ?? false, call.path);
       await writeFile(abs, after);
@@ -847,7 +855,7 @@ const SPECS: Record<string, ToolSpec> = {
 export const TOOL_GUIDANCE = `
 
 Working habits:
-- The project you are in is the whole job. Never look outside it (no '..', no absolute paths elsewhere on the machine).
+- The project you are in is the whole job. Never go outside it on your own (no '..', no absolute paths elsewhere on the machine). The one exception is when the user explicitly names a file or folder outside the project — to bring it in, or to change it where it is: then use exactly that path with read_file, write_file or edit, and the user will be asked to approve the call.
 - Start from the project map (or call 'repo_map', especially after a refactor). Find before you read. 'grep' tells you where something is in one call; 'glob' finds a file by name. Reading files to look for something, or guessing at a path, wastes the turns you need for the actual work.
 - Read before you write, and prefer 'edit' (exact snippet replacement) over 'write_file' for changes to an existing file — a blind overwrite loses work you didn't know was there.
 - 'edit' matches the file exactly. Copy oldString from what 'read_file' showed you, without the line numbers, and include enough surrounding lines to make it unique.

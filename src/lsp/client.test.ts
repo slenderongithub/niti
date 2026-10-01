@@ -67,7 +67,7 @@ test("the tool reports an unconfigured language instead of failing", async () =>
 test("tool paths are jailed to the project root like every other tool", async () => {
   const root = project();
   const registry = new LspRegistry([fakeServer], root);
-  await expect(runLspTool(registry, "diagnostics", { path: "../../etc/passwd" }, root)).rejects.toThrow(/escapes project root/);
+  await expect(runLspTool(registry, "diagnostics", { path: "../../etc/passwd" }, root)).rejects.toThrow(/outside the project/);
   registry.close();
 });
 
