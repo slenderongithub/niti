@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Engine } from "./engine.ts";
 import { openDb } from "./store/db.ts";
@@ -476,4 +476,24 @@ test("a second submit during async worktree setup is refused, not run beside the
   const first = engine.submit("one");
   await expect(engine.submit("two")).rejects.toThrow(/already running/);
   await first.catch(() => {});
+});
+
+// The sandbox is on by default through the real wiring (Engine → Agent → runTool), not just in unit
+// tests of shell(): an approved shell command still cannot write outside the project.
+test.skipIf(process.platform !== "darwin")("an approved shell command cannot write outside the project by default", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "niti-engine-sbx-")));
+  const target = join(homedir(), `.niti-engine-sbx-${process.pid}`);
+  let n = 0;
+  const provider: Provider = {
+    async send(_s, turns) {
+      const lastUser = [...turns].reverse().find((t) => t.role === "user");
+      const text = lastUser && "text" in lastUser ? lastUser.text : "";
+      if (text.includes("orchestrator of a team")) return { text: '[{"description":"write it","role":"a"}]', toolCalls: [] };
+      return n++ === 0 ? { text: "", toolCalls: [{ id: "s", name: "shell", input: { command: "sh", args: ["-c", `echo x > '${target}'`] } }] } : { text: "done", toolCalls: [] };
+    },
+  };
+  const one: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: ["shell"] }];
+  const engine = new Engine({ configs: one, makeProvider: () => provider, interactive: false, auto: true, root });
+  await engine.submit("go");
+  expect(existsSync(target)).toBe(false);
 });

@@ -1932,3 +1932,32 @@ test("reading and editing a file outside the project works only after the user a
   expect(readFileSync(abs, "utf8")).toBe("FROM elsewhere\n");
   expect(existsSync(join(root, "copy.txt"))).toBe(true);
 });
+
+test("reading a credential file always asks, even under a blanket allow, and grep never scans one", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-secret-"));
+  writeFileSync(join(root, ".env"), "API_KEY=sk-live-123\n");
+  writeFileSync(join(root, "app.ts"), "const key = process.env.API_KEY;\n");
+  let n = 0;
+  const calls = [
+    { id: "1", name: "grep", input: { pattern: "API_KEY" } },
+    { id: "2", name: "read_file", input: { path: ".env" } },
+    { id: "3", name: "shell", input: { command: "cat", args: [".env"] } },
+  ];
+  let seen = "";
+  const stub: Provider = {
+    async send(_s, turns) {
+      seen = JSON.stringify(turns); // everything the model has been shown so far
+      return n < calls.length ? { text: "", toolCalls: [calls[n++]!] } : { text: "done", toolCalls: [] };
+    },
+  };
+  const asked: string[] = [];
+  const a = new Agent({ ...cfg, allowedTools: ["grep", "read_file", "shell"] }, stub, new Bus(), {
+    root,
+    approve: async (tool, _i, forceAsk) => (forceAsk && asked.push(tool), false),
+    permissionLayers: [{ "*": { "*": "allow" } }],
+  });
+  await a.run("find the key", { taskId: "t" });
+  expect(asked).toEqual(["read_file", "shell"]);
+  expect(seen).toContain("app.ts"); // grep did run and found the non-secret match
+  expect(seen).not.toContain("sk-live-123");
+});

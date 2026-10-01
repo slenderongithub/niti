@@ -65,6 +65,7 @@ export interface NitiOptions {
   openAgentsView?: boolean; // launch focused on an agent tab instead of the overview
   projectInstructions?: boolean; // false → don't auto-read .niti.md / AGENTS.md (default true)
   repoMap?: boolean; // false → don't put a generated project map in the system prompt
+  sandbox?: boolean; // false → run shell commands without the OS sandbox (src/sandbox.ts); default on
 }
 
 export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
@@ -89,6 +90,7 @@ export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
     openAgentsView: raw.openAgentsView === true ? true : undefined,
     projectInstructions: raw.projectInstructions === false ? false : undefined,
     repoMap: raw.repoMap === false ? false : undefined,
+    sandbox: raw.sandbox === false ? false : undefined,
   };
 }
 

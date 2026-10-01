@@ -64,6 +64,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
     maxTurns: options.maxTurns,
     verify: options.verify,
     repoMap: options.repoMap,
+    sandbox: options.sandbox,
     worktree: opts.worktree || options.worktree,
   });
   notify = (payload) => engine.bus.publish({ agentId: "orchestrator", type: "error", payload, time: Date.now() });

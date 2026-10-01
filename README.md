@@ -80,9 +80,11 @@ Anything you type while agents work steers them; <kbd>esc</kbd> stops them at on
 <td width="50%" valign="top">
 
 **Guardrails on by default**<br>
-Approvals before risky actions, a project-scoped sandbox, verification against your own build
-before a task counts as done, undo and rewind for every write, and a check that refuses "fixes"
-that only edited the tests.
+Approvals before risky actions; shell commands in an OS sandbox (macOS Seatbelt, Linux
+bubblewrap) that can write only inside the project and never read your SSH or cloud keys;
+credential files (`.env`, keys) that agents can't read without asking; verification against your
+own build before a task counts as done; undo and rewind for every write; and a check that refuses
+"fixes" that only edited the tests. Turn the sandbox off with `sandbox: false` in agents.yaml.
 
 </td>
 </tr>

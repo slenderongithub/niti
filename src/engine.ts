@@ -1,5 +1,6 @@
 import { parse, relative } from "node:path";
 import { isHomeDir } from "./config/config.ts";
+import { sandboxKind } from "./sandbox.ts";
 import { Agent, type AgentConfig } from "./agent/agent.ts";
 import { detectChecks, parseChecks } from "./agent/verify.ts";
 import { repoMapSection } from "./agent/repomap.ts";
@@ -51,6 +52,8 @@ export interface EngineOptions {
   // false → no generated project map in the system prompt. On by default; it is skipped
   // automatically for projects too small to need one.
   repoMap?: boolean;
+  // false → shell commands run without the OS sandbox (src/sandbox.ts). On by default.
+  sandbox?: boolean;
 }
 
 // The Engine wires the whole multi-agent runtime: agents (with a live messenger so they can talk to
@@ -153,6 +156,13 @@ export class Engine {
     // Resolved once, at wiring time: detection reads package.json/go.mod off disk, and doing that
     // per task would re-read it on every one of them for an answer that cannot change mid-run.
     const checks = opts.verify === false ? [] : opts.verify ? parseChecks(opts.verify) : detectChecks(this.root);
+    // Said once, up front: what the shell can and cannot touch here is not something to discover by
+    // a command failing halfway through a task.
+    if (opts.sandbox === false) {
+      this.bus.publish({ agentId: "orchestrator", type: "warning", payload: "shell sandbox is off (sandbox: false in agents.yaml) — shell commands can write anywhere you can", time: Date.now() });
+    } else if (sandboxKind() === "none") {
+      this.bus.publish({ agentId: "orchestrator", type: "warning", payload: `no OS sandbox available on ${process.platform}${process.platform === "linux" ? " (install bubblewrap to enable one)" : ""} — shell commands are limited only by approvals`, time: Date.now() });
+    }
     if (checks.length > 0) {
       this.bus.publish({ agentId: "orchestrator", type: "thought", payload: `verifying changes with: ${checks.map((c) => c.name).join(", ")}`, time: Date.now() });
     }
@@ -205,6 +215,7 @@ export class Engine {
         settings: this.settings,
         lsp: opts.lsp,
         onWrite: (path) => this.watcher?.markSelfWrite(path),
+        sandbox: opts.sandbox !== false,
         maxTurns: opts.maxTurns,
         verify: checks,
         shouldStop: () => this.cancelled,

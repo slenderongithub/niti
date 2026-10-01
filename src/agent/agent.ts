@@ -13,6 +13,7 @@ import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, normalizePath, projectRelative, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
 import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
+import { isSecretPath, shellTouchesSecret } from "../secrets.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { contextWindow } from "../providers/catalog.ts";
@@ -166,6 +167,13 @@ export function isEgressShellCall(name: string, input: Record<string, unknown>):
 // Tools whose `path` argument names a file or folder inside the project.
 const PATH_TOOLS = new Set(["read_file", "write_file", "edit", "list_dir", "grep"]);
 
+// A credential file — by a file tool's path, or anywhere in a shell call's arguments. Always asks:
+// reading one puts the secret into the model's context, and from there into a provider's logs.
+export function touchesSecret(name: string, input: Record<string, unknown>, root = process.cwd()): boolean {
+  if (name === "shell") return shellTouchesSecret(String(input.command ?? ""), Array.isArray(input.args) ? input.args.map(String) : [], root);
+  return PATH_TOOLS.has(name) && typeof input.path === "string" && isSecretPath(input.path, root);
+}
+
 export function isSensitiveConfigWrite(name: string, input: Record<string, unknown>, root = process.cwd()): boolean {
   if (name !== "write_file" && name !== "edit") return false;
   return normalizePath(projectRelative(String(input.path ?? ""), root)).startsWith(".niti/"); // "/" on every OS
@@ -246,6 +254,7 @@ export interface AgentDeps {
   permissionLayers?: PermissionRules[]; // project-level policy (and --auto), consulted after the agent's own
   lsp?: LspRegistry; // present → diagnostics/hover tools, alongside (not instead of) MCP
   onWrite?: (relPath: string) => void; // called just before a file write, so the watcher can ignore our own echo
+  sandbox?: boolean; // run `shell` inside the OS sandbox (sandbox.ts); on unless agents.yaml says `sandbox: false`
   maxTurns?: number; // tool-loop cap for this agent; defaults to MAX_TURNS
   verify?: Check[]; // present and non-empty → a run that wrote files must pass these before it reports done
   // True once the user has cancelled. /cancel used to stop only the *scheduler* from launching new
@@ -298,6 +307,7 @@ export class Agent {
   private permissionLayers: PermissionRules[];
   private lsp?: LspRegistry;
   private onWrite?: (relPath: string) => void;
+  private sandbox: boolean;
   private shouldStop?: () => boolean;
   private abortSignal?: () => AbortSignal | undefined;
   private maxTurns: number;
@@ -351,6 +361,7 @@ export class Agent {
     this.permissionLayers = deps.permissionLayers ?? [];
     this.lsp = deps.lsp;
     this.onWrite = deps.onWrite;
+    this.sandbox = deps.sandbox ?? false;
     this.shouldStop = deps.shouldStop;
     this.abortSignal = deps.abortSignal;
   }
@@ -1202,7 +1213,8 @@ export class Agent {
       isEgressShellCall(call.name, call.input) ||
       isSensitiveConfigWrite(call.name, call.input, this.root) ||
       leavesProjectRoot(call.name, call.input) ||
-      viaLink;
+      viaLink ||
+      touchesSecret(call.name, call.input, this.root);
     // The file as it stands right now — used for the approval diff and, once approved, the undo
     // checkpoint. Read once: re-reading after the prompt would race the user's own edits.
     const before = WRITE_TOOLS.has(call.name) ? await this.readForCheckpoint(String(call.input.path ?? ""), viaLink) : undefined;
@@ -1222,6 +1234,8 @@ export class Agent {
     // A deny is policy, not a question: it short-circuits without queuing an approval, and it holds
     // in headless mode too (where there is no approver and everything else would just run).
     if (decision === "deny") {
+      // Logged as well: an attempt the policy stopped is exactly what a post-incident review looks for.
+      this.audit?.append({ agentId: id, kind: "tool_call", detail: { tool: call.name, input: call.input, outcome: "denied by policy" } });
       this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: denied by permission policy`, time: Date.now(), ...this.endOf(call, started, false) });
       return "denied by permission policy";
     }
@@ -1286,7 +1300,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: viaLink && !!this.approve }); // only ever past a human's yes
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: viaLink && !!this.approve, sandbox: this.sandbox }); // only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo

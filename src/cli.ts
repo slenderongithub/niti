@@ -339,6 +339,7 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
     maxTurns: options.maxTurns,
     verify: options.verify,
     repoMap: options.repoMap,
+    sandbox: options.sandbox,
     worktree: args.includes("--worktree") || options.worktree,
   });
 }

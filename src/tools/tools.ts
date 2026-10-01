@@ -4,6 +4,8 @@ import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
 import type { ToolSpec, ToolCall as ProviderCall } from "../providers/provider.ts";
 import { buildRepoMap } from "../agent/repomap.ts";
+import { wrap, blockedBySandbox, SANDBOX_NOTE } from "../sandbox.ts";
+import { isSecretPath } from "../secrets.ts";
 
 // Tool calls an agent may request. Executed locally, jailed to the project root.
 export type ToolCall =
@@ -134,7 +136,7 @@ export function shell(
   root: string,
   command: string,
   args: string[],
-  limits: { timeoutMs?: number; maxOutput?: number; onOutput?: (chunk: string) => void } = {}, // timeouts: tests; onOutput: live view
+  limits: { timeoutMs?: number; maxOutput?: number; onOutput?: (chunk: string) => void; sandbox?: boolean } = {}, // timeouts: tests; onOutput: live view; sandbox: OS containment (sandbox.ts)
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const timeoutMs = limits.timeoutMs ?? SHELL_TIMEOUT_MS;
   const maxOutput = limits.maxOutput ?? SHELL_MAX_OUTPUT;
@@ -157,7 +159,8 @@ export function shell(
     // child's whole *tree* (see killTree) — killing only the direct child left `npm run dev`'s
     // grandchildren holding the stdout pipe open, so "close" never fired and the agent hung on the
     // call forever, long after the timeout "fired".
-    const child = spawn(command, args, { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
+    const argv = limits.sandbox ? wrap(root, command, args) : { command, args };
+    const child = spawn(argv.command, argv.args, { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
     const stdout = new HeadTail(maxOutput);
     const stderr = new HeadTail(maxOutput);
     let timedOut = false;
@@ -166,7 +169,11 @@ export function shell(
       if (done) return;
       done = true;
       clearTimeout(timer);
-      res({ stdout: stdout.text(), stderr: stderr.text() + extraErr + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : ""), code });
+      const err = stderr.text() + extraErr;
+      // Told plainly, so the model's next step is a different approach rather than the same command
+      // again or a claim that it worked.
+      const note = limits.sandbox && code !== 0 && blockedBySandbox(stdout.text() + err) ? SANDBOX_NOTE : "";
+      res({ stdout: stdout.text(), stderr: err + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : "") + note, code });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -341,7 +348,8 @@ async function grepFiles(
     return `error: invalid regular expression ${JSON.stringify(pattern)}: ${(err as Error).message}`;
   }
   const base = safePath(root, opts.path || ".", opts.allowLink);
-  let candidates = await listFiles(root, base);
+  // Credential files are never scanned: a match line is file content, and it would go to the model.
+  let candidates = (await listFiles(root, base)).filter((p) => !isSecretPath(p, root));
   if (opts.glob) {
     const g = new Bun.Glob(opts.glob);
     // Match the basename too, so `*.ts` means what everyone means by it rather than only matching
@@ -395,7 +403,7 @@ export async function runTool(
   call: ToolCall,
   allowed: string[],
   root: string = process.cwd(),
-  hooks: { onOutput?: (chunk: string) => void; allowOutside?: boolean } = {}, // shell output as it arrives; a human-approved path outside the project
+  hooks: { onOutput?: (chunk: string) => void; allowOutside?: boolean; sandbox?: boolean } = {}, // shell output as it arrives; a human-approved path outside the project
 ): Promise<string> {
   if (!allowed.includes(call.tool)) {
     throw new Error(`tool '${call.tool}' not allowed for this agent`);
@@ -440,7 +448,7 @@ export async function runTool(
       if (!call.command.trim()) {
         return "error: shell was called with an empty command. Give the program to run in `command` (for example command: \"npm\", args: [\"run\", \"typecheck\"]).";
       }
-      const r = await shell(root, call.command, call.args, { onOutput: hooks.onOutput });
+      const r = await shell(root, call.command, call.args, { onOutput: hooks.onOutput, sandbox: hooks.sandbox });
       return `exit ${r.code}\n${r.stdout}${r.stderr}`;
     }
   }
