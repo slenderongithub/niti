@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
+import { constants } from "node:os";
 
 const require = createRequire(import.meta.url);
 
@@ -29,4 +31,19 @@ export function binPath(exe) {
     );
     process.exit(1);
   }
+}
+
+// Hand over to the real binary and mirror how it ended. The shims used to exit with `status ?? 1`,
+// which turned "could not execute it" (missing exec bit, bad architecture, antivirus quarantine)
+// into a silent exit 1 — no output at all — and a crash by signal into an unexplained 1.
+export function run(exe) {
+  const path = binPath(exe);
+  const r = spawnSync(path, process.argv.slice(2), { stdio: "inherit" });
+  if (r.error) {
+    console.error(`niti: could not run ${path}: ${r.error.message}`);
+    if (r.error.code === "EACCES") console.error(`      try: chmod +x "${path}"`);
+    process.exit(1);
+  }
+  if (r.signal) process.exit(128 + (constants.signals[r.signal] ?? 0));
+  process.exit(r.status ?? 1);
 }
