@@ -126,3 +126,10 @@ test("an absolute path inside the project is judged as its relative spelling", a
   expect(subject("write_file", { path: abs })).toBe(".niti/agents.yaml");
   expect(res([{ write_file: { ".niti/**": "deny", "*": "allow" } }], "write_file", { path: abs })).toBe("deny");
 });
+
+test("absolute paths are judged against the agent's own root (a worktree is not cwd)", async () => {
+  const { resolve: res } = await import("./permissions.ts");
+  const root = "/tmp/some-worktree";
+  const rules: PermissionRules[] = [{ write_file: { ".niti/**": "deny", "*": "allow" } }];
+  expect(res(rules, "write_file", { path: `${root}/.niti/agents.yaml` }, root)).toBe("deny");
+});

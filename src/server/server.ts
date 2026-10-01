@@ -431,8 +431,11 @@ export function startServer(
       if (p === "/theme" && method === "POST") {
         const { theme } = (await readBody(req)) as { theme?: string };
         if (!theme) return json({ error: "expected theme" }, 400);
+        // Persisted first: an agents.yaml with a YAML error refuses the write, and the live state must
+        // not move ahead of what is saved.
+        const bad = persistError(() => setTheme(theme));
+        if (bad) return bad;
         currentTheme = theme;
-        setTheme(theme);
         engine.hub.publish({ kind: "theme", theme });
         return json({ ok: true });
       }
@@ -442,8 +445,9 @@ export function startServer(
       if (p === "/auto" && method === "POST") {
         const { auto } = (await readBody(req)) as { auto?: boolean };
         if (typeof auto !== "boolean") return json({ error: "expected { auto: boolean }" }, 400);
+        const bad = persistError(() => setAuto(auto));
+        if (bad) return bad;
         engine.setAuto(auto);
-        setAuto(auto);
         return json({ ok: true, auto });
       }
 
@@ -457,9 +461,10 @@ export function startServer(
           const given = keys.filter((k) => typeof body[k] === "boolean");
           if (bad || given.length === 0) return json({ error: `expected booleans for: ${keys.join(", ")}` }, 400);
           for (const k of given) {
+            const bad = persistError(() => setOption(k, body[k] as boolean));
+            if (bad) return bad;
             if (k in PREF_DEFAULTS) prefs[k as PrefKey] = body[k] as boolean;
             else engine.settings[k as keyof typeof engine.settings] = body[k] as boolean;
-            setOption(k, body[k] as boolean);
           }
         }
         return json({ ...engine.settings, ...prefs });
@@ -586,6 +591,17 @@ export function startServer(
     port,
     stop: () => server.stop(true),
   };
+}
+
+// A config write can be refused (agents.yaml has a YAML error, the disk is read-only). That is a
+// message for the user, not a stack trace and a 500 with an HTML body.
+function persistError(write: () => void): Response | undefined {
+  try {
+    write();
+    return undefined;
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 400, headers: { "content-type": "application/json" } });
+  }
 }
 
 class BadJson extends Error {}

@@ -72,7 +72,7 @@ export const SAFE_SHELL_RULES: PermissionRules = {
 const STRICTNESS: Record<Decision, number> = { allow: 0, ask: 1, deny: 2 };
 
 // What a pattern is matched against: the whole command line for shell, the file path otherwise.
-export function subject(tool: string, input: Record<string, unknown>): string {
+export function subject(tool: string, input: Record<string, unknown>, root = process.cwd()): string {
   if (tool === "shell") {
     const args = Array.isArray(input.args) ? input.args.map(String) : [];
     return [String(input.command ?? ""), ...args].join(" ").trim();
@@ -81,13 +81,13 @@ export function subject(tool: string, input: Record<string, unknown>): string {
   // resolved later by safePath. Unnormalized, `./secret.txt` slipped past a `secret*` deny and
   // `src/../.niti/agents.yaml` satisfied an `src/**` allow — both writing the same file the rule
   // was protecting.
-  return typeof input.path === "string" ? normalizePath(projectRelative(input.path)) : "";
+  return typeof input.path === "string" ? normalizePath(projectRelative(input.path, root)) : "";
 }
 
 // An absolute path inside the project is the same file as its relative spelling, and has to be
 // judged as that: `/proj/.niti/agents.yaml` slipped past every `.niti/**` and `secret*` rule, and
 // past the sensitive-config prompt, because the rules only ever saw the relative form.
-// process.cwd() is the project root (both entry points chdir to it before anything runs).
+// `root` is the agent's working root — the project, or its worktree checkout — which is not always cwd.
 export function projectRelative(p: string, root = process.cwd()): string {
   if (!isAbsolute(p)) return p;
   const rel = relative(root, p);
@@ -182,9 +182,9 @@ export function splitSegments(cmdline: string): string[] {
   return segments.map((s) => s.trim()).filter(Boolean);
 }
 
-export function resolve(layers: (PermissionRules | undefined)[], tool: string, input: Record<string, unknown>): Decision {
+export function resolve(layers: (PermissionRules | undefined)[], tool: string, input: Record<string, unknown>, root = process.cwd()): Decision {
   const kind = tool === "shell" ? "text" : "path";
-  const subj = subject(tool, input);
+  const subj = subject(tool, input, root);
   if (tool === "shell") {
     const segments = splitSegments(subj);
     // Only re-dispatch per-segment for an actual multi-command line — a single command must resolve
@@ -193,7 +193,7 @@ export function resolve(layers: (PermissionRules | undefined)[], tool: string, i
       let strictest: Decision = "allow";
       for (const seg of segments) {
         const [command, ...args] = seg.split(/\s+/).filter(Boolean);
-        const decision = resolve(layers, tool, { command: command ?? "", args });
+        const decision = resolve(layers, tool, { command: command ?? "", args }, root);
         if (STRICTNESS[decision] > STRICTNESS[strictest]) strictest = decision;
       }
       return strictest;

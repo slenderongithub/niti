@@ -490,3 +490,28 @@ test("GET /files lists the project within the /graph boundary; GET /file reads o
   expect((await get("/file?path=.niti/agents.yaml")).status).toBe(400); // ignored set
   expect((await get("/file?path=bin.dat")).status).toBe(415); // binary
 });
+
+// agents.yaml with a YAML error: niti refuses to overwrite it, and tells the client why instead of a 500.
+test("POST /theme, /auto and /settings answer 400 with the reason when agents.yaml is not valid YAML", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-badyaml-"));
+  const prev = process.cwd();
+  process.chdir(dir);
+  try {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(".niti");
+    const broken = "agents: [\n  - broken: {";
+    writeFileSync(".niti/agents.yaml", broken);
+    const { h } = setup();
+    track(h);
+    const post = (path: string, body: unknown) =>
+      fetch(`${h.url}${path}`, { method: "POST", headers: { authorization: `Bearer ${h.token}` }, body: JSON.stringify(body) });
+    for (const [path, body] of [["/theme", { theme: "dusk" }], ["/auto", { auto: true }], ["/settings", { reduceMotion: true }]] as const) {
+      const res = await post(path, body);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toContain("not valid YAML");
+    }
+    expect(readFileSync(".niti/agents.yaml", "utf8")).toBe(broken);
+  } finally {
+    process.chdir(prev);
+  }
+});

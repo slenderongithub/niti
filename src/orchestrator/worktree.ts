@@ -1,13 +1,14 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 
 // Git isolation for a run: agents write into a throwaway worktree/branch instead of the real root,
 // merged back only on explicit user action (never automatically — this is a consequential action,
 // same philosophy as approvals and dangerous-shell prompts elsewhere in this codebase).
 
 export interface WorktreeHandle {
-  path: string;
+  path: string; // the worktree's checkout — the whole repo
+  workDir: string; // where agents work: the launch folder's place inside it (== path when launched at the repo root)
   branch: string;
   baseSha: string; // HEAD at creation time — what diffStat compares against
 }
@@ -44,7 +45,13 @@ export async function createWorktree(root: string, id: string): Promise<Worktree
   const r = await git(root, ["worktree", "add", "-b", branch, path]);
   if (r.code !== 0) throw new Error(`git worktree add failed: ${r.stderr.trim() || r.stdout.trim()}`);
   await excludeWorktrees(root);
-  return { path, branch, baseSha: head.stdout.trim() };
+  // niti may have been launched from a folder inside the repo. The checkout is the whole repo, so
+  // agents have to be pointed at the same folder within it, not at its top.
+  const top = await git(root, ["rev-parse", "--show-toplevel"]);
+  const sub = top.code === 0 ? relative(realpathSync(top.stdout.trim()), realpathSync(root)) : "";
+  const workDir = sub && !sub.startsWith("..") ? join(path, sub) : path;
+  mkdirSync(workDir, { recursive: true }); // a folder git does not track yet is absent from the checkout
+  return { path, workDir, branch, baseSha: head.stdout.trim() };
 }
 
 // A worktree inside the repo is a nested checkout: to the outer repo it looks like a gitlink, so
@@ -54,7 +61,9 @@ export async function createWorktree(root: string, id: string): Promise<Worktree
 async function excludeWorktrees(root: string): Promise<void> {
   const dir = await git(root, ["rev-parse", "--git-common-dir"]);
   if (dir.code !== 0) return;
-  const excludePath = join(root, dir.stdout.trim(), "info", "exclude");
+  // resolve, not join: from a subfolder git prints the common dir absolute, and joining an absolute
+  // path onto root made a nonsense location the exclude was then silently written to.
+  const excludePath = resolve(root, dir.stdout.trim(), "info", "exclude");
   try {
     const current = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : "";
     if (current.includes(".niti/worktrees/")) return;
@@ -160,9 +169,12 @@ export async function snapshotBranch(root: string, name: string): Promise<{ ok: 
 // leaving any other currently-staged changes in `root` untouched.
 export async function mergeFiles(root: string, branch: string, files: string[]): Promise<{ ok: boolean; message: string }> {
   if (!files.length) return { ok: false, message: "no files selected" };
-  const checkout = await git(root, ["checkout", branch, "--", ...files]);
+  // `files` are repo-relative (that is what the worktree's diff reports), and git reads pathspecs
+  // relative to its cwd — which is a subfolder when niti was launched from one.
+  const top = (await git(root, ["rev-parse", "--show-toplevel"])).stdout.trim() || root;
+  const checkout = await git(top, ["checkout", branch, "--", ...files]);
   if (checkout.code !== 0) return { ok: false, message: checkout.stderr.trim() || checkout.stdout.trim() };
-  const commit = await git(root, ["commit", "-q", "-m", `niti: merge ${files.length} file(s) from ${branch}`, "--", ...files]);
+  const commit = await git(top, ["commit", "-q", "-m", `niti: merge ${files.length} file(s) from ${branch}`, "--", ...files]);
   // Nothing to commit (the checked-out content is identical to what's already in root) isn't a
   // failure — it means those files were already up to date, not that the merge went wrong.
   if (commit.code !== 0 && !(commit.stdout + commit.stderr).includes("nothing to commit")) {

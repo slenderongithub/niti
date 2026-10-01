@@ -461,3 +461,19 @@ test("refreshProvider rebuilds the clients of every agent on that provider, and 
   expect(built).toEqual(["a", "b"]);
   expect(engine.refreshProvider("anthropic")).toEqual([]);
 });
+
+test("a second submit during async worktree setup is refused, not run beside the first", async () => {
+  const repo = mkdtempSync(join(tmpdir(), "niti-engine-race-"));
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  writeFileSync(join(repo, "README.md"), "hi\n");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repo });
+  const provider: Provider = { async send() { return { text: "[]", toolCalls: [] }; } };
+  const one: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: [] }];
+  const engine = new Engine({ configs: one, makeProvider: () => provider, interactive: false, root: repo, worktree: true });
+  const first = engine.submit("one");
+  await expect(engine.submit("two")).rejects.toThrow(/already running/);
+  await first.catch(() => {});
+});

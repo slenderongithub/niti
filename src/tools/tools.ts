@@ -1,7 +1,7 @@
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, realpathSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ToolSpec, ToolCall as ProviderCall } from "../providers/provider.ts";
 import { buildRepoMap } from "../agent/repomap.ts";
 
@@ -24,41 +24,51 @@ export const WRITE_TOOLS = new Set(["write_file", "edit"]);
 // latency — the model had already decided on all of them before the first one ran.
 export const READ_ONLY_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "repo_map", "diagnostics", "hover", "recall"]);
 
-// SECURITY BOUNDARY — do not simplify. Resolve the agent-supplied path and reject any escape,
-// including through a symlink: the lexical check alone let `write_file link/x` land outside the
-// project when `link` pointed out of it (and a dangling link's target would be created there).
+// SECURITY BOUNDARY — do not simplify. Resolve the agent-supplied path and reject any escape.
+// A `../` escape is always refused. A path that is lexically inside the project but reaches outside
+// it through a symlink (a workspace link, `docs -> ../shared`) is refused unless the caller passes
+// `allowLink`, which the agent loop does only for a call a human just approved (see agent.ts).
 // ponytail: this is realpath-based containment, not an OS sandbox — `shell` is still unjailed.
-export function safePath(root: string, p: string): string {
+export function safePath(root: string, p: string, allowLink = false): string {
   const abs = resolve(root, p);
   if (abs !== root && !abs.startsWith(root + sep)) {
     throw new Error(`path escapes project root: ${p}`);
   }
+  if (!allowLink && linkEscape(root, abs)) throw new Error(`path escapes project root: ${p} (${linkEscape(root, abs)})`);
+  return abs;
+}
+
+// Why `abs` — already known to be inside `root` lexically — really lands outside it, if it does.
+function linkEscape(root: string, abs: string): string | undefined {
   const realRoot = realpathSync(root);
-  // The deepest ancestor that exists decides where the write would really land; the not-yet-created
+  // The deepest ancestor that exists decides where a write would really land; the not-yet-created
   // tail is plain names (abs is already resolved), so it cannot add a further hop.
   let probe = abs;
-  let real: string | undefined;
   for (;;) {
     try {
-      real = realpathSync(probe);
-      break;
+      const real = realpathSync(probe);
+      return real === realRoot || real.startsWith(realRoot + sep) ? undefined : "via symlink";
     } catch {
-      let dangling = false;
       try {
-        dangling = lstatSync(probe).isSymbolicLink(); // exists as a link, but its target doesn't
+        if (lstatSync(probe).isSymbolicLink()) return "dangling symlink"; // a link whose target is missing
       } catch {
         /* nothing there at all — keep climbing */
       }
-      if (dangling) throw new Error(`path escapes project root: ${p} (dangling symlink)`);
       const up = dirname(probe);
-      if (up === probe) break;
+      if (up === probe) return undefined;
       probe = up;
     }
   }
-  if (real !== undefined && real !== realRoot && !real.startsWith(realRoot + sep)) {
-    throw new Error(`path escapes project root: ${p} (via symlink)`);
+}
+
+// True when `p` is inside the project by its spelling but leaves it through a symlink.
+export function escapesViaSymlink(root: string, p: string): boolean {
+  try {
+    const abs = resolve(root, p);
+    return (abs === root || abs.startsWith(root + sep)) && linkEscape(root, abs) !== undefined;
+  } catch {
+    return false;
   }
-  return abs;
 }
 
 // ponytail: fixed ceilings, not per-agent configurable — move to agents.yaml if a real project
@@ -134,12 +144,12 @@ export function shell(
   // SIGKILL caps wall-clock; and the accumulators are capped so `find /` can't grow a string
   // until the process dies (and can't be re-sent as tool output on every later turn).
   return new Promise((res) => {
-    // Own process group (POSIX), so a timeout kills the whole tree. Killing only the direct child
-    // left `npm run dev`'s grandchildren alive holding the stdout pipe open — "close" never fired
-    // and the agent hung on that one tool call forever, long after the timeout "fired".
-    const group = process.platform !== "win32";
-    const child = spawn(command, args, { cwd: root, detached: group, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
-    if (group && child.pid) liveGroups.add(child.pid);
+    // Same process group as the core on purpose: the TUI ends the core by signalling its group, so
+    // a shell child that left it would outlive a hard-killed core. A timeout instead kills the
+    // child's whole *tree* (see killTree) — killing only the direct child left `npm run dev`'s
+    // grandchildren holding the stdout pipe open, so "close" never fired and the agent hung on the
+    // call forever, long after the timeout "fired".
+    const child = spawn(command, args, { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
     const stdout = new HeadTail(maxOutput);
     const stderr = new HeadTail(maxOutput);
     let timedOut = false;
@@ -148,12 +158,11 @@ export function shell(
       if (done) return;
       done = true;
       clearTimeout(timer);
-      if (child.pid) liveGroups.delete(child.pid);
       res({ stdout: stdout.text(), stderr: stderr.text() + extraErr + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : ""), code });
     };
     const timer = setTimeout(() => {
       timedOut = true;
-      killGroup(child.pid);
+      killTree(child.pid);
       child.kill("SIGKILL");
       setTimeout(() => finish(-1), 2000).unref(); // a pipe that still will not close must not hold the tool call
     }, timeoutMs);
@@ -170,20 +179,34 @@ export function shell(
   });
 }
 
-// Process groups still running a shell tool call. The group is its own (see shell()), so it no
-// longer dies with the core's — without this, quitting mid-build orphaned the build.
-const liveGroups = new Set<number>();
-function killGroup(pid: number | undefined): void {
-  if (!pid || process.platform === "win32") return;
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    /* already gone */
+// Kill `pid` and everything it started. The tree is read *before* anything dies — once a parent is
+// gone its children are re-parented to init and can no longer be found from it.
+function killTree(pid: number | undefined): void {
+  if (!pid) return;
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", timeout: 5000 });
+    return;
+  }
+  const ps = spawnSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8", timeout: 5000 });
+  const kids = new Map<number, number[]>();
+  for (const line of (ps.stdout ?? "").split("\n")) {
+    const [c, p] = line.trim().split(/\s+/).map(Number);
+    if (c && p) kids.set(p, [...(kids.get(p) ?? []), c]);
+  }
+  const all: number[] = [];
+  for (const q = [pid]; q.length; ) {
+    const cur = q.pop()!;
+    all.push(cur);
+    q.push(...(kids.get(cur) ?? []));
+  }
+  for (const p of all.reverse()) {
+    try {
+      process.kill(p, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
   }
 }
-process.on("exit", () => {
-  for (const pid of liveGroups) killGroup(pid);
-});
 
 // A tool result is pushed into `turns` and re-sent on every later iteration of the loop, so an
 // unbounded read is not one big response — it is one big response per turn, forever. Cap it, and
@@ -269,8 +292,8 @@ async function listFiles(root: string, dir: string): Promise<string[]> {
   return out.sort();
 }
 
-async function listDir(root: string, rel: string): Promise<string> {
-  const abs = safePath(root, rel || ".");
+async function listDir(root: string, rel: string, allowLink = false): Promise<string> {
+  const abs = safePath(root, rel || ".", allowLink);
   let entries;
   try {
     entries = await readdir(abs, { withFileTypes: true });
@@ -300,7 +323,7 @@ async function globFiles(root: string, pattern: string, limit: number): Promise<
 async function grepFiles(
   root: string,
   pattern: string,
-  opts: { path?: string; glob?: string; limit: number; ignoreCase?: boolean },
+  opts: { path?: string; glob?: string; limit: number; ignoreCase?: boolean; allowLink?: boolean },
 ): Promise<string> {
   if (!pattern) return "error: grep needs a pattern";
   let re: RegExp;
@@ -309,7 +332,7 @@ async function grepFiles(
   } catch (err) {
     return `error: invalid regular expression ${JSON.stringify(pattern)}: ${(err as Error).message}`;
   }
-  const base = safePath(root, opts.path || ".");
+  const base = safePath(root, opts.path || ".", opts.allowLink);
   let candidates = await listFiles(root, base);
   if (opts.glob) {
     const g = new Bun.Glob(opts.glob);
@@ -364,16 +387,16 @@ export async function runTool(
   call: ToolCall,
   allowed: string[],
   root: string = process.cwd(),
-  hooks: { onOutput?: (chunk: string) => void } = {}, // shell output as it arrives, for the live view
+  hooks: { onOutput?: (chunk: string) => void; allowSymlinkEscape?: boolean } = {}, // shell output as it arrives; an approved symlink escape
 ): Promise<string> {
   if (!allowed.includes(call.tool)) {
     throw new Error(`tool '${call.tool}' not allowed for this agent`);
   }
   switch (call.tool) {
     case "read_file":
-      return await readCapped(safePath(root, call.path), call.path, call.offset, call.limit);
+      return await readCapped(safePath(root, call.path, hooks.allowSymlinkEscape), call.path, call.offset, call.limit);
     case "list_dir":
-      return await listDir(root, call.path ?? ".");
+      return await listDir(root, call.path ?? ".", hooks.allowSymlinkEscape);
     case "glob":
       return await globFiles(root, call.pattern, call.limit ?? 100);
     case "repo_map":
@@ -384,9 +407,10 @@ export async function runTool(
         glob: call.glob,
         limit: call.limit ?? 50,
         ignoreCase: call.ignoreCase,
+        allowLink: hooks.allowSymlinkEscape,
       });
     case "write_file": {
-      const abs = safePath(root, call.path);
+      const abs = safePath(root, call.path, hooks.allowSymlinkEscape);
       // Create the parent directories. Without this every `write_file src/api/routes.ts` into a
       // directory that doesn't exist yet failed with a bare ENOENT — which is most of what an
       // agent building something new does. The path is already jailed by safePath, so the
@@ -396,7 +420,7 @@ export async function runTool(
       return `wrote ${call.path}`;
     }
     case "edit": {
-      const abs = safePath(root, call.path);
+      const abs = safePath(root, call.path, hooks.allowSymlinkEscape);
       const before = await readFile(abs, "utf8");
       const after = applyEdit(before, call.oldString, call.newString, call.replaceAll ?? false, call.path);
       await writeFile(abs, after);

@@ -11,7 +11,7 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, normalizePath, projectRelative, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, escapesViaSymlink, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
@@ -163,9 +163,12 @@ export function isEgressShellCall(name: string, input: Record<string, unknown>):
 // A self-modifying permissions/MCP-server config file is rare and high-consequence enough to
 // always confirm — an agent silently adding an MCP server entry to its own config is exactly the
 // kind of write that should never ride through on a standing "always allow write_file" grant.
-export function isSensitiveConfigWrite(name: string, input: Record<string, unknown>): boolean {
+// Tools whose `path` argument names a file or folder inside the project.
+const PATH_TOOLS = new Set(["read_file", "write_file", "edit", "list_dir", "grep"]);
+
+export function isSensitiveConfigWrite(name: string, input: Record<string, unknown>, root = process.cwd()): boolean {
   if (name !== "write_file" && name !== "edit") return false;
-  return normalizePath(projectRelative(String(input.path ?? ""))).startsWith(".niti/"); // "/" on every OS
+  return normalizePath(projectRelative(String(input.path ?? ""), root)).startsWith(".niti/"); // "/" on every OS
 }
 
 export function overContextThreshold(inputTokens: number, context: number, ratio = WARN_RATIO): boolean {
@@ -969,7 +972,7 @@ export class Agent {
     let key: string | undefined;
     let hash: string | undefined;
     if (call.name === "read_file" && !output.startsWith("error:") && output.length >= 800) {
-      key = `${safePath(this.root, String(call.input.path ?? ""))}|${call.input.offset ?? ""}|${call.input.limit ?? ""}`;
+      key = `${safePath(this.root, String(call.input.path ?? ""), true)}|${call.input.offset ?? ""}|${call.input.limit ?? ""}`;
       hash = createHash("sha256").update(output).digest("hex");
       if (ctx.reads?.get(key) === hash) {
         return `[unchanged: ${call.input.path} is identical to your earlier read of it (same range), which is still in this conversation above. Not repeated — use that copy.]`;
@@ -1064,7 +1067,7 @@ export class Agent {
     const held: string[] = [];
     try {
       for (const c of candidates) {
-        const abs = safePath(this.root, c.rel);
+        const abs = safePath(this.root, c.rel, true); // a file this run already wrote, approval included
         if (this.locks) await this.locks.acquire(abs, this.config.id);
         held.push(abs);
         await writeFile(abs, c.baseline);
@@ -1074,7 +1077,7 @@ export class Agent {
     } finally {
       for (const c of candidates) {
         // A failed restore leaves the user's file at its baseline — say so loudly, never silently.
-        await writeFile(safePath(this.root, c.rel), c.current).catch((err: unknown) => {
+        await writeFile(safePath(this.root, c.rel, true), c.current).catch((err: unknown) => {
           const payload = `could not restore ${c.rel} after the tamper check (${err instanceof Error ? err.message : String(err)}) — it is still at its pre-task content`;
           this.bus.publish({ agentId: this.config.id, type: "error", payload, time: Date.now() });
         });
@@ -1097,7 +1100,7 @@ export class Agent {
     for (const rel of files) {
       const baseline = ctx.checkBaseline?.get(rel);
       if (baseline === undefined) continue;
-      const abs = safePath(this.root, rel);
+      const abs = safePath(this.root, rel, true);
       if (this.locks) await this.locks.acquire(abs, this.config.id);
       try {
         await writeFile(abs, baseline);
@@ -1162,7 +1165,7 @@ export class Agent {
     // return above the permission resolution, so `permissions: { spawn_fork: { "*": deny } }` was
     // silently inert and an agent with `allowedTools: []` still got the tool.
     if (call.name === "spawn_fork") {
-      const forkDecision = resolvePermission([this.config.permissions, ...this.permissionLayers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input);
+      const forkDecision = resolvePermission([this.config.permissions, ...this.permissionLayers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input, this.root);
       if (forkDecision === "deny") {
         this.bus.publish({ agentId: id, type: "error", payload: "spawn_fork: denied by permission policy", time: Date.now(), ...this.endOf(call, started, false) });
         return "denied by permission policy";
@@ -1190,14 +1193,18 @@ export class Agent {
     // Always prompts, even with a standing "always allow" grant or --auto — none of these can be
     // waved through by config. leavesProjectRoot used to be excluded from this set despite its own
     // doc comment claiming otherwise, so a standing shell grant could silently wave it through.
+    // Inside the project by its spelling, outside it through a symlink: allowed, but only on a
+    // human's say-so, and never waved through by --auto or a standing grant.
+    const viaLink = PATH_TOOLS.has(call.name) && typeof call.input.path === "string" && escapesViaSymlink(this.root, call.input.path);
     const dangerous =
       isDangerousShellCall(call.name, call.input) ||
       isEgressShellCall(call.name, call.input) ||
-      isSensitiveConfigWrite(call.name, call.input) ||
-      leavesProjectRoot(call.name, call.input);
+      isSensitiveConfigWrite(call.name, call.input, this.root) ||
+      leavesProjectRoot(call.name, call.input) ||
+      viaLink;
     // The file as it stands right now — used for the approval diff and, once approved, the undo
     // checkpoint. Read once: re-reading after the prompt would race the user's own edits.
-    const before = WRITE_TOOLS.has(call.name) ? await this.readForCheckpoint(String(call.input.path ?? "")) : undefined;
+    const before = WRITE_TOOLS.has(call.name) ? await this.readForCheckpoint(String(call.input.path ?? ""), viaLink) : undefined;
     // The diff is for the human, not the model. It used to be assigned onto call.input, which is
     // the same object pushed into `turns` and serialized verbatim by every OpenAI-compatible
     // provider — so overwriting a 1,500-line file sent that file three times per turn, forever,
@@ -1210,7 +1217,7 @@ export class Agent {
       diff = writeFileDiff(before ?? null, String(call.input.content ?? ""));
     }
     // agent config → project config (+ --auto) → built-in safe-shell allowlist → built-in defaults → "ask".
-    const decision = resolvePermission([this.config.permissions, ...this.permissionLayers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input);
+    const decision = resolvePermission([this.config.permissions, ...this.permissionLayers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input, this.root);
     // A deny is policy, not a question: it short-circuits without queuing an approval, and it holds
     // in headless mode too (where there is no approver and everything else would just run).
     if (decision === "deny") {
@@ -1254,7 +1261,7 @@ export class Agent {
         // key worktree-aware, since setRoot repoints the root mid-session.
         writeRel = WRITE_TOOLS.has(sandboxCall.tool) && "path" in sandboxCall ? sandboxCall.path : undefined;
         const lockPath =
-          writeRel !== undefined ? safePath(this.root, writeRel) : sandboxCall.tool === "shell" ? SHELL_LOCK : undefined;
+          writeRel !== undefined ? safePath(this.root, writeRel, viaLink) : sandboxCall.tool === "shell" ? SHELL_LOCK : undefined;
         if (lockPath && this.locks) await this.locks.acquire(lockPath, id);
         try {
           // Checkpoint under the lock and after approval: the write is next, so nothing can slip
@@ -1267,7 +1274,7 @@ export class Agent {
             // applies correctly, but checkpointing the stale copy meant a later /rewind silently
             // reverted their edit too and reported success. The lock is held here, so nothing can
             // slip in between this snapshot and the write it protects.
-            atWrite = await this.readForCheckpoint(writeRel!);
+            atWrite = await this.readForCheckpoint(writeRel!, viaLink);
             if (before !== undefined && atWrite !== undefined && atWrite !== before) {
               this.bus.publish({
                 agentId: id,
@@ -1278,7 +1285,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call) });
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowSymlinkEscape: viaLink && !!this.approve }); // only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo
@@ -1304,7 +1311,7 @@ export class Agent {
           if (!ctx.checkBaseline.has(writeRel)) ctx.checkBaseline.set(writeRel, before);
         }
       }
-      const after = writeRel !== undefined ? await this.readForCheckpoint(writeRel) : undefined;
+      const after = writeRel !== undefined ? await this.readForCheckpoint(writeRel, viaLink) : undefined;
       const result = summarizeResult(call.name, output);
       const shellFailed = result.exitCode !== undefined && result.exitCode !== 0;
       this.bus.publish({
@@ -1327,10 +1334,10 @@ export class Agent {
 
   // Current file contents, or undefined when the file doesn't exist yet / the path is invalid —
   // an unreadable file simply means "no before state", never a failed tool call.
-  private async readForCheckpoint(path: string): Promise<string | undefined> {
+  private async readForCheckpoint(path: string, allowLink = false): Promise<string | undefined> {
     if (!path) return undefined;
     try {
-      return await readFile(safePath(this.root, path), "utf8");
+      return await readFile(safePath(this.root, path, allowLink), "utf8");
     } catch {
       return undefined;
     }

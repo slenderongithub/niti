@@ -1869,3 +1869,34 @@ test("live view: every call's start gets exactly one end, with its result, diff 
   expect(events.find((e) => e.type === "todo")?.todos).toEqual([{ text: "edit a.txt", status: "done" }]);
   expect(events.find((e) => e.callId === "c3" && e.phase === "end")?.type).toBe("tool_end"); // coordination tool: generic end
 });
+
+// A symlink that leaves the project is not blocked outright (workspace links are real), and not
+// silent either: the call is force-asked, and only a human's yes lets it through.
+test("a write through a symlink out of the project needs approval, and lands only when approved", async () => {
+  const outside = mkdtempSync(join(tmpdir(), "niti-outside-"));
+  const run = async (approve: boolean) => {
+    const root = mkdtempSync(join(tmpdir(), "niti-link-"));
+    require("node:fs").symlinkSync(outside, join(root, "shared"));
+    let n = 0;
+    const stub: Provider = {
+      async send() {
+        n++;
+        return n === 1
+          ? { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "shared/note.txt", content: "hi" } }] }
+          : { text: "done", toolCalls: [] };
+      },
+    };
+    const asked: boolean[] = [];
+    const agent = new Agent({ ...cfg, allowedTools: ["write_file"] }, stub, new Bus(), {
+      root,
+      approve: async (_t, _i, forceAsk) => (asked.push(!!forceAsk), approve),
+      permissionLayers: [{ "*": { "*": "allow" } }], // even a blanket allow (--auto) must not skip the prompt
+    });
+    await agent.run("write", { taskId: "t" });
+    return asked;
+  };
+  expect(await run(false)).toEqual([true]);
+  expect(existsSync(join(outside, "note.txt"))).toBe(false);
+  expect(await run(true)).toEqual([true]);
+  expect(readFileSync(join(outside, "note.txt"), "utf8")).toBe("hi");
+});

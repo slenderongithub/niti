@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -142,4 +142,25 @@ test("snapshotBranch on a clean tree points the branch at HEAD, and refuses name
   expect((await snapshotBranch(repo, "clean")).message).toContain("nothing uncommitted");
   expect((await snapshotBranch(repo, "clean")).ok).toBe(false); // already exists
   expect((await snapshotBranch(repo, "bad name..")).ok).toBe(false);
+});
+
+test("launched from a subfolder: agents work in the matching folder, the exclude lands in the real git dir, and a partial merge finds repo-relative paths", async () => {
+  const repo = initRepo();
+  const sub = join(repo, "packages", "api");
+  mkdirSync(sub, { recursive: true });
+  writeFileSync(join(sub, "index.ts"), "a\n");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["commit", "-q", "-m", "api"], { cwd: repo });
+
+  const handle = await createWorktree(sub, "sub1");
+  expect(handle.workDir).toBe(join(handle.path, "packages", "api"));
+  expect(existsSync(join(handle.workDir, "index.ts"))).toBe(true);
+  expect(readFileSync(join(repo, ".git", "info", "exclude"), "utf8")).toContain(".niti/worktrees/");
+
+  writeFileSync(join(handle.workDir, "new.ts"), "b\n");
+  await commitPending(handle);
+  const merged = await mergeFiles(sub, handle.branch, ["packages/api/new.ts"]);
+  expect(merged.ok).toBe(true);
+  expect(existsSync(join(sub, "new.ts"))).toBe(true);
+  await removeWorktree(sub, handle.path);
 });

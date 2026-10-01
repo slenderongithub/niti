@@ -296,18 +296,25 @@ export class Engine {
 
   private async runSession(goal: string, run: (deps: RunnerDeps) => Promise<unknown>, summarize: () => boolean = () => true): Promise<void> {
     if (this.busy) throw new Error("a task is already running");
-    if (this.worktreeEnabled) {
-      if (this.worktreeHandle) {
-        throw new Error(`a previous run's worktree (${this.worktreeHandle.branch}) hasn't been merged yet — merge or discard it first`);
-      }
-      if (!(await isGitRepo(this.root))) throw new Error("worktree isolation requires a git repository");
-      // ponytail: a fresh worktree per run, off current HEAD — a run started before an earlier
-      // worktree's work is merged won't see it. Upgrade to stacking/rebasing onto the pending
-      // worktree's branch if that gap matters in practice.
-      this.worktreeHandle = await createWorktree(this.root, crypto.randomUUID().slice(0, 8));
-      for (const a of this.agents) a.setRoot(this.worktreeHandle.path);
-    }
+    // Claimed before the first await below: worktree setup is async, and a second submit arriving
+    // during it used to pass the check above and start a second run beside the first.
     this.busy = true;
+    try {
+      if (this.worktreeEnabled) {
+        if (this.worktreeHandle) {
+          throw new Error(`a previous run's worktree (${this.worktreeHandle.branch}) hasn't been merged yet — merge or discard it first`);
+        }
+        if (!(await isGitRepo(this.root))) throw new Error("worktree isolation requires a git repository");
+        // ponytail: a fresh worktree per run, off current HEAD — a run started before an earlier
+        // worktree's work is merged won't see it. Upgrade to stacking/rebasing onto the pending
+        // worktree's branch if that gap matters in practice.
+        this.worktreeHandle = await createWorktree(this.root, crypto.randomUUID().slice(0, 8));
+        for (const a of this.agents) a.setRoot(this.worktreeHandle.workDir);
+      }
+    } catch (err) {
+      this.busy = false;
+      throw err;
+    }
     this.cancelled = false;
     this.abortCtl = new AbortController();
     this.lastGoal = goal;
