@@ -24,8 +24,10 @@ export function isHomeDir(dir: string, home = homedir()): boolean {
   return dir === home || real(dir) === real(home);
 }
 
-const git = (cwd: string, args: string[]) =>
-  spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+// stdout is piped only when the caller reads it: `ls-files` on a big tracked folder prints more than
+// spawnSync's buffer holds, which surfaced as a failure and read as "nothing tracked here".
+const git = (cwd: string, args: string[], wantOutput = false) =>
+  spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", wantOutput ? "pipe" : "ignore", "ignore"] });
 
 // The project is the folder you launched niti in. It climbs to an enclosing git repo only when you
 // are genuinely inside that repo — the launch folder holds files the repo tracks — so running from
@@ -38,7 +40,7 @@ const git = (cwd: string, args: string[]) =>
 export function findProjectRoot(from = process.cwd(), home = homedir()): string {
   const start = resolvePath(from);
   if (existsSync(join(start, ".niti")) || existsSync(join(start, ".git"))) return start;
-  const top = git(start, ["rev-parse", "--show-toplevel"]);
+  const top = git(start, ["rev-parse", "--show-toplevel"], true);
   const root = top.status === 0 ? top.stdout.trim() : "";
   if (!root || isHomeDir(root, home)) return start;
   // --error-unmatch: exit 0 only if something under here is tracked.

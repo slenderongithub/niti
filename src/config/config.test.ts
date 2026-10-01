@@ -286,3 +286,10 @@ test("setTheme refuses to overwrite an agents.yaml that is not valid YAML", () =
   expect(readFileSync(path, "utf8")).toBe(body);
 });
 
+
+test("findProjectRoot climbs from a large tracked folder (ls-files output exceeds spawnSync's buffer)", () => {
+  const { top, src } = repo();
+  for (let i = 0; i < 20000; i++) writeFileSync(join(src, `padding_for_a_long_listing_${String(i).padStart(6, "0")}.ts`), "");
+  spawnSync("git", ["-C", top, "add", "src"]);
+  expect(findProjectRoot(src, "/nonexistent-home")).toBe(top);
+}, 60_000);
