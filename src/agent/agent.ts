@@ -10,7 +10,7 @@ import { MAX_ASK_DEPTH, USER } from "../messaging/message-bus.ts";
 import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
-import { resolve as resolvePermission, normalizePath, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
+import { resolve as resolvePermission, normalizePath, projectRelative, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
 import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
@@ -116,7 +116,7 @@ export function leavesProjectRoot(name: string, input: Record<string, unknown>):
   const parts = [String(input.command ?? ""), ...(Array.isArray(input.args) ? input.args.map(String) : [])];
   // `--output=/abs` and `--file=../x` carry the path after the `=`, so check that half too.
   const paths = parts.flatMap((p) => (p.startsWith("-") && p.includes("=") ? [p.slice(p.indexOf("=") + 1)] : [p]));
-  return paths.some((p) => p === ".." || p.startsWith("../") || p.startsWith("/") || p.includes("/../"));
+  return paths.some((p) => /^\.\.([\\/]|$)/.test(p) || p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p) || /[\\/]\.\.[\\/]/.test(p));
 }
 
 // Binaries that talk to the network. Heuristic, not exhaustive: a false positive just costs one
@@ -165,7 +165,7 @@ export function isEgressShellCall(name: string, input: Record<string, unknown>):
 // kind of write that should never ride through on a standing "always allow write_file" grant.
 export function isSensitiveConfigWrite(name: string, input: Record<string, unknown>): boolean {
   if (name !== "write_file" && name !== "edit") return false;
-  return normalizePath(String(input.path ?? "")).startsWith(".niti/"); // "/" on every OS
+  return normalizePath(projectRelative(String(input.path ?? ""))).startsWith(".niti/"); // "/" on every OS
 }
 
 export function overContextThreshold(inputTokens: number, context: number, ratio = WARN_RATIO): boolean {

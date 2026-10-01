@@ -7,7 +7,7 @@
 //
 // Layers are consulted in order (agent config → project config → --auto → built-in defaults); the
 // first layer with a matching pattern decides. Unmatched everywhere → "ask".
-import { posix } from "node:path";
+import { posix, relative, isAbsolute } from "node:path";
 
 export type Decision = "allow" | "ask" | "deny";
 export type ToolRules = Record<string, Decision>; // pattern → decision
@@ -81,7 +81,17 @@ export function subject(tool: string, input: Record<string, unknown>): string {
   // resolved later by safePath. Unnormalized, `./secret.txt` slipped past a `secret*` deny and
   // `src/../.niti/agents.yaml` satisfied an `src/**` allow — both writing the same file the rule
   // was protecting.
-  return typeof input.path === "string" ? normalizePath(input.path) : "";
+  return typeof input.path === "string" ? normalizePath(projectRelative(input.path)) : "";
+}
+
+// An absolute path inside the project is the same file as its relative spelling, and has to be
+// judged as that: `/proj/.niti/agents.yaml` slipped past every `.niti/**` and `secret*` rule, and
+// past the sensitive-config prompt, because the rules only ever saw the relative form.
+// process.cwd() is the project root (both entry points chdir to it before anything runs).
+export function projectRelative(p: string, root = process.cwd()): string {
+  if (!isAbsolute(p)) return p;
+  const rel = relative(root, p);
+  return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? p : rel;
 }
 
 // Rules and grants are written with "/" (`src/**`), and Bun.Glob matches on "/". node:path's

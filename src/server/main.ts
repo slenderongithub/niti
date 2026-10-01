@@ -20,6 +20,13 @@ export interface ServeResult {
 // print the handshake line the Go TUI parses from stdout. Everything else logs to stderr so the
 // first stdout line is always the handshake.
 export async function serveMain(opts: { port?: number; interactive?: boolean; auto?: boolean; worktree?: boolean } = {}): Promise<ServeResult> {
+  // A long-lived core with no handler dies on the first stray rejection or throw from a provider
+  // stream, an MCP/LSP child or a timer — taking every running agent and the user's session with it,
+  // when the TUI has no way to tell why. Log it (stderr is .niti/core.log) and keep serving.
+  const survive = (what: string) => (err: unknown) =>
+    console.error(`niti: ${what}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  process.on("unhandledRejection", survive("unhandled rejection"));
+  process.on("uncaughtException", survive("uncaught exception"));
   // Same root discovery as the CLI: the TUI spawns this directly, so it needs it too.
   const projectRoot = findProjectRoot();
   if (projectRoot !== process.cwd()) process.chdir(projectRoot);

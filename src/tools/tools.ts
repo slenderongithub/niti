@@ -1,4 +1,5 @@
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import type { ToolSpec, ToolCall as ProviderCall } from "../providers/provider.ts";
@@ -23,13 +24,39 @@ export const WRITE_TOOLS = new Set(["write_file", "edit"]);
 // latency — the model had already decided on all of them before the first one ran.
 export const READ_ONLY_TOOLS = new Set(["read_file", "list_dir", "glob", "grep", "repo_map", "diagnostics", "hover", "recall"]);
 
-// SECURITY BOUNDARY — do not simplify. Resolve the agent-supplied path and reject any escape.
-// ponytail: path-prefix check only. Symlinks inside the root that point out are NOT caught —
-// real OS sandboxing (realpath/chroot/seccomp) is the documented v1 ceiling.
+// SECURITY BOUNDARY — do not simplify. Resolve the agent-supplied path and reject any escape,
+// including through a symlink: the lexical check alone let `write_file link/x` land outside the
+// project when `link` pointed out of it (and a dangling link's target would be created there).
+// ponytail: this is realpath-based containment, not an OS sandbox — `shell` is still unjailed.
 export function safePath(root: string, p: string): string {
   const abs = resolve(root, p);
   if (abs !== root && !abs.startsWith(root + sep)) {
     throw new Error(`path escapes project root: ${p}`);
+  }
+  const realRoot = realpathSync(root);
+  // The deepest ancestor that exists decides where the write would really land; the not-yet-created
+  // tail is plain names (abs is already resolved), so it cannot add a further hop.
+  let probe = abs;
+  let real: string | undefined;
+  for (;;) {
+    try {
+      real = realpathSync(probe);
+      break;
+    } catch {
+      let dangling = false;
+      try {
+        dangling = lstatSync(probe).isSymbolicLink(); // exists as a link, but its target doesn't
+      } catch {
+        /* nothing there at all — keep climbing */
+      }
+      if (dangling) throw new Error(`path escapes project root: ${p} (dangling symlink)`);
+      const up = dirname(probe);
+      if (up === probe) break;
+      probe = up;
+    }
+  }
+  if (real !== undefined && real !== realRoot && !real.startsWith(realRoot + sep)) {
+    throw new Error(`path escapes project root: ${p} (via symlink)`);
   }
   return abs;
 }
@@ -107,15 +134,29 @@ export function shell(
   // SIGKILL caps wall-clock; and the accumulators are capped so `find /` can't grow a string
   // until the process dies (and can't be re-sent as tool output on every later turn).
   return new Promise((res) => {
-    const child = spawn(command, args, {
-      cwd: root,
-      timeout: timeoutMs,
-      killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: childEnv(),
-    });
+    // Own process group (POSIX), so a timeout kills the whole tree. Killing only the direct child
+    // left `npm run dev`'s grandchildren alive holding the stdout pipe open — "close" never fired
+    // and the agent hung on that one tool call forever, long after the timeout "fired".
+    const group = process.platform !== "win32";
+    const child = spawn(command, args, { cwd: root, detached: group, stdio: ["ignore", "pipe", "pipe"], env: childEnv() });
+    if (group && child.pid) liveGroups.add(child.pid);
     const stdout = new HeadTail(maxOutput);
     const stderr = new HeadTail(maxOutput);
+    let timedOut = false;
+    let done = false;
+    const finish = (code: number, extraErr = "") => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (child.pid) liveGroups.delete(child.pid);
+      res({ stdout: stdout.text(), stderr: stderr.text() + extraErr + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : ""), code });
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup(child.pid);
+      child.kill("SIGKILL");
+      setTimeout(() => finish(-1), 2000).unref(); // a pipe that still will not close must not hold the tool call
+    }, timeoutMs);
     child.stdout.on("data", (d) => {
       stdout.add(String(d));
       limits.onOutput?.(String(d));
@@ -124,18 +165,25 @@ export function shell(
       stderr.add(String(d));
       limits.onOutput?.(String(d));
     });
-    child.on("close", (code, signal) => {
-      // node kills a timed-out child with killSignal; nothing else in this process sends SIGKILL.
-      const timedOut = signal === "SIGKILL";
-      res({
-        stdout: stdout.text(),
-        stderr: stderr.text() + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : ""),
-        code: code ?? -1,
-      });
-    });
-    child.on("error", (err) => res({ stdout: stdout.text(), stderr: String(err), code: -1 }));
+    child.on("close", (code) => finish(code ?? -1));
+    child.on("error", (err) => finish(-1, String(err)));
   });
 }
+
+// Process groups still running a shell tool call. The group is its own (see shell()), so it no
+// longer dies with the core's — without this, quitting mid-build orphaned the build.
+const liveGroups = new Set<number>();
+function killGroup(pid: number | undefined): void {
+  if (!pid || process.platform === "win32") return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    /* already gone */
+  }
+}
+process.on("exit", () => {
+  for (const pid of liveGroups) killGroup(pid);
+});
 
 // A tool result is pushed into `turns` and re-sent on every later iteration of the loop, so an
 // unbounded read is not one big response — it is one big response per turn, forever. Cap it, and

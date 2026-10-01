@@ -119,3 +119,10 @@ test("Windows-style paths match forward-slash rules (a src/secrets/** deny must 
   expect(resolve(rules, "write_file", { path: "src\\secrets\\key.pem" })).toBe("deny");
   expect(subject("write_file", { path: "src\\a\\..\\b.ts" })).toBe("src/b.ts");
 });
+
+test("an absolute path inside the project is judged as its relative spelling", async () => {
+  const { resolve: res, subject } = await import("./permissions.ts");
+  const abs = `${process.cwd()}/.niti/agents.yaml`;
+  expect(subject("write_file", { path: abs })).toBe(".niti/agents.yaml");
+  expect(res([{ write_file: { ".niti/**": "deny", "*": "allow" } }], "write_file", { path: abs })).toBe("deny");
+});

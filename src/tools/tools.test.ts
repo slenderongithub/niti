@@ -353,3 +353,27 @@ test("summarizeResult: the one line a finished call leaves behind", () => {
   expect(long.tail).toEqual(["l16", "l17", "l18", "l19"]);
   expect(long.lines).toBe(20);
 });
+
+import { symlinkSync, writeFileSync as writeSync, mkdirSync as mkdirSyncFs } from "node:fs";
+
+test("safePath rejects a write through a symlink that points outside the root", () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-root-"));
+  const outside = mkdtempSync(join(tmpdir(), "niti-outside-"));
+  symlinkSync(outside, join(root, "link"));
+  symlinkSync(join(outside, "not-yet"), join(root, "dangling"));
+  writeSync(join(outside, "secret"), "x");
+  symlinkSync(join(outside, "secret"), join(root, "file-link"));
+  expect(() => safePath(root, "link/new.txt")).toThrow(/escapes/);
+  expect(() => safePath(root, "dangling")).toThrow(/escapes/);
+  expect(() => safePath(root, "file-link")).toThrow(/escapes/);
+  mkdirSyncFs(join(root, "src"));
+  expect(safePath(root, "src/new/deep.ts")).toBe(join(root, "src/new/deep.ts")); // ordinary new paths still fine
+});
+
+test("a shell timeout kills grandchildren too, instead of hanging on their open pipe", async () => {
+  const t0 = Date.now();
+  // sh forks a long sleep that inherits stdout; killing only sh would leave the pipe open for 30s
+  const r = await shell(tmpdir(), "sh", ["-c", "sleep 30 & wait"], { timeoutMs: 300 });
+  expect(Date.now() - t0).toBeLessThan(5000);
+  expect(r.stderr).toContain("timed out");
+});
