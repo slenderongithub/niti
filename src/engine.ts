@@ -1,4 +1,5 @@
-import { relative } from "node:path";
+import { parse, relative } from "node:path";
+import { isHomeDir } from "./config/config.ts";
 import { Agent, type AgentConfig } from "./agent/agent.ts";
 import { detectChecks, parseChecks } from "./agent/verify.ts";
 import { repoMapSection } from "./agent/repomap.ts";
@@ -100,7 +101,10 @@ export class Engine {
     // A held lock is only reclaimable once its holder is actually finished — Agent.busy is the
     // authority, and it is in this process. `undefined` (an id we don't know) counts as not alive.
     this.locks = new LockRegistry(this.bus, undefined, (holder) => this.byId.get(holder)?.busy ?? false);
-    if (opts.watch) {
+    // $HOME or a drive root is somewhere you launched from by accident, not a project: watching it
+    // recursively and indexing it for the system prompt costs minutes of startup for no benefit.
+    const broadRoot = isHomeDir(this.root) || this.root === parse(this.root).root;
+    if (opts.watch && !broadRoot) {
       this.watcher = watchProject(this.root, (path) =>
         this.bus.publish({ agentId: "system", type: "external_change", payload: path, time: Date.now() }),
       );
@@ -156,7 +160,7 @@ export class Engine {
     // Built once, not per agent: it walks the tree and shells out to git, and every agent gets the
     // same map. Placed in the system prompt (ahead of the conversation) so a provider's cache
     // prefix still matches call to call — see anthropic.ts's cache_control placement.
-    const mapSection = opts.repoMap === false ? "" : repoMapSection(this.root);
+    const mapSection = opts.repoMap === false || broadRoot ? "" : repoMapSection(this.root);
 
     for (const c of opts.configs) {
       this.declaredPrompts.set(c.id, c.systemPrompt);

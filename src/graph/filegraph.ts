@@ -47,7 +47,9 @@ export function trackedFiles(root: string, includeUntracked = false): string[] |
     // --exclude-standard is what makes "others" honour .gitignore, so new files an agent just
     // created show up while build output and dependency trees still do not.
     const args = includeUntracked ? ["ls-files", "--cached", "--others", "--exclude-standard"] : ["ls-files"];
-    const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+    // Bounded: with a repo rooted at $HOME, "others" means walking the whole home directory, and this
+    // call is synchronous on the event loop at boot. A timeout reads as "no git list" → the capped walk.
+    const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 5000 });
     if (r.status !== 0 || !r.stdout) return undefined;
     return r.stdout.split("\n").filter(Boolean);
   } catch {

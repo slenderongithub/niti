@@ -247,8 +247,13 @@ func projectRoot() string {
 	if err != nil {
 		return "."
 	}
+	home, _ := os.UserHomeDir()
+	if real, err := filepath.EvalSymlinks(home); err == nil {
+		home = real // cwd is always a real path; $HOME may not be
+	}
 	for _, marker := range []string{".niti", ".git"} {
-		for dir := cwd; ; dir = filepath.Dir(dir) {
+		// $HOME is never a project root unless launched from it (mirrors findProjectRoot).
+		for dir := cwd; dir != home || dir == cwd; dir = filepath.Dir(dir) {
 			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
 				return dir
 			}

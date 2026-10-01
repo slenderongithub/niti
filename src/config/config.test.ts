@@ -239,3 +239,42 @@ test("an auto-discovered AGENTS.md is capped, a deliberately listed one is not",
   expect(loadInstructions([], dir, true).length).toBeLessThan(40_000); // resent on every call, nobody opted in
   expect(loadInstructions(["AGENTS.md"], dir, true).length).toBeGreaterThan(100_000);
 });
+
+// Regression: ~/.niti (a real project dir created by running niti from $HOME) or a stray ~/.git
+// captured every folder under home, so an empty project showed the whole home directory.
+test("findProjectRoot never roots at $HOME unless launched from it", () => {
+  const home = mkdtempSync(join(tmpdir(), "niti-home-"));
+  mkdirSync(join(home, ".niti"));
+  mkdirSync(join(home, ".git"));
+  const empty = join(home, "empty-project");
+  mkdirSync(empty);
+  expect(findProjectRoot(empty, home)).toBe(empty);
+  expect(findProjectRoot(home, home)).toBe(home);
+  // a real repo under home still wins over the walk reaching home
+  mkdirSync(join(empty, ".git"));
+  mkdirSync(join(empty, "src"));
+  expect(findProjectRoot(join(empty, "src"), home)).toBe(empty);
+});
+
+test("an empty agents.yaml does not crash the loaders", () => {
+  const path = writeYaml("");
+  expect(loadMcpServers(path)).toEqual([]);
+  expect(loadOptions(path)).toBeDefined();
+});
+
+test("setTheme refuses to overwrite an agents.yaml that is not valid YAML", () => {
+  const body = "agents: [\n  - broken: {";
+  const path = writeYaml(body);
+  expect(() => setTheme("dark", path)).toThrow(/not valid YAML/);
+  expect(readFileSync(path, "utf8")).toBe(body);
+});
+
+test("the $HOME guard holds when $HOME is a symlink to the real home", () => {
+  const real = mkdtempSync(join(tmpdir(), "niti-real-"));
+  const link = real + "-link";
+  require("node:fs").symlinkSync(real, link);
+  mkdirSync(join(real, ".niti"));
+  mkdirSync(join(real, "empty"));
+  // cwd is a real path, HOME is the symlink spelling — exactly how macOS /var → /private/var bit us
+  expect(findProjectRoot(join(real, "empty"), link)).toBe(join(real, "empty"));
+});

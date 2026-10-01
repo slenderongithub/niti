@@ -1,6 +1,7 @@
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
-import { parse, parseDocument } from "yaml";
+import { parse, parseDocument, type Document } from "yaml";
 import type { AgentConfig } from "../agent/agent.ts";
 import type { McpServerConfig } from "../mcp/mcp.ts";
 import type { LspServerConfig } from "../lsp/registry.ts";
@@ -13,8 +14,25 @@ import { truncateMiddle } from "../agent/context.ts";
 // (or, failing that, .git/). Every path in niti is cwd-relative, so running from a subdirectory
 // used to create a second, empty .niti/ there and start with zero agents — while the real config
 // sat one level up. Call this once at process start, before any loader runs.
-export function findProjectRoot(from = process.cwd()): string {
-  for (let dir = resolvePath(from); ; ) {
+// `dir` is the home directory, however either side is spelled: cwd is always a real path, but $HOME
+// may be a symlink (or differ in case/trailing slash), and a plain string compare then missed it.
+export function isHomeDir(dir: string, home = homedir()): boolean {
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolvePath(p);
+    }
+  };
+  return dir === home || real(dir) === real(home);
+}
+
+export function findProjectRoot(from = process.cwd(), home = homedir()): string {
+  const start = resolvePath(from);
+  // $HOME is never a project root unless you launched from it: ~/.niti (global config) or a stray
+  // ~/.git would otherwise capture every folder under home, showing the whole home dir as "the project".
+  const stop = (dir: string) => dir !== start && isHomeDir(dir, home);
+  for (let dir = start; !stop(dir); ) {
     if (existsSync(join(dir, ".niti"))) return dir;
     const parent = dirname(dir);
     if (parent === dir) break; // hit the filesystem root
@@ -22,12 +40,13 @@ export function findProjectRoot(from = process.cwd()): string {
   }
   // No .niti/ anywhere: fall back to the enclosing git repo, so `niti "task"` in a fresh checkout
   // roots itself at the project rather than at whatever subdirectory you happened to be in.
-  for (let dir = resolvePath(from); ; ) {
+  for (let dir = start; !stop(dir); ) {
     if (existsSync(join(dir, ".git"))) return dir;
     const parent = dirname(dir);
-    if (parent === dir) return resolvePath(from); // not a repo either — cwd it is
+    if (parent === dir) break;
     dir = parent;
   }
+  return start; // not a repo either — cwd it is
 }
 
 // Loads and validates .niti/agents.yaml. User-authored → validate required fields with clear errors.
@@ -166,13 +185,29 @@ export function loadLspServers(path = ".niti/agents.yaml"): LspServerConfig[] {
 // MCP servers declared under `mcpServers:` in the same file. Skips malformed entries.
 export function loadMcpServers(path = ".niti/agents.yaml"): McpServerConfig[] {
   if (!existsSync(path)) return [];
-  const raw = parse(readFileSync(path, "utf8")) as { mcpServers?: unknown };
-  if (!Array.isArray(raw.mcpServers)) return [];
+  const raw = parse(readFileSync(path, "utf8")) as { mcpServers?: unknown } | null;
+  if (!Array.isArray(raw?.mcpServers)) return []; // raw is null for an empty file
   return raw.mcpServers.flatMap((s: unknown) => {
     const r = (s ?? {}) as Record<string, unknown>;
     if (typeof r.name !== "string" || typeof r.command !== "string") return [];
     return [{ name: r.name, command: r.command, args: Array.isArray(r.args) ? (r.args as string[]) : undefined }];
   });
+}
+
+// Every write to agents.yaml goes through here. Two ways the old inline writes lost a user's config:
+// a crash or concurrent writer mid-writeFileSync left a truncated file (so it is tmp + rename, like
+// the task board and the auth store), and a hand-edited file with a YAML error was re-serialised
+// from a half-parsed document, replacing what the user had with whatever survived the parse.
+function editConfig(path: string, apply: (doc: Document) => void): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const doc = existsSync(path) ? parseDocument(readFileSync(path, "utf8")) : parseDocument("{}");
+  if (doc.errors.length) {
+    throw new Error(`${path} is not valid YAML (${doc.errors[0]!.message}) — fix it by hand; niti will not overwrite it`);
+  }
+  apply(doc);
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, doc.toString());
+  renameSync(tmp, path);
 }
 
 // Persist role assignments back to .niti/agents.yaml (written by the team picker and the live
@@ -186,10 +221,8 @@ export function saveAgents(agents: AgentConfig[], path = ".niti/agents.yaml"): v
   // the one facing untrusted input (POST /agents). One guard here covers all three writers: the
   // HTTP route, the init wizard, and the TUI team picker.
   agents.forEach((a, i) => validate(a, i, path));
-  mkdirSync(dirname(path), { recursive: true });
   // Only the `agents:` key is replaced, and only through the Document API — so comments elsewhere
   // in the file (and any top-level key niti does not know about) survive a picker relaunch.
-  const doc = existsSync(path) ? parseDocument(readFileSync(path, "utf8")) : parseDocument("{}");
   const next = {
     agents: agents.map((a) => ({
       id: a.id,
@@ -207,31 +240,24 @@ export function saveAgents(agents: AgentConfig[], path = ".niti/agents.yaml"): v
       ...(a.maxOutput ? { maxOutput: a.maxOutput } : {}),
     })),
   };
-  doc.set("agents", next.agents);
-  writeFileSync(path, doc.toString());
+  editConfig(path, (doc) => doc.set("agents", next.agents));
 }
 
 // Persist the active theme name back to .niti/agents.yaml (written by the TUI's theme carousel so
 // the choice survives a restart and the web dashboard can read it back via loadOptions()). Same
 // read-merge-write shape as saveAgents — only the `theme` key is touched.
 export function setTheme(theme: string, path = ".niti/agents.yaml"): void {
-  mkdirSync(dirname(path), { recursive: true });
   // parse→stringify round-trips *data*, discarding every comment in the file. This runs on every
   // keypress of the theme carousel, so a user who documented their roster lost all of it the first
   // time they cycled a colour scheme. The Document API edits in place and keeps the rest verbatim.
-  const doc = existsSync(path) ? parseDocument(readFileSync(path, "utf8")) : parseDocument("{}");
-  doc.set("theme", theme);
-  writeFileSync(path, doc.toString());
+  editConfig(path, (doc) => doc.set("theme", theme));
 }
 
 // Persist the approval mode back to .niti/agents.yaml (written by the team picker's setup question
 // and by /auto | /manual) so the choice survives a restart. Same read-merge-write shape as
 // setTheme — only the `auto` key is touched, every comment and hand-written block around it stays.
 export function setOption(key: string, value: boolean, path = ".niti/agents.yaml"): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const doc = existsSync(path) ? parseDocument(readFileSync(path, "utf8")) : parseDocument("{}");
-  doc.set(key, value);
-  writeFileSync(path, doc.toString());
+  editConfig(path, (doc) => doc.set(key, value));
 }
 
 export const setAuto = (on: boolean, path?: string): void => setOption("auto", on, path);
