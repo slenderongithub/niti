@@ -130,24 +130,3 @@ func TestParseArgs(t *testing.T) {
 		t.Fatal("no args, no verbose")
 	}
 }
-
-func TestProjectRootFindsAncestorNiti(t *testing.T) {
-	root := t.TempDir()
-	sub := filepath.Join(root, "src", "deep")
-	if err := os.MkdirAll(filepath.Join(root, ".niti"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	prev, _ := os.Getwd()
-	if err := os.Chdir(sub); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prev) })
-	got, _ := filepath.EvalSymlinks(projectRoot())
-	want, _ := filepath.EvalSymlinks(root)
-	if got != want {
-		t.Fatalf("projectRoot() = %q, want %q", got, want)
-	}
-}

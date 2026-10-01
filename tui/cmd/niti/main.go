@@ -238,31 +238,44 @@ func openCoreLog() (*os.File, string) {
 	return f, path
 }
 
-// projectRoot mirrors the core's findProjectRoot (src/config/config.ts): the nearest ancestor with
-// .niti/, else the nearest with .git/, else cwd. openCoreLog used to MkdirAll(".niti") in cwd before
-// the core looked, so launching from a subdirectory planted an empty .niti/ there that the core then
-// took as the project root — starting with zero agents while the real config sat one level up.
+// projectRoot mirrors the core's findProjectRoot (src/config/config.ts): the folder niti was
+// launched in, climbing to an enclosing git repo only when that folder holds files the repo tracks
+// (so `src/` of a real project finds the project, while a new folder under some stray repo is its
+// own project). $HOME is never climbed to. openCoreLog creates .niti/ here, so a disagreement with
+// the core would plant it in the wrong folder.
 func projectRoot() string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "."
 	}
-	home, _ := os.UserHomeDir()
-	if real, err := filepath.EvalSymlinks(home); err == nil {
-		home = real // cwd is always a real path; $HOME may not be
-	}
 	for _, marker := range []string{".niti", ".git"} {
-		// $HOME is never a project root unless launched from it (mirrors findProjectRoot).
-		for dir := cwd; dir != home || dir == cwd; dir = filepath.Dir(dir) {
-			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-				return dir
-			}
-			if filepath.Dir(dir) == dir {
-				break
-			}
+		if _, err := os.Stat(filepath.Join(cwd, marker)); err == nil {
+			return cwd
 		}
 	}
-	return cwd
+	out, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output()
+	top := strings.TrimSpace(string(out))
+	if err != nil || top == "" {
+		return cwd
+	}
+	if home, err := os.UserHomeDir(); err == nil && sameDir(top, home) {
+		return cwd
+	}
+	// --error-unmatch: exit 0 only if something under cwd is tracked.
+	if exec.Command("git", "-C", cwd, "ls-files", "--error-unmatch", "--", ".").Run() != nil {
+		return cwd
+	}
+	return top
+}
+
+// sameDir compares two paths through symlinks: cwd is always a real path, $HOME may not be.
+func sameDir(a, b string) bool {
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	if errA != nil || errB != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return ra == rb
 }
 
 // streamWithReconnect keeps `events` fed for the life of ctx, reconnecting with backoff whenever

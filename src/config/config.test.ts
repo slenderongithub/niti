@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
-import { writeFileSync, readFileSync, mkdtempSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAgents, loadOptions, loadInstructions, loadPermissions, loadMcpServers, saveAgents, setTheme, findProjectRoot } from "./config.ts";
@@ -170,27 +171,14 @@ agents:
   expect(loadMcpServers(path)).toEqual([{ name: "code-review", command: "crg", args: undefined }]);
 });
 
-test("findProjectRoot walks up to the directory holding .niti/, like git finds .git", () => {
+test("findProjectRoot does not climb to an ancestor .niti or a bare .git marker", () => {
   const root = mkdtempSync(join(tmpdir(), "niti-root-"));
   mkdirSync(join(root, ".niti"), { recursive: true });
-  const deep = join(root, "src", "server", "nested");
+  mkdirSync(join(root, ".git"), { recursive: true });
+  const deep = join(root, "src", "nested");
   mkdirSync(deep, { recursive: true });
-
-  // Running from a subdirectory used to create a second, empty .niti/ there and start with zero
-  // agents while the real config sat above it.
-  expect(findProjectRoot(deep)).toBe(root);
-  expect(findProjectRoot(root)).toBe(root);
-});
-
-test("findProjectRoot falls back to the enclosing git repo, then to cwd", () => {
-  const repo = mkdtempSync(join(tmpdir(), "niti-git-"));
-  mkdirSync(join(repo, ".git"), { recursive: true });
-  const sub = join(repo, "packages", "api");
-  mkdirSync(sub, { recursive: true });
-  expect(findProjectRoot(sub)).toBe(repo);
-
-  const bare = mkdtempSync(join(tmpdir(), "niti-bare-"));
-  expect(findProjectRoot(bare)).toBe(bare); // neither marker → stay put
+  expect(findProjectRoot(deep, "/nonexistent-home")).toBe(deep);
+  expect(findProjectRoot(root, "/nonexistent-home")).toBe(root);
 });
 
 test("saving config preserves comments and unrecognised keys", () => {
@@ -240,20 +228,49 @@ test("an auto-discovered AGENTS.md is capped, a deliberately listed one is not",
   expect(loadInstructions(["AGENTS.md"], dir, true).length).toBeGreaterThan(100_000);
 });
 
-// Regression: ~/.niti (a real project dir created by running niti from $HOME) or a stray ~/.git
-// captured every folder under home, so an empty project showed the whole home directory.
-test("findProjectRoot never roots at $HOME unless launched from it", () => {
-  const home = mkdtempSync(join(tmpdir(), "niti-home-"));
-  mkdirSync(join(home, ".niti"));
-  mkdirSync(join(home, ".git"));
-  const empty = join(home, "empty-project");
-  mkdirSync(empty);
-  expect(findProjectRoot(empty, home)).toBe(empty);
-  expect(findProjectRoot(home, home)).toBe(home);
-  // a real repo under home still wins over the walk reaching home
-  mkdirSync(join(empty, ".git"));
-  mkdirSync(join(empty, "src"));
-  expect(findProjectRoot(join(empty, "src"), home)).toBe(empty);
+// The project is the folder niti is launched in; it climbs to a git repo only when launched inside
+// that repo's tracked files. Regression: a stray ~/.git, or a ~/.niti niti planted by itself, swallowed
+// every folder underneath, so an empty project showed a parent folder's files.
+function repo(): { top: string; src: string; fresh: string } {
+  const top = realpathSync(mkdtempSync(join(tmpdir(), "niti-repo-")));
+  mkdirSync(join(top, "src"));
+  mkdirSync(join(top, "fresh"));
+  writeFileSync(join(top, "src", "a.ts"), "x");
+  const run = (...a: string[]) => spawnSync("git", ["-C", top, ...a]);
+  run("init", "-q");
+  run("add", "src/a.ts");
+  return { top, src: join(top, "src"), fresh: join(top, "fresh") };
+}
+
+test("findProjectRoot: inside a repo's tracked files it climbs to the repo root", () => {
+  const { top, src } = repo();
+  expect(findProjectRoot(src, "/nonexistent-home")).toBe(top);
+});
+
+test("findProjectRoot: an untracked/new folder under a repo is its own project", () => {
+  const { fresh } = repo();
+  expect(findProjectRoot(fresh, "/nonexistent-home")).toBe(fresh);
+});
+
+test("findProjectRoot: a folder with its own .niti or .git is the root, and a stray .niti above is ignored", () => {
+  const { top, src } = repo();
+  mkdirSync(join(top, ".niti"));
+  expect(findProjectRoot(src, "/nonexistent-home")).toBe(top); // tracked → repo root, not via .niti
+  const own = join(top, "fresh", ".niti");
+  mkdirSync(own);
+  expect(findProjectRoot(join(top, "fresh"), "/nonexistent-home")).toBe(join(top, "fresh"));
+});
+
+test("findProjectRoot never climbs into $HOME, even a dotfiles repo that tracks the folder", () => {
+  const { top, src } = repo();
+  expect(findProjectRoot(src, top)).toBe(src);
+});
+
+test("the $HOME guard holds when $HOME is a symlink to the real home", () => {
+  const { top, src } = repo();
+  const link = top + "-link";
+  symlinkSync(top, link);
+  expect(findProjectRoot(src, link)).toBe(src);
 });
 
 test("an empty agents.yaml does not crash the loaders", () => {
@@ -269,12 +286,3 @@ test("setTheme refuses to overwrite an agents.yaml that is not valid YAML", () =
   expect(readFileSync(path, "utf8")).toBe(body);
 });
 
-test("the $HOME guard holds when $HOME is a symlink to the real home", () => {
-  const real = mkdtempSync(join(tmpdir(), "niti-real-"));
-  const link = real + "-link";
-  require("node:fs").symlinkSync(real, link);
-  mkdirSync(join(real, ".niti"));
-  mkdirSync(join(real, "empty"));
-  // cwd is a real path, HOME is the symlink spelling — exactly how macOS /var → /private/var bit us
-  expect(findProjectRoot(join(real, "empty"), link)).toBe(join(real, "empty"));
-});

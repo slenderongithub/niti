@@ -1,5 +1,6 @@
 import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { parse, parseDocument, type Document } from "yaml";
 import type { AgentConfig } from "../agent/agent.ts";
@@ -10,12 +11,8 @@ import { CATALOG, providerKeys } from "../providers/catalog.ts";
 import { parseReasoning } from "../providers/provider.ts";
 import { truncateMiddle } from "../agent/context.ts";
 
-// Find the project root the way git finds a repo: walk up for the first ancestor holding .niti/
-// (or, failing that, .git/). Every path in niti is cwd-relative, so running from a subdirectory
-// used to create a second, empty .niti/ there and start with zero agents — while the real config
-// sat one level up. Call this once at process start, before any loader runs.
-// `dir` is the home directory, however either side is spelled: cwd is always a real path, but $HOME
-// may be a symlink (or differ in case/trailing slash), and a plain string compare then missed it.
+// True when `dir` is the home directory, however either side is spelled: cwd is always a real path,
+// but $HOME may be a symlink (or differ in case/trailing slash), and a plain string compare missed it.
 export function isHomeDir(dir: string, home = homedir()): boolean {
   const real = (p: string) => {
     try {
@@ -27,26 +24,26 @@ export function isHomeDir(dir: string, home = homedir()): boolean {
   return dir === home || real(dir) === real(home);
 }
 
+const git = (cwd: string, args: string[]) =>
+  spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+
+// The project is the folder you launched niti in. It climbs to an enclosing git repo only when you
+// are genuinely inside that repo — the launch folder holds files the repo tracks — so running from
+// `src/` of a real project still finds the project, while a new folder that merely happens to sit
+// under some repo (a stray ~/Developer/.git, a dotfiles repo) is its own project instead of being
+// swallowed by it. The earlier rule — nearest ancestor with .niti/ or .git/ — did swallow it, and
+// niti then planted its own .niti/ in the ancestor, so every sibling folder went the same way.
+// $HOME is never climbed to. Call this once at process start, before any loader runs.
+// ponytail: no git on PATH → the launch folder is the project; add a marker walk if that bites.
 export function findProjectRoot(from = process.cwd(), home = homedir()): string {
   const start = resolvePath(from);
-  // $HOME is never a project root unless you launched from it: ~/.niti (global config) or a stray
-  // ~/.git would otherwise capture every folder under home, showing the whole home dir as "the project".
-  const stop = (dir: string) => dir !== start && isHomeDir(dir, home);
-  for (let dir = start; !stop(dir); ) {
-    if (existsSync(join(dir, ".niti"))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) break; // hit the filesystem root
-    dir = parent;
-  }
-  // No .niti/ anywhere: fall back to the enclosing git repo, so `niti "task"` in a fresh checkout
-  // roots itself at the project rather than at whatever subdirectory you happened to be in.
-  for (let dir = start; !stop(dir); ) {
-    if (existsSync(join(dir, ".git"))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return start; // not a repo either — cwd it is
+  if (existsSync(join(start, ".niti")) || existsSync(join(start, ".git"))) return start;
+  const top = git(start, ["rev-parse", "--show-toplevel"]);
+  const root = top.status === 0 ? top.stdout.trim() : "";
+  if (!root || isHomeDir(root, home)) return start;
+  // --error-unmatch: exit 0 only if something under here is tracked.
+  const tracked = git(start, ["ls-files", "--error-unmatch", "--", "."]);
+  return tracked.status === 0 ? root : start;
 }
 
 // Loads and validates .niti/agents.yaml. User-authored → validate required fields with clear errors.
