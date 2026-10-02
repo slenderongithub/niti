@@ -66,9 +66,10 @@ test("/rewind keeps going past a checkpoint whose directory is gone", () => {
   writeFileSync(file, "v2");
   const store = new SessionStore(openDb(":memory:"));
   const sid = store.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  const e = engine(store); // first: it only rewinds writes made after it started
   store.checkpoint(sid, file, "v1");
   store.checkpoint(sid, join(dir, "gone", "x.txt"), "old"); // e.g. a discarded worktree
-  const msg = engine(store).rewind(2);
+  const msg = e.rewind(2);
   expect(msg).toContain("skipped");
   expect(readFileSync(file, "utf8")).toBe("v1");
 });
