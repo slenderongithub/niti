@@ -15,12 +15,20 @@ open(os.path.join(proj, ".niti/agents.yaml"), "w").write(agents)
 os.makedirs(os.path.join(parent, ".git")); os.makedirs(os.path.join(parent, ".niti")); open(os.path.join(parent, "stray.txt"), "w").write("x")
 state = tempfile.mkdtemp()
 fake = subprocess.Popen(["bun", os.path.join(SP, "fakellm.ts"), str(llm), state], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# Clean up on every way out — a timeout's SIGTERM or an exception used to leave the fake model running.
+import atexit, signal
+atexit.register(fake.kill)
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
 time.sleep(0.6)
 env = dict(os.environ, TERM="xterm-256color", NITI_AUTH_FILE=os.path.join(state, "auth.json"), NITI_TRUST_FILE=os.path.join(state, "trust.json"), NITI_NO_MOUSE="1")
 env.pop("NITI_TRUST", None)
 pid, fd = pty.fork()
 if pid == 0:
   os.chdir(proj); os.execve(os.environ.get("NITI_E2E_LAUNCH", os.path.join(BIN, "niti")), ["niti"], env)  # NITI_E2E_LAUNCH: e.g. the npm-installed shim
+def _kill_tui():
+  try: os.kill(pid, 9)
+  except OSError: pass
+atexit.register(_kill_tui)
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 44, 140, 0, 0))
 buf = ""
 ansi = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")
