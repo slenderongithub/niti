@@ -179,6 +179,28 @@ export function isSensitiveConfigWrite(name: string, input: Record<string, unkno
   return normalizePath(projectRelative(String(input.path ?? ""), root)).startsWith(".niti/"); // "/" on every OS
 }
 
+// How long to wait before retrying a model call that failed with a rate limit (429) or an overloaded
+// provider (503/529), or undefined when it should not be retried. Honours the provider's own hint —
+// a retry-after header, or Gemini's retryDelay in the body — and gives up after ~a minute in total.
+const RATE_LIMIT_BACKOFF_MS = [5_000, 10_000, 20_000, 30_000];
+export function rateLimitWait(err: unknown, attempt: number): number | undefined {
+  if (attempt >= RATE_LIMIT_BACKOFF_MS.length) return undefined;
+  const e = err as { status?: number; code?: number; message?: string; headers?: Record<string, string> | { get?: (k: string) => string | null } };
+  const status = e?.status ?? e?.code;
+  const text = String(e?.message ?? err);
+  if (!(status === 429 || status === 503 || status === 529 || /too many requests|resource[_ ]exhausted|rate.?limit|overloaded|"code":\s*(429|503)\b/i.test(text))) return undefined;
+  const header = typeof (e?.headers as { get?: unknown })?.get === "function" ? (e.headers as { get: (k: string) => string | null }).get("retry-after") : (e?.headers as Record<string, string> | undefined)?.["retry-after"];
+  const hinted = header != null && header !== "" && Number.isFinite(Number(header)) ? Number(header) * 1000 : Number(text.match(/retryDelay\W+(\d+(?:\.\d+)?)s/)?.[1] ?? NaN) * 1000;
+  return Number.isFinite(hinted) ? Math.min(Math.max(hinted, 0), 60_000) : RATE_LIMIT_BACKOFF_MS[attempt]!;
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => (clearTimeout(t), reject(new Error("interrupted"))), { once: true });
+  });
+}
+
 export function overContextThreshold(inputTokens: number, context: number, ratio = WARN_RATIO): boolean {
   return context > 0 && inputTokens > context * ratio;
 }
@@ -604,15 +626,28 @@ export class Agent {
   // One model call, abortable. The signal goes to the provider (which cancels the HTTP request) and
   // the call is also raced against it, so an interrupt lands at once even with a provider (or a
   // compatible shim) that ignores the signal.
+  // Every model call goes through here — task turns, planning, answers, debate, forks. A rate limit
+  // or an overloaded provider is waited out right here, for about a minute (a free-tier quota window),
+  // instead of failing the call: a 429 used to restart a whole task from scratch, and ended a
+  // question, a plan or a debate outright. Interrupting still stops the wait at once.
   private async send(turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
-    const signal = this.abortSignal?.();
-    if (signal?.aborted) throw new Error("interrupted");
-    const call = this.provider.send(this.config.systemPrompt, turns, tools, onDelta, signal);
-    if (!signal) return call;
-    return Promise.race([
-      call,
-      new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("interrupted")), { once: true })),
-    ]);
+    for (let attempt = 0; ; attempt++) {
+      const signal = this.abortSignal?.();
+      if (signal?.aborted) throw new Error("interrupted");
+      try {
+        const call = this.provider.send(this.config.systemPrompt, turns, tools, onDelta, signal);
+        if (!signal) return await call;
+        return await Promise.race([
+          call,
+          new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("interrupted")), { once: true })),
+        ]);
+      } catch (err) {
+        const wait = rateLimitWait(err, attempt);
+        if (wait === undefined || signal?.aborted) throw err;
+        this.bus.publish({ agentId: this.config.id, type: "warning", payload: `${this.config.provider} is rate-limiting — retrying in ${Math.round(wait / 1000)}s`, time: Date.now() });
+        await abortableSleep(wait, signal);
+      }
+    }
   }
 
   // Answer a teammate's question. A bounded agentic loop (can read files / call tools to ground the

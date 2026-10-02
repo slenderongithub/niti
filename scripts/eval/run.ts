@@ -191,7 +191,8 @@ async function runOne(task: Task): Promise<Attempt> {
     // No `approve`: headless, and every tool is pre-granted — the eval measures capability, not
     // the approval UI. Verification is detected from the fixture exactly as it would be in a
     // real project, so a task whose fixture has no check simply runs without one.
-    const agent = new Agent(cfg, paced(makeProvider(cfg)), bus, { root: dir, usageTracker: usage, verify: detectChecks(dir) });
+    // sandbox: true — score what ships (the Engine runs shell sandboxed by default; see src/sandbox.ts).
+    const agent = new Agent(cfg, paced(makeProvider(cfg)), bus, { root: dir, usageTracker: usage, verify: detectChecks(dir), sandbox: true });
     const r = await agent.runDetailed(task.prompt);
     // The bare outcome is just "failed": a 429 that ended the run midway was indistinguishable from
     // the model giving up, and scored as its failure. The error text is what says which it was.

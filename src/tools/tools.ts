@@ -867,7 +867,7 @@ const SPECS: Record<string, ToolSpec> = {
 export const TOOL_GUIDANCE = `
 
 Working habits:
-- The project you are in is the whole job. Never go outside it on your own (no '..', no absolute paths elsewhere on the machine). The one exception is when the user explicitly names a file or folder outside the project — to bring it in, or to change it where it is: then use exactly that path with read_file, write_file or edit, and the user will be asked to approve the call.
+- The project you are in is the whole job. Never look outside it (no '..', no absolute paths elsewhere) unless the user names a path outside it — then use exactly that path; they approve each such call.
 - Start from the project map (or call 'repo_map', especially after a refactor). Find before you read. 'grep' tells you where something is in one call; 'glob' finds a file by name. Reading files to look for something, or guessing at a path, wastes the turns you need for the actual work.
 - Read before you write, and prefer 'edit' (exact snippet replacement) over 'write_file' for changes to an existing file — a blind overwrite loses work you didn't know was there.
 - 'edit' matches the file exactly. Copy oldString from what 'read_file' showed you, without the line numbers, and include enough surrounding lines to make it unique.

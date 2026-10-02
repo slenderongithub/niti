@@ -133,12 +133,12 @@ test("engine.debate alternates two agents, streams each turn, and finishes both 
 
 test("a provider failure ends a debate early but keeps what was said", async () => {
   const e = twoAgentEngine(sevenReplies, (n) => {
-    if (n === 3) throw new Error("rate limited");
+    if (n === 3) throw new Error("provider exploded"); // not retryable — a rate limit is now waited out
   });
   const out = await e.debate("a", "b", "q");
   expect(out).toContain("point 3");
   expect(out).not.toContain("point 4");
-  expect(out).toContain("Stopped early: rate limited");
+  expect(out).toContain("Stopped early: provider exploded");
   expect(e.running).toBe(false);
 });
 
