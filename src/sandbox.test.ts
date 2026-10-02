@@ -34,7 +34,7 @@ test.skipIf(!onMac)("an ordinary failure is not blamed on the sandbox", async ()
   expect(r.stderr).not.toContain("sandbox");
 });
 
-test("the profile denies reading credential stores and quotes paths safely", () => {
+test.skipIf(!onMac)("the profile denies reading credential stores and quotes paths safely", () => { // Seatbelt is macOS-only
   const p = seatbeltProfile(join(tmpdir(), 'niti "quoted" dir')); // a string is enough — no folder needed
   expect(p).toContain(`(deny file-read*`);
   expect(p).toContain(join(homedir(), ".ssh"));

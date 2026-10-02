@@ -173,7 +173,9 @@ export function shell(
       // Told plainly, so the model's next step is a different approach rather than the same command
       // again or a claim that it worked.
       const note = limits.sandbox && code !== 0 && blockedBySandbox(stdout.text() + err) ? SANDBOX_NOTE : "";
-      res({ stdout: stdout.text(), stderr: err + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : "") + note, code });
+      // -1 for a timeout on every platform: on Windows the taskkill'd process exits 1, which read as an
+      // ordinary failure of the command itself.
+      res({ stdout: stdout.text(), stderr: err + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : "") + note, code: timedOut ? -1 : code });
     };
     const timer = setTimeout(() => {
       timedOut = true;
