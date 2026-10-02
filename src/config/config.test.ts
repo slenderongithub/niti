@@ -217,7 +217,7 @@ test("an auto-discovered AGENTS.md is capped, a deliberately listed one is not",
   expect(loadInstructions(["AGENTS.md"], dir, true).length).toBeGreaterThan(100_000);
 });
 
-test("isHomeDir sees through a symlinked $HOME", () => {
+test.skipIf(process.platform === "win32")("isHomeDir sees through a symlinked $HOME", () => {
   const real = realpathSync(mkdtempSync(join(tmpdir(), "niti-home-")));
   const link = real + "-link";
   symlinkSync(real, link);

@@ -8,6 +8,22 @@ import { watchProject, isIgnored } from "./watch.ts";
 // a fixed amount and hoping.
 // Comfortably longer than watch.ts's SELF_WRITE_TTL_MS (2s): a poll budget equal to the window
 // it races is how this suite went red on CI and stayed green locally.
+const LIVE = { timeout: 40_000 };
+
+// Bun's fs.watch on Linux sometimes drops one of two writes made back to back in one folder (bun
+// 1.3.10: 16/20 delivered where node 22 delivers 20/20, same script) — that, not niti, is what kept
+// turning CI and the v0.4.4 release job red. These tests check what niti reports and filters, not
+// that the runtime delivers every event, so a write that has to be seen is repeated until it is —
+// the same thing armed() does for its probe.
+async function deliver(root: string, rel: string, seen: string[], ms = 10_000): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    writeFileSync(join(root, rel), String(Date.now()));
+    if (await until(() => seen.includes(rel), 250)) return true;
+  }
+  return seen.includes(rel);
+}
+
 async function until(pred: () => boolean, ms = 5000): Promise<boolean> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -42,10 +58,9 @@ test("a change inside the project is reported", async () => {
   const w = watchProject(root, (p) => seen.push(p));
   await armed(root, seen);
 
-  writeFileSync(join(root, "note.txt"), "hello");
-  expect(await until(() => seen.includes("note.txt"))).toBe(true);
+  expect(await deliver(root, "note.txt", seen)).toBe(true);
   w.close();
-}, 20_000);
+}, LIVE);
 
 test("noise directories never fire", async () => {
   const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
@@ -55,14 +70,10 @@ test("noise directories never fire", async () => {
 
   mkdirSync(join(root, "node_modules"), { recursive: true });
   writeFileSync(join(root, "node_modules", "junk.js"), "x");
-  writeFileSync(join(root, "real.txt"), "x"); // fires, so we know the watcher was live
-
-  // Same CI-Linux-is-slower-to-deliver-fs.watch-events headroom as the other tests in this file —
-  // the default until() timeout (5000ms) sits right at bun's old per-test default with no margin.
-  expect(await until(() => seen.includes("real.txt"), 10_000)).toBe(true);
+  expect(await deliver(root, "real.txt", seen)).toBe(true); // fires, so we know the watcher was live
   expect(seen.some((p) => p.includes("node_modules"))).toBe(false);
   w.close();
-}, 20_000);
+}, LIVE);
 
 test("an agent's own write is not reported back as an external change", async () => {
   // Two sequential real fs.watch round trips, each with an `until()` budget matching
@@ -79,19 +90,17 @@ test("an agent's own write is not reported back as an external change", async ()
   // files back to back instead made this depend on two rapid writes producing two distinct fs
   // events — Linux coalesces them, so the only event was the suppressed one and the test hung
   // waiting for a second that was never coming.
-  writeFileSync(join(root, "theirs.txt"), "a human wrote this");
-  expect(await until(() => seen.includes("theirs.txt"), 10_000)).toBe(true); // CI Linux headroom, as above
+  expect(await deliver(root, "theirs.txt", seen)).toBe(true);
 
   w.markSelfWrite("mine.txt");
   writeFileSync(join(root, "mine.txt"), "agent wrote this");
   // Give the notification a chance to arrive and be suppressed. A pass here means either it was
   // filtered or it hasn't landed yet; the following write proves the watcher is still delivering,
   // so "hasn't landed yet" cannot silently carry the assertion.
-  writeFileSync(join(root, "after.txt"), "another human write");
-  expect(await until(() => seen.includes("after.txt"), 10_000)).toBe(true);
+  expect(await deliver(root, "after.txt", seen)).toBe(true);
   expect(seen).not.toContain("mine.txt");
   w.close();
-}, 20_000);
+}, LIVE);
 
 test("an agent's new file does not report its folder as changed either", async () => {
   const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
@@ -102,11 +111,10 @@ test("an agent's new file does not report its folder as changed either", async (
   w.markSelfWrite("./src/new.ts");
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "new.ts"), "agent wrote this");
-  writeFileSync(join(root, "after.txt"), "a human write"); // proves delivery, as above
-  expect(await until(() => seen.includes("after.txt"), 10_000)).toBe(true);
+  expect(await deliver(root, "after.txt", seen)).toBe(true); // proves delivery, as above
   expect(seen.filter((p) => p.startsWith("src"))).toEqual([]);
   w.close();
-}, 20_000);
+}, LIVE);
 
 test("isIgnored matches on any path segment", () => {
   expect(isIgnored(".git/HEAD")).toBe(true);
@@ -126,3 +134,18 @@ test("close() stops further reports", async () => {
   await new Promise((r) => setTimeout(r, 200));
   expect(seen).toEqual([]);
 });
+
+// The Linux case bun's recursive watch got wrong: a folder created after watching began, with a file
+// written into it straight away (what npm install, a scaffolder or a git checkout does).
+test("a file in a folder created after the watch started is reported, and so is what follows", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-watch-"));
+  const seen: string[] = [];
+  const w = watchProject(root, (p) => seen.push(p));
+  await armed(root, seen);
+
+  mkdirSync(join(root, "pages"));
+  expect(await deliver(root, "pages/home.ts", seen)).toBe(true);
+  expect(await deliver(root, "after.txt", seen)).toBe(true);
+  expect(await deliver(root, "pages/later.ts", seen)).toBe(true); // and the new folder stays watched
+  w.close();
+}, LIVE);

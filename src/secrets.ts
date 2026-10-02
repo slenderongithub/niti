@@ -1,4 +1,4 @@
-import { basename, isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, resolve, sep } from "node:path";
 import { SECRET_DIRS, SECRET_FILES } from "./sandbox.ts";
 
 // Files whose contents are credentials. An agent's file tools never read one without the user
@@ -12,7 +12,7 @@ export function isSecretPath(p: string, root = process.cwd()): boolean {
   const name = basename(p);
   if (SECRET_NAME.test(name) && !TEMPLATE.test(name)) return true;
   const abs = isAbsolute(p) ? p : resolve(root, p);
-  return SECRET_DIRS.some((d) => abs === d || abs.startsWith(d + "/")) || SECRET_FILES.includes(abs);
+  return SECRET_DIRS.some((d) => abs === d || abs.startsWith(d + sep)) || SECRET_FILES.includes(abs); // sep: "\\" on Windows
 }
 
 // A shell call naming a secret file anywhere in its arguments (`cat .env`, `cp ~/.ssh/id_rsa x`,

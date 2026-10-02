@@ -356,7 +356,7 @@ test("summarizeResult: the one line a finished call leaves behind", () => {
 
 import { symlinkSync, writeFileSync as writeSync, mkdirSync as mkdirSyncFs } from "node:fs";
 
-test("safePath rejects a write through a symlink that points outside the root", () => {
+test.skipIf(process.platform === "win32")("safePath rejects a write through a symlink that points outside the root", () => {
   const root = mkdtempSync(join(tmpdir(), "niti-root-"));
   const outside = mkdtempSync(join(tmpdir(), "niti-outside-"));
   symlinkSync(outside, join(root, "link"));
@@ -370,7 +370,7 @@ test("safePath rejects a write through a symlink that points outside the root", 
   expect(safePath(root, "src/new/deep.ts")).toBe(join(root, "src/new/deep.ts")); // ordinary new paths still fine
 });
 
-test("a shell timeout kills grandchildren too, instead of hanging on their open pipe", async () => {
+test.skipIf(process.platform === "win32")("a shell timeout kills grandchildren too, instead of hanging on their open pipe", async () => {
   const t0 = Date.now();
   // sh forks a long sleep that inherits stdout; killing only sh would leave the pipe open for 30s
   const r = await shell(tmpdir(), "sh", ["-c", "sleep 30 & wait"], { timeoutMs: 300 });
@@ -378,7 +378,7 @@ test("a shell timeout kills grandchildren too, instead of hanging on their open 
   expect(r.stderr).toContain("timed out");
 });
 
-test("a command that leaves a background process holding its output returns when it exits, not at the timeout", async () => {
+test.skipIf(process.platform === "win32")("a command that leaves a background process holding its output returns when it exits, not at the timeout", async () => {
   const t0 = Date.now();
   const r = await shell(tmpdir(), "sh", ["-c", "echo started; sleep 30 &"], { timeoutMs: 20_000 });
   expect(Date.now() - t0).toBeLessThan(5000);

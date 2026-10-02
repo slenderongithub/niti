@@ -13,7 +13,7 @@ func TestShortPathKeepsTheFolderName(t *testing.T) {
 		t.Errorf("ShortPath = %q", got)
 	}
 	home, _ := os.UserHomeDir()
-	if got := ShortPath(filepath.Join(home, "code"), 80); got != "~/code" {
+	if got, want := ShortPath(filepath.Join(home, "code"), 80), "~"+string(os.PathSeparator)+"code"; got != want {
 		t.Errorf("home not collapsed: %q", got)
 	}
 	if got := ShortPath(home+"2/code", 80); got != home+"2/code" { // a sibling that merely shares a prefix

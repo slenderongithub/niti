@@ -1872,7 +1872,7 @@ test("live view: every call's start gets exactly one end, with its result, diff 
 
 // A symlink that leaves the project is not blocked outright (workspace links are real), and not
 // silent either: the call is force-asked, and only a human's yes lets it through.
-test("a write through a symlink out of the project needs approval, and lands only when approved", async () => {
+test.skipIf(process.platform === "win32")("a write through a symlink out of the project needs approval, and lands only when approved", async () => {
   const outside = mkdtempSync(join(tmpdir(), "niti-outside-"));
   const run = async (approve: boolean) => {
     const root = mkdtempSync(join(tmpdir(), "niti-link-"));

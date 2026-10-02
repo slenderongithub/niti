@@ -48,7 +48,9 @@ export async function createWorktree(root: string, id: string): Promise<Worktree
   // niti may have been launched from a folder inside the repo. The checkout is the whole repo, so
   // agents have to be pointed at the same folder within it, not at its top.
   const top = await git(root, ["rev-parse", "--show-toplevel"]);
-  const sub = top.code === 0 ? relative(realpathSync(top.stdout.trim()), realpathSync(root)) : "";
+  // .native: the JS realpath leaves Windows 8.3 short names (RUNNER~1) unexpanded, while git prints
+  // long ones — and the two then looked like unrelated folders.
+  const sub = top.code === 0 ? relative(realpathSync.native(top.stdout.trim()), realpathSync.native(root)) : "";
   const workDir = sub && sub !== ".." && !sub.startsWith(".." + sep) && !isAbsolute(sub) ? join(path, sub) : path;
   mkdirSync(workDir, { recursive: true }); // a folder git does not track yet is absent from the checkout
   return { path, workDir, branch, baseSha: head.stdout.trim() };

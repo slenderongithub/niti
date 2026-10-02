@@ -1,4 +1,5 @@
-import { watch, type FSWatcher } from "node:fs";
+import { lstatSync, readdirSync, watch, type FSWatcher } from "node:fs";
+import { join } from "node:path";
 import { normalizePath } from "./permissions.ts";
 
 // Watch the project for edits made outside niti (a human in their editor, a git checkout, a
@@ -25,16 +26,22 @@ export interface ProjectWatcher {
 
 export function watchProject(root: string, onChange: (relPath: string) => void): ProjectWatcher {
   const selfWrites = new Map<string, number>();
-  let watcher: FSWatcher | undefined;
+  const report = (rel: string) => {
+    if (!rel || isIgnored(rel)) return;
+    const at = selfWrites.get(rel);
+    if (at !== undefined && Date.now() - at < SELF_WRITE_TTL_MS) return; // our own write, echoing back
+    onChange(rel);
+  };
+  const watchers: FSWatcher[] = [];
   try {
-    watcher = watch(root, { recursive: true }, (_event, filename) => {
-      if (!filename) return;
-      const rel = normalizePath(String(filename)); // fs.watch reports "src\\a.ts" on Windows; markSelfWrite keys on "/"
-      if (isIgnored(rel)) return;
-      const at = selfWrites.get(rel);
-      if (at !== undefined && Date.now() - at < SELF_WRITE_TTL_MS) return; // our own write, echoing back
-      onChange(rel);
-    });
+    if (process.platform === "linux") watchTree(root, report, watchers);
+    else
+      watchers.push(
+        watch(root, { recursive: true }, (_event, filename) => {
+          // fs.watch reports "src\\a.ts" on Windows; markSelfWrite keys on "/"
+          if (filename) report(normalizePath(String(filename)));
+        }),
+      );
   } catch {
     // No recursive watch on this platform/filesystem: file watching is a nice-to-have, never a
     // reason to fail startup. markSelfWrite/close stay valid no-ops.
@@ -51,7 +58,47 @@ export function watchProject(root: string, onChange: (relPath: string) => void):
       for (const [path, at] of selfWrites) if (now - at > SELF_WRITE_TTL_MS) selfWrites.delete(path); // bounded without a timer
     },
     close() {
-      watcher?.close();
+      for (const w of watchers) w.close();
     },
   };
+}
+
+// Linux: one plain watch per folder, added as folders appear. Bun's recursive watch there never
+// watches a folder created after it started — edits inside one were never reported — and a write
+// right after such a folder appeared was dropped too (reproduced on bun 1.3.10; node gets it right).
+// Doing it here also means node_modules and the other noise folders are never watched at all,
+// instead of being watched and filtered, which on a big project is thousands of inotify watches.
+// ponytail: capped at MAX_WATCHED_DIRS; past that, deeper new folders go unwatched.
+const MAX_WATCHED_DIRS = 4000;
+function watchTree(root: string, report: (rel: string) => void, watchers: FSWatcher[]): void {
+  const watched = new Set<string>();
+  const add = (rel: string, announce: boolean) => {
+    if (watched.has(rel) || watched.size >= MAX_WATCHED_DIRS || (rel && isIgnored(rel))) return;
+    let entries;
+    try {
+      watchers.push(
+        watch(join(root, rel), (_event, name) => {
+          if (!name) return;
+          const child = rel ? `${rel}/${name}` : String(name);
+          report(child);
+          try {
+            if (lstatSync(join(root, child)).isDirectory()) add(child, true); // lstat: never follow a link out of the project
+          } catch {
+            /* gone again already */
+          }
+        }),
+      );
+      watched.add(rel);
+      entries = readdirSync(join(root, rel), { withFileTypes: true });
+    } catch {
+      return; // unreadable or vanished — skip it, as the recursive watch would
+    }
+    for (const e of entries) {
+      const child = rel ? `${rel}/${e.name}` : e.name;
+      // A folder that just appeared may already hold files written before its watch existed.
+      if (announce && !e.isDirectory()) report(child);
+      if (e.isDirectory()) add(child, announce);
+    }
+  };
+  add("", false);
 }

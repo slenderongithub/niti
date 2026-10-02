@@ -35,9 +35,7 @@ test.skipIf(!onMac)("an ordinary failure is not blamed on the sandbox", async ()
 });
 
 test("the profile denies reading credential stores and quotes paths safely", () => {
-  const root = mkdtempSync(join(tmpdir(), 'niti "quoted" '));
-  writeFileSync(join(root, "x"), "");
-  const p = seatbeltProfile(root);
+  const p = seatbeltProfile(join(tmpdir(), 'niti "quoted" dir')); // a string is enough — no folder needed
   expect(p).toContain(`(deny file-read*`);
   expect(p).toContain(join(homedir(), ".ssh"));
   expect(p).toContain('\\"quoted\\"');
