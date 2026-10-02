@@ -80,7 +80,7 @@ func (m Model) View() string {
 		st(theme.Muted).Render("Trusting it lets niti read .niti/agents.yaml, start the MCP"),
 		st(theme.Muted).Render("servers it configures, and run agents against this code."),
 		"",
-		st(theme.Accent).Render("  " + m.Root),
+		st(theme.Accent).Render("  " + ui.ShortPath(m.Root, 60)), // the box is 68 wide; keep the folder name, not the prefix
 		"",
 		option("1", "Trust once", "  — for this session"),
 		option("2", "Trust and remember", "  — don't ask again for this folder"),

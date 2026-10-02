@@ -161,7 +161,7 @@ func (m Model) settWelcome(w int) []string {
 		"",
 		m.avatarRow(w),
 		"",
-		kv(w, "Project", shortPath(m.root, max(w-14, 8))),
+		kv(w, "Project", ui.ShortPath(m.root, max(w-14, 8))),
 		kv(w, "Team", fmt.Sprintf("%d agents · %s mode", len(m.order), m.mode)),
 		kv(w, "Theme", theme.Current()),
 		"",

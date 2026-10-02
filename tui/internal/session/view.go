@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -187,20 +186,6 @@ func fmtTok(n int) string {
 	}
 }
 
-// $HOME collapsed to ~, then trimmed from the left (the tail of a path is the informative half).
-func shortPath(p string, w int) string {
-	if p == "" {
-		return ""
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(p, home) {
-		p = "~" + p[len(home):]
-	}
-	if r := []rune(p); len(r) > w && w > 1 {
-		return "…" + string(r[len(r)-w+1:])
-	}
-	return p
-}
-
 func bar(pct, width int, fill, empty, bg lipgloss.Color) string {
 	if width < 1 {
 		return ""
@@ -230,7 +215,7 @@ func (m Model) header(w int) string {
 		model = st.cfg.Model
 	}
 	room := max(w-lipgloss.Width(left)-lipgloss.Width(chip)-4, 0)
-	where := shortPath(m.root, room*2/3)
+	where := ui.ShortPath(m.root, room*2/3)
 	if model != "" {
 		where = ui.Truncate(where+" · "+model, room)
 	}

@@ -5,6 +5,7 @@
 package ui
 
 import (
+	"os"
 	"strconv"
 	"strings"
 
@@ -351,6 +352,21 @@ func cutLeft(s string, n int) string {
 
 // Truncate cuts to n display cells, counting runes (the UI is full of multibyte glyphs) and
 // leaving styled text intact — lipgloss's MaxWidth is ANSI-aware, unlike a byte slice.
+// ShortPath fits a path into w cells: $HOME collapsed to ~, then trimmed from the left — the tail of
+// a path (which folder this is) is the informative half, so it is the half that has to survive.
+func ShortPath(p string, w int) string {
+	if p == "" {
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" && (p == home || strings.HasPrefix(p, home+string(os.PathSeparator))) {
+		p = "~" + p[len(home):]
+	}
+	if r := []rune(p); len(r) > w && w > 1 {
+		return "…" + string(r[len(r)-w+1:])
+	}
+	return p
+}
+
 func Truncate(s string, n int) string {
 	if n <= 0 {
 		return ""
