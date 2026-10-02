@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/niti/tui/internal/ui"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -128,5 +129,29 @@ func TestParseArgs(t *testing.T) {
 	}
 	if v, rest = parseArgs(nil); v || len(rest) != 0 {
 		t.Fatal("no args, no verbose")
+	}
+}
+
+func TestEarlyExit(t *testing.T) {
+	cases := []struct {
+		args []string
+		code int
+		ok   bool
+		has  string
+	}{
+		{nil, 0, false, ""},
+		{[]string{"--version"}, 0, true, ui.Version},
+		{[]string{"--help"}, 0, true, "niti status"},
+		{[]string{"-h"}, 0, true, "niti status"},
+		{[]string{"status"}, 0, false, ""},
+		{[]string{"-v", "config"}, 0, false, ""},
+		{[]string{"stauts"}, 2, true, `unknown argument "stauts"`},
+		{[]string{"status", "extra"}, 2, true, "unknown argument"},
+	}
+	for _, c := range cases {
+		out, code, ok := earlyExit(c.args)
+		if ok != c.ok || code != c.code || !strings.Contains(out, c.has) {
+			t.Errorf("earlyExit(%v) = %q, %d, %v", c.args, out, code, ok)
+		}
 	}
 }

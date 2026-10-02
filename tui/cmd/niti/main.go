@@ -22,6 +22,7 @@ import (
 	"github.com/niti/tui/internal/session"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/trust"
+	"github.com/niti/tui/internal/ui"
 	"github.com/niti/tui/internal/wizard"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -414,7 +415,46 @@ func applyTheme(sess api.SessionInfo) {
 	}
 }
 
+const usage = `niti — a team of AI agents working on the project in this folder.
+
+  niti                                open the session (the folder you run it in is the project)
+  niti status|config|settings|usage|stats   open on that settings tab
+  niti --verbose, -v                  list every tool call separately
+  niti --version · niti --help
+
+  niti-core --help                    the headless engine: scripted runs, auth, trust, audit
+`
+
+// earlyExit answers the arguments that must never open a terminal UI or start a core — `niti
+// --version` and `niti --help` used to launch the whole session (and fail outright without a TTY),
+// and a mistyped subcommand silently opened the session as if nothing had been asked. Returns the
+// text to print and the exit code, or ok=false to carry on into the session.
+func earlyExit(args []string) (out string, code int, ok bool) {
+	_, rest := parseArgs(args)
+	if len(rest) == 0 {
+		return "", 0, false
+	}
+	switch rest[0] {
+	case "--version", "version":
+		return ui.Version + "\n", 0, true
+	case "--help", "-h", "help":
+		return usage, 0, true
+	}
+	if _, isTab := session.SettingsTab(rest[0]); isTab && len(rest) == 1 {
+		return "", 0, false
+	}
+	return fmt.Sprintf("niti: unknown argument %q\n\n%s", strings.Join(rest, " "), usage), 2, true
+}
+
 func main() {
+	if out, code, ok := earlyExit(os.Args[1:]); ok {
+		if code == 0 {
+			fmt.Print(out)
+		} else {
+			fmt.Fprint(os.Stderr, out)
+		}
+		os.Exit(code)
+	}
 	// Skipped when attached to a core we didn't spawn (NITI_SERVER_URL set) — nothing to gate,
 	// since we aren't the one reading this directory's config or spawning anything from it.
 	if os.Getenv("NITI_SERVER_URL") == "" && !ensureTrustedTUI() {

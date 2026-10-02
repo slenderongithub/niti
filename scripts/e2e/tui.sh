@@ -7,7 +7,7 @@ bun $SP/fakellm.ts $LLM $S >/dev/null 2>&1 & LPID=$!
 mkdir -p $P/.niti $P/src; echo 'export const a = 1;' > $P/src/a.ts
 for id in backend frontend; do
   [[ $id == backend ]] && lead="    lead: true" || lead=""
-  printf '  - id: %s\n    provider: custom\n    model: fake\n    role: %s\n    baseURL: http://127.0.0.1:%s/v1\n    systemPrompt: s\n%s\n    allowedTools: [read_file, write_file]\n' $id $id $LLM "$lead"
+  printf '  - id: %s\n    provider: custom\n    model: fake\n    role: %s\n    baseURL: http://127.0.0.1:%s/v1\n    systemPrompt: s\n%s\n    allowedTools: [read_file, write_file, edit]\n' $id $id $LLM "$lead"
 done | { echo "agents:"; cat; echo "verify: false"; } > $P/.niti/agents.yaml
 sleep 0.5
 cd $P && { bun run $NITI/src/cli.ts serve > $S/hs.txt 2> $S/core.log & CPID=$!; }; cd - >/dev/null

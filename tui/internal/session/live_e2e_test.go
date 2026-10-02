@@ -306,6 +306,178 @@ func TestLiveTUI(t *testing.T) {
 		t.Errorf("esc did not stop the run: status %q", d.m.status)
 	}
 
+	// --- the rest of the keys and overlays, each checked against the core's own state ---
+	press := func(k tea.KeyMsg) { d.feed(k); d.settle(150*time.Millisecond, nil) }
+	runes := func(s string) {
+		for _, r := range s {
+			d.feed(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+	}
+	core := func() api.SessionInfo { s, _ := client.Session(); return s }
+
+	d.closeOverlays()
+	press(tea.KeyMsg{Type: tea.KeyCtrlG})
+	if !d.m.ap.open {
+		t.Errorf("ctrl+g did not open the agent picker")
+	}
+	press(tea.KeyMsg{Type: tea.KeyDown}) // the first row is "overview"
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	if d.m.focus == "" {
+		t.Errorf("agent picker enter did not focus an agent")
+	}
+	d.m.focus = ""
+
+	press(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if !d.m.expanded {
+		t.Errorf("ctrl+o did not expand")
+	}
+	press(tea.KeyMsg{Type: tea.KeyCtrlO})
+
+	press(tea.KeyMsg{Type: tea.KeyF1})
+	if !d.m.out.open {
+		t.Errorf("f1 did not open help")
+	}
+	d.closeOverlays()
+
+	press(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if !d.m.pal.open || !strings.HasPrefix(d.m.pal.query, "history") {
+		t.Errorf("ctrl+r did not open history search: %v %q", d.m.pal.open, d.m.pal.query)
+	}
+	d.closeOverlays()
+
+	// Config tab: toggling a preference reaches the core.
+	before := core().Prefs["reduceMotion"]
+	d.typeLine("/config")
+	runes("reduce")
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	if !d.settle(3*time.Second, func(Model) bool { return core().Prefs["reduceMotion"] != before }) {
+		t.Errorf("Config tab toggle did not reach the core (reduceMotion still %v)", before)
+	}
+	d.closeOverlays()
+
+	// Theme picker: enter applies and persists.
+	press(tea.KeyMsg{Type: tea.KeyCtrlT})
+	press(tea.KeyMsg{Type: tea.KeyRight})
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	picked := strings.TrimPrefix(d.m.status, "theme: ")
+	if !d.settle(3*time.Second, func(Model) bool { return core().Theme == picked }) {
+		t.Errorf("theme picker: picked %q, core has %q", picked, core().Theme)
+	}
+
+	// Model picker: switch frontend's model through ctrl+l.
+	d.closeOverlays()
+	press(tea.KeyMsg{Type: tea.KeyCtrlL})
+	d.settle(2*time.Second, func(m Model) bool { return m.car.open })
+	runes("frontend") // the agent stage filters as you type
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	runes("custom/fake-two")
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	if !d.settle(3*time.Second, func(Model) bool {
+		for _, a := range core().Agents {
+			if a.ID == "frontend" && a.Model == "fake-two" {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Errorf("model picker did not switch frontend (status %q, car %q)", d.m.status, d.m.car.status)
+	}
+	d.closeOverlays()
+
+	// /api: a key typed into the popup is stored by the core.
+	d.typeLine("/api")
+	d.settle(2*time.Second, func(m Model) bool { _, ok := m.akp.list.Selected(); return m.akp.open && ok })
+	sel, _ := d.m.akp.list.Selected()
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	runes("sk-e2e-test-key-123456")
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	if !d.settle(3*time.Second, func(Model) bool {
+		creds, _ := client.Credentials()
+		for _, c := range creds {
+			if c.Provider == sel.Value {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Errorf("/api did not store a key for %q (status %q)", sel.Value, d.m.akp.status)
+	}
+	d.closeOverlays()
+
+	// Approvals: "a" stops asking that agent for that tool; "e" edits what gets written.
+	runCall := func(call, key string, edit string) int {
+		asked := 0
+		d.closeOverlays()
+		d.typeLine("do it CALL:" + call + "END")
+		d.settle(30*time.Second, func(m Model) bool {
+			if len(m.approvals) > 0 && asked == 0 {
+				asked++
+				if edit != "" {
+					d.feed(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+					runes(edit)
+					d.feed(tea.KeyMsg{Type: tea.KeyCtrlS})
+				}
+				d.feed(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+			}
+			return !m.active && m.card != nil && m.card.Goal != ""
+		})
+		d.settle(500*time.Millisecond, nil)
+		return asked
+	}
+	d.typeLine("/clear")
+	if n := runCall(`{"name":"write_file","args":{"path":"a.txt","content":"one"}}`, "a", ""); n != 1 {
+		t.Errorf("first write should ask once, asked %d", n)
+	}
+	if n := runCall(`{"name":"write_file","args":{"path":"b.txt","content":"two"}}`, "y", ""); n != 0 {
+		t.Errorf("after 'a' (always for this agent) a second write still asked")
+	}
+	d.typeLine("/manual") // and back to asking for every write
+	d.typeLine("/clear")
+	// edit, not write_file: the "a" above granted write_file to this agent for the rest of the session
+	if n := runCall(`{"name":"edit","args":{"path":"a.txt","oldString":"one","newString":"uno"}}`, "y", "-EDITED"); n != 1 {
+		t.Errorf("edit flow: asked %d times", n)
+	}
+	if body, err := client.File("a.txt"); err != nil || !strings.Contains(body, "uno-EDITED") {
+		t.Errorf("an edit made in the approval screen did not land: %q %v\nbackend log: %v", body, err, d.m.agents["backend"].log)
+	}
+	d.closeOverlays()
+
+	// Typing while a run is going steers the working agent.
+	d.typeLine("SLOW build a reddit replica page")
+	if d.settle(10*time.Second, func(m Model) bool {
+		return m.active && m.agents["backend"] != nil && m.agents["backend"].status != "idle"
+	}) {
+		d.typeLine("STEER-MARKER use orange")
+		if !d.settle(15*time.Second, func(m Model) bool {
+			return strings.Contains(strings.Join(m.agents["backend"].log, "\n"), "STEER-MARKER")
+		}) {
+			t.Errorf("typing mid-run did not reach the working agent (status %q)", d.m.status)
+		}
+	} else {
+		t.Errorf("SLOW run never got going")
+	}
+	d.settle(30*time.Second, func(m Model) bool {
+		if len(m.approvals) > 0 {
+			d.feed(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+		}
+		return !m.active
+	})
+
+	// Files panel: c shows only what the agents touched.
+	d.closeOverlays()
+	d.m.region = regionFiles
+	press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if !d.m.changedOnly {
+		t.Errorf("c did not switch the Files panel to changed-only")
+	}
+	for _, r := range d.m.treeRows() {
+		if r.path == "src/a.ts" {
+			t.Errorf("changed-only still lists the untouched src/a.ts")
+		}
+	}
+	press(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	d.m.region = regionPrompt
+
 	// /quit leaves.
 	d.closeOverlays()
 	d.typeLine("/quit")

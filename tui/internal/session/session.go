@@ -261,6 +261,9 @@ func (m Model) WithVerbose(on bool) Model {
 	return m
 }
 
+// SettingsTab reports whether `niti <name>` names a settings tab (status, config, …).
+func SettingsTab(name string) (int, bool) { return settingsTabFor(name) }
+
 func (m Model) OpenSettings(name string) Model {
 	if tab, ok := settingsTabFor(name); ok {
 		m.sett = settings{open: true, tab: tab}
@@ -1000,6 +1003,11 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 		st.status = "failed"
 	}
 
+	if ae.Type == "error" && st.running != "" {
+		// The call in flight is what failed. Committing it first stamped "✔ Edited a.txt" right
+		// above the "✖ edit: …" that reports the failure — a success line for a call that did nothing.
+		st.running, st.runOut, st.group = "", nil, nil
+	}
 	if ae.Type != "tool_call" {
 		st.toolEnd(false) // whatever was running is done: the agent has moved on
 	}

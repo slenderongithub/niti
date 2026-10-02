@@ -508,6 +508,8 @@ test("switching model within the same provider keeps the agent's baseURL", () =>
   expect(engine.switchModel("a", "custom", "y")).toBeUndefined();
   expect(seen.at(-1)).toBe("http://127.0.0.1:1/v1");
   expect(engine.configs[0]!.baseURL).toBe("http://127.0.0.1:1/v1");
+  expect(engine.switchModel("a", "custom", "z", "")).toBeUndefined(); // the TUI picker sends "" for "none given"
+  expect(seen.at(-1)).toBe("http://127.0.0.1:1/v1");
   engine.switchModel("a", "anthropic", "claude"); // a different provider does not inherit it
   expect(seen.at(-1)).toBeUndefined();
 });
@@ -529,4 +531,33 @@ test("headless: a write refused for lack of an approver is counted, so the CLI c
   await engine.submit("go");
   expect(existsSync(join(root, "x.txt"))).toBe(false);
   expect(engine.unapproved).toBe(1);
+});
+
+test("a message typed while the lead is still planning reaches the agent that does the work", async () => {
+  let releasePlan!: () => void;
+  const planGate = new Promise<void>((r) => (releasePlan = r));
+  let workerSaw = "";
+  const provider = (id: string): Provider => ({
+    async send(_s, turns) {
+      const lastUser = [...turns].reverse().find((t) => t.role === "user");
+      const text = lastUser && "text" in lastUser ? lastUser.text : "";
+      if (text.includes("orchestrator of a team")) {
+        await planGate;
+        return { text: '[{"description":"do the work","role":"b"}]', toolCalls: [] };
+      }
+      if (id === "b") workerSaw += JSON.stringify(turns);
+      return { text: "done", toolCalls: [] };
+    },
+  });
+  const team: AgentConfig[] = [
+    { id: "a", provider: "anthropic", model: "x", role: "Lead", systemPrompt: "s", lead: true, allowedTools: [] },
+    { id: "b", provider: "anthropic", model: "x", role: "Worker", systemPrompt: "s", allowedTools: [] },
+  ];
+  const engine = new Engine({ configs: team, makeProvider: (c) => provider(c.id), interactive: false, repoMap: false });
+  const run = engine.submit("build it");
+  await new Promise((r) => setTimeout(r, 50));
+  expect(engine.messageAgent("a", "use orange")).toBeUndefined(); // accepted, not "isn't running"
+  releasePlan();
+  await run;
+  expect(workerSaw).toContain("use orange");
 });

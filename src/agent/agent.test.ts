@@ -1961,3 +1961,16 @@ test("reading a credential file always asks, even under a blanket allow, and gre
   expect(seen).toContain("app.ts"); // grep did run and found the non-secret match
   expect(seen).not.toContain("sk-live-123");
 });
+
+test("a tool the agent is not allowed is refused before anyone is asked to approve it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-notallowed-"));
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      return n++ === 0 ? { text: "", toolCalls: [{ id: "1", name: "edit", input: { path: "a.txt", oldString: "a", newString: "b" } }] } : { text: "ok", toolCalls: [] };
+    },
+  };
+  const asked: string[] = [];
+  await new Agent({ ...cfg, allowedTools: ["read_file", "write_file"] }, stub, new Bus(), { root, approve: async (tool) => (asked.push(tool), true) }).run("edit it");
+  expect(asked).toEqual([]);
+});

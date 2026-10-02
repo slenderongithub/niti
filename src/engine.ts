@@ -618,7 +618,10 @@ export class Engine {
     const agent = this.byId.get(agentId);
     if (!agent) return `no such agent: ${agentId}`;
     if (!agent.busy) return `${agentId} isn't running — nothing to interrupt`;
-    const result = this.messageBus.post({ from: USER, to: agentId, kind: "handoff", subject: text.slice(0, 70), body: text });
+    // Before any task has started, the "working" agent is the lead making the plan — and the work
+    // may go to someone else. A nudge then belongs to whoever does the work, so it goes to the team.
+    const planning = this.busy && !this.orch.all.some((t) => t.status === "in_progress");
+    const result = this.messageBus.post({ from: USER, to: planning ? "*" : agentId, kind: planning ? "broadcast" : "handoff", subject: text.slice(0, 70), body: text });
     if (!result.ok) return result.reason;
     // messageBus.post already fans out an `agent_message` SSE event (so it shows in the Messages
     // tab / feed); this additionally puts it in the agent's own transcript, matching how the
@@ -638,7 +641,8 @@ export class Engine {
     if (agent.busy) return `${agentId} is mid-task — wait for it to finish (or /cancel) before switching its model`;
     // Same provider, no new URL given: keep the agent's own. Otherwise `/model coder custom/other`
     // dropped the baseURL a custom/Ollama/LM Studio agent cannot work without.
-    const url = baseURL ?? (provider === agent.config.provider ? agent.config.baseURL : undefined);
+    // `||`, not `??`: the TUI's model picker sends "" for "no URL given".
+    const url = baseURL || (provider === agent.config.provider ? agent.config.baseURL : undefined);
     try {
       const p = this.makeProvider({ ...agent.config, provider, model, baseURL: url });
       agent.reconfigure(provider, model, p, url);

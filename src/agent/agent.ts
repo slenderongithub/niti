@@ -763,7 +763,16 @@ export class Agent {
 
   // Raw single call, no tools/events — used by the orchestrator to plan and to integrate.
   async ask(prompt: string): Promise<string> {
-    const reply = await this.send([{ role: "user", text: prompt }], []);
+    // Counted as busy like run()/respond(): the lead planning is the lead working. Without it, a
+    // message typed while the plan was being made was refused ("isn't running") and lost; now it
+    // queues and is read when this agent's work starts.
+    this.inFlightCount++;
+    let reply: ProviderReply;
+    try {
+      reply = await this.send([{ role: "user", text: prompt }], []);
+    } finally {
+      this.inFlightCount--;
+    }
     // Every other model call in this file records its usage; this one did not, so the lead's
     // planning, replanning, integrate and /debate turns were spent off the books — /usage, /cost,
     // the TUI sidebar and the dashboard all under-reported the run by the orchestrator's whole
@@ -1233,6 +1242,13 @@ export class Agent {
     // Mirrored from buildTools: filtering the *specs* stops a well-behaved model naming a tool it
     // wasn't offered, but a hallucinated or replayed name would otherwise still execute.
     if (isMcp && !this.mcpAllowed(allowed, call.name)) {
+      this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: not in this agent's allowedTools`, time: Date.now(), ...this.endOf(call, started, false) });
+      return `tool '${call.name}' not allowed for this agent`;
+    }
+    // Same gate for the built-in tools, and for the same reason — and before any approval: runTool
+    // refuses a tool the agent isn't allowed, but only after the user had been asked to approve a
+    // call that was never going to run.
+    if (!isMcp && !LSP_TOOLS.has(call.name) && !allowed.includes(call.name)) {
       this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: not in this agent's allowedTools`, time: Date.now(), ...this.endOf(call, started, false) });
       return `tool '${call.name}' not allowed for this agent`;
     }
