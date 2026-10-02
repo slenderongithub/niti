@@ -40,8 +40,8 @@ export const BUILTIN_COMMANDS: Command[] = [
     name: "auto",
     description: "Stop asking before writes and shell commands (risky ones still confirm)",
     async run(engine) {
+      setAuto(true); // saved first: if agents.yaml refuses the write, the live mode must not change either
       engine.setAuto(true);
-      setAuto(true); // persisted, so the choice survives a restart
       return { ok: true, message: "auto-approve on — dangerous commands and anything outside the project still ask" };
     },
   },
@@ -49,8 +49,8 @@ export const BUILTIN_COMMANDS: Command[] = [
     name: "manual",
     description: "Ask before every write and shell command",
     async run(engine) {
-      engine.setAuto(false);
       setAuto(false);
+      engine.setAuto(false);
       return { ok: true, message: "manual mode — common read-only commands (ls, git status, cat…) still run without asking" };
     },
   },

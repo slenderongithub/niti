@@ -497,3 +497,36 @@ test.skipIf(process.platform !== "darwin")("an approved shell command cannot wri
   await engine.submit("go");
   expect(existsSync(target)).toBe(false);
 });
+
+test("switching model within the same provider keeps the agent's baseURL", () => {
+  const seen: (string | undefined)[] = [];
+  const engine = new Engine({
+    configs: [{ id: "a", provider: "custom", model: "x", role: "A", systemPrompt: "s", lead: true, baseURL: "http://127.0.0.1:1/v1" }],
+    makeProvider: (cfg) => (seen.push(cfg.baseURL), { async send() { return { text: "", toolCalls: [] }; } }),
+    interactive: false,
+  });
+  expect(engine.switchModel("a", "custom", "y")).toBeUndefined();
+  expect(seen.at(-1)).toBe("http://127.0.0.1:1/v1");
+  expect(engine.configs[0]!.baseURL).toBe("http://127.0.0.1:1/v1");
+  engine.switchModel("a", "anthropic", "claude"); // a different provider does not inherit it
+  expect(seen.at(-1)).toBeUndefined();
+});
+
+test("headless: a write refused for lack of an approver is counted, so the CLI cannot exit 0 on it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-unapproved-"));
+  let n = 0;
+  const provider: Provider = {
+    async send(_s, turns) {
+      const lastUser = [...turns].reverse().find((t) => t.role === "user");
+      const text = lastUser && "text" in lastUser ? lastUser.text : "";
+      if (text.includes("orchestrator of a team")) return { text: '[{"description":"write it","role":"a"}]', toolCalls: [] };
+      // the model claims success after its write was refused — exactly what must not pass as done
+      return n++ === 0 ? { text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "x.txt", content: "x" } }] } : { text: "all done!", toolCalls: [] };
+    },
+  };
+  const one: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: ["write_file"] }];
+  const engine = new Engine({ configs: one, makeProvider: () => provider, interactive: false, root });
+  await engine.submit("go");
+  expect(existsSync(join(root, "x.txt"))).toBe(false);
+  expect(engine.unapproved).toBe(1);
+});

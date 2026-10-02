@@ -81,6 +81,10 @@ export class Engine {
   // Most recent goal submit()/resume() ran — /export's report header. Not persisted; a restart
   // loses it the same way the rest of the live session state does.
   lastGoal = "";
+  // Headless only: tool calls refused because there was no one to approve them. A model can still
+  // report its task "done" after every write was refused, so the CLI's exit code reads this rather
+  // than trusting the task statuses alone.
+  unapproved = 0;
 
   private makeProvider: (cfg: AgentConfig) => Provider;
   private byId = new Map<string, Agent>();
@@ -197,6 +201,7 @@ export class Engine {
           ? (tool, input, forceAsk) => this.approvals.request(c.id, tool, input, forceAsk)
           : async (tool) => {
               if (opts.auto) return true;
+              this.unapproved++;
               this.bus.publish({
                 agentId: c.id,
                 type: "error",
@@ -631,9 +636,12 @@ export class Engine {
     // Anthropic's opaque `raw` thinking blocks) to a different provider's send() — reject instead
     // of corrupting an in-flight conversation.
     if (agent.busy) return `${agentId} is mid-task — wait for it to finish (or /cancel) before switching its model`;
+    // Same provider, no new URL given: keep the agent's own. Otherwise `/model coder custom/other`
+    // dropped the baseURL a custom/Ollama/LM Studio agent cannot work without.
+    const url = baseURL ?? (provider === agent.config.provider ? agent.config.baseURL : undefined);
     try {
-      const p = this.makeProvider({ ...agent.config, provider, model, baseURL });
-      agent.reconfigure(provider, model, p, baseURL);
+      const p = this.makeProvider({ ...agent.config, provider, model, baseURL: url });
+      agent.reconfigure(provider, model, p, url);
       return undefined;
     } catch (err) {
       return err instanceof Error ? err.message : String(err);

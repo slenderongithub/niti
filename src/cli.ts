@@ -52,7 +52,8 @@ const USAGE = `niti-core — the headless engine + scripting CLI.
                                    same as env var NITI_TRUST=1
     --help, -h · --version, -v
 
-  Exit codes (headless runs): 0 all tasks done · 1 a task failed · 2 unfinished (turn cap/pending).`;
+  Exit codes (headless runs): 0 all tasks done · 1 a task failed, or a tool call was refused for
+  lack of approval · 2 unfinished (turn cap/pending).`;
 
 // Bundled at compile time (same trick as the theme palettes), so the compiled binary carries the
 // version without a package.json beside it and there is still exactly one place to bump.
@@ -308,7 +309,10 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
   void engine.mcp?.close?.();
   const failed = engine.orch.all.filter((t) => t.status === "failed").length;
   const unfinished = engine.orch.all.filter((t) => t.status !== "done").length;
-  process.exit(runFailed || failed ? 1 : unfinished ? 2 : 0);
+  if (engine.unapproved > 0) {
+    console.error(`niti: ${engine.unapproved} tool call(s) needed approval and were refused — re-run with --auto, or pre-grant them via permissions/autoApprove in agents.yaml`);
+  }
+  process.exit(runFailed || failed || engine.unapproved > 0 ? 1 : unfinished ? 2 : 0);
 }
 
 // --- helpers ---------------------------------------------------------------
