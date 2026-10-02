@@ -3,6 +3,8 @@ node_modules/
 # tui/cmd/niti/ — the Go TUI's main package — so a clean clone could not build it.
 /niti
 /niti-core
+# `go build` run inside the TUI's main package drops its binary here.
+/tui/cmd/niti/niti
 /npm/
 desktop/dist/
 *.tgz
