@@ -20,7 +20,7 @@ env = dict(os.environ, TERM="xterm-256color", NITI_AUTH_FILE=os.path.join(state,
 env.pop("NITI_TRUST", None)
 pid, fd = pty.fork()
 if pid == 0:
-  os.chdir(proj); os.execve(os.path.join(BIN, "niti"), ["niti"], env)
+  os.chdir(proj); os.execve(os.environ.get("NITI_E2E_LAUNCH", os.path.join(BIN, "niti")), ["niti"], env)  # NITI_E2E_LAUNCH: e.g. the npm-installed shim
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 44, 140, 0, 0))
 buf = ""
 ansi = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]")

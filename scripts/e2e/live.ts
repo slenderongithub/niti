@@ -24,7 +24,8 @@ writeFileSync(
       .join("\n") + "\nverify: false\n",
 );
 
-const core = Bun.spawn(["bun", "run", join(NITI, "src/cli.ts"), "serve"], { cwd: P, env: { ...process.env, NITI_TRUST: "1" }, stdout: "pipe", stderr: Bun.file(join(P, "core-stderr.log")) });
+// NITI_E2E_CORE: test an installed niti-core instead of this checkout
+const core = Bun.spawn(process.env.NITI_E2E_CORE ? [process.env.NITI_E2E_CORE, "serve"] : ["bun", "run", join(NITI, "src/cli.ts"), "serve"], { cwd: P, env: { ...process.env, NITI_TRUST: "1" }, stdout: "pipe", stderr: Bun.file(join(P, "core-stderr.log")) });
 const reader = core.stdout.getReader();
 let first = "";
 while (!first.includes("\n")) first += new TextDecoder().decode((await reader.read()).value);
