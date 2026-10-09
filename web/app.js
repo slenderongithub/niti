@@ -362,7 +362,8 @@ function answerApproval(ok, scope) {
   renderApproval();
   // …but if the answer never arrived the agent is still waiting, so put the request back and say so
   // rather than leaving the user believing they approved.
-  authedFetch("/approval", { ok, scope })
+  // id names the request shown, so a TUI answering first can't shift this onto the next one (409).
+  authedFetch("/approval", { ok, scope, ...(answered && answered.id !== undefined ? { id: answered.id } : {}) })
     .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); })
     .catch((err) => {
       if (!answered) return;

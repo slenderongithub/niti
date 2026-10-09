@@ -156,10 +156,11 @@ func (m *Model) diffViewKey(k tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	edited := m.diffv.edited
+	id := m.approvals[0].ID
 	m.approvals = m.approvals[1:]
 	m.diffv = diffview{}
 	client := m.client
-	return func() tea.Msg { return actionResultMsg{action: "approval", err: client.Approve(ok, scope, edited)} }
+	return func() tea.Msg { return actionResultMsg{action: "approval", err: client.Approve(ok, scope, edited, id)} }
 }
 
 func diffLineColor(l string) lipgloss.Color {

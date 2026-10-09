@@ -261,10 +261,10 @@ export class Engine {
     return this.busy;
   }
 
-  pendingApprovals(): { agentId: string; tool: string; input: Record<string, unknown> }[] {
+  pendingApprovals(): { id: number; agentId: string; tool: string; input: Record<string, unknown> }[] {
     const cur = this.approvals.current();
     const batch = this.approvals.currentBatch() ?? (cur ? [cur] : []);
-    return batch.map((r) => ({ agentId: r.agentId, tool: r.tool, input: r.input }));
+    return batch.map((r) => ({ id: r.id, agentId: r.agentId, tool: r.tool, input: r.input }));
   }
 
   // Run a goal end-to-end: plan → schedule → integrate. Emits session start/end and persists tasks.

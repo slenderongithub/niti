@@ -527,3 +527,19 @@ test("POST /theme, /auto and /settings answer 400 with the reason when agents.ya
     process.chdir(prev);
   }
 });
+
+test("POST /approval with an id answers that request, and is a 409 once it's gone; without one it answers the front", async () => {
+  const { engine, h } = setup();
+  track(h);
+  const answer = (body: unknown) => fetch(`${h.url}/approval?token=${h.token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const a = engine.approvals.request("frontend", "shell", { command: "ls" });
+  const b = engine.approvals.request("backend", "shell", { command: "rm x" });
+  const first = engine.pendingApprovals()[0]!; // under 3 queued, only the front is published
+  const second = { id: first.id + 1 };
+  expect((await answer({ ok: false, id: second.id })).status).toBe(200);
+  expect(await b).toBe(false);
+  expect((await answer({ ok: true, id: second.id })).status).toBe(409);
+  expect(engine.pendingApprovals()[0]?.id).toBe(first.id);
+  expect((await answer({ ok: true })).status).toBe(200);
+  expect(await a).toBe(true);
+});

@@ -289,9 +289,10 @@ func answer(ok bool, scope string) func(m *Model) tea.Cmd {
 		// Pop the answered request locally right away — the next `approval_request` snapshot won't
 		// arrive until the round trip completes, and a stray extra keypress in that window must not
 		// re-answer a request that's already resolved (or answer the wrong, now-shifted, one).
+		id := m.approvals[0].ID
 		m.approvals = m.approvals[1:]
 		client := m.client
-		return func() tea.Msg { return actionResultMsg{action: "approval", err: client.Approve(ok, scope, nil)} }
+		return func() tea.Msg { return actionResultMsg{action: "approval", err: client.Approve(ok, scope, nil, id)} }
 	}
 }
 

@@ -169,6 +169,7 @@ type Totals struct {
 }
 
 type Approval struct {
+	ID      *int           `json:"id,omitempty"` // nil from cores that predate request ids
 	AgentID string         `json:"agentId"`
 	Tool    string         `json:"tool"`
 	Input   map[string]any `json:"input"`
@@ -406,11 +407,16 @@ func (c *Client) SetAuto(on bool) error {
 }
 
 // edited overrides fields of the approved call's input (e.g. a diff-view in-place edit) — nil for
-// a plain approve/deny, unchanged from before this parameter existed.
-func (c *Client) Approve(ok bool, scope string, edited map[string]any) error {
+// a plain approve/deny, unchanged from before this parameter existed. id names the request on
+// screen, so another client answering first can't shift this answer onto the next one (the core
+// replies 409 instead); nil answers the queue's front.
+func (c *Client) Approve(ok bool, scope string, edited map[string]any, id *int) error {
 	body := map[string]any{"ok": ok, "scope": scope}
 	if edited != nil {
 		body["edited"] = edited
+	}
+	if id != nil {
+		body["id"] = *id
 	}
 	return c.do("POST", "/approval", body, nil)
 }

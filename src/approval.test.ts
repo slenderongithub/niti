@@ -191,3 +191,16 @@ test("a 'this folder' grant works for Windows-style paths too", async () => {
   q.answer(false);
   expect(await p2).toBe(false);
 });
+
+test("answer by id hits that request, not the front, and refuses one that is gone", async () => {
+  const q = new ApprovalQueue();
+  const a = q.request("a", "shell", { command: "ls" });
+  const b = q.request("b", "shell", { command: "rm x" });
+  const idB = q.current()!.id + 1; // ids are issued in arrival order
+  expect(q.answer(false, undefined, undefined, idB)).toBe(true);
+  expect(await b).toBe(false);
+  expect(q.current()?.agentId).toBe("a");
+  expect(q.answer(true, undefined, undefined, idB)).toBe(false); // already answered
+  expect(q.answer(true)).toBe(true); // no id: the front, as the TUI does
+  expect(await a).toBe(true);
+});

@@ -573,12 +573,15 @@ export function startServer(
       }
 
       if (p === "/approval" && method === "POST") {
-        const { ok, scope, edited } = (await readBody(req)) as {
+        const { ok, scope, edited, id } = (await readBody(req)) as {
           ok?: boolean;
           scope?: "agent" | "path";
           edited?: Record<string, unknown>;
+          id?: number;
         };
-        engine.approvals.answer(Boolean(ok), scope, edited);
+        // id is optional: the TUI answers the front; the app names the request it showed.
+        if (!engine.approvals.answer(Boolean(ok), scope, edited, typeof id === "number" ? id : undefined) && id !== undefined)
+          return json({ error: "that request is no longer pending" }, 409);
         return json({ ok: true });
       }
 

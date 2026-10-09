@@ -7,6 +7,7 @@ import { normalizePath } from "./permissions.ts";
 import type { AuditLog } from "./store/audit-log.ts";
 
 export interface ApprovalRequest {
+  id: number; // stable per request, so a client can answer the one it showed, not whatever is now first
   agentId: string;
   tool: string;
   input: Record<string, unknown>;
@@ -33,6 +34,7 @@ export class ApprovalQueue {
   private pending: ApprovalRequest[] = [];
   private listeners = new Set<() => void>();
   private scopes: PermissionScope[] = [];
+  private nextId = 1;
 
   constructor(private audit?: AuditLog) {}
 
@@ -64,7 +66,7 @@ export class ApprovalQueue {
       return Promise.resolve(false);
     }
     return new Promise((resolve) => {
-      this.pending.push({ agentId, tool, input, resolve, queuedAt: Date.now() });
+      this.pending.push({ id: this.nextId++, agentId, tool, input, resolve, queuedAt: Date.now() });
       this.notify();
     });
   }
@@ -83,9 +85,12 @@ export class ApprovalQueue {
   // `edited` overrides fields of the queued request's input (e.g. a diff-view in-place edit) —
   // merged into the same object the agent loop is holding a reference to, so it picks up the
   // change without any further plumbing back through the caller.
-  answer(ok: boolean, scope?: "agent" | "path", edited?: Record<string, unknown>): void {
-    const req = this.pending.shift();
-    if (!req) return;
+  // With an id, answers that request wherever it sits in the queue; returns false if it is no longer
+  // pending (another client answered it first). Without one, answers the front (the TUI, the web page).
+  answer(ok: boolean, scope?: "agent" | "path", edited?: Record<string, unknown>, id?: number): boolean {
+    const i = id === undefined ? 0 : this.pending.findIndex((r) => r.id === id);
+    if (i < 0 || i >= this.pending.length) return false;
+    const req = this.pending.splice(i, 1)[0]!;
     if (ok && edited) Object.assign(req.input, edited);
     if (ok && scope === "agent") this.grant(req.agentId, req.tool);
     if (ok && scope === "path" && typeof req.input.path === "string") {
@@ -98,6 +103,7 @@ export class ApprovalQueue {
     this.logDecision(req, ok, scope);
     req.resolve(ok);
     this.notify();
+    return true;
   }
 
   // Batch actions — resolve a whole slice of the queue at once, so N side-by-side approvals

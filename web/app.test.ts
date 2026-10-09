@@ -281,3 +281,12 @@ test("tasks use the TUI's status glyphs, and an empty board is a hatched empty s
   expect(html).toContain("Add login");
   expect(html).toContain("t1 → coder");
 });
+
+test("answering names the request shown by its id, so a concurrent TUI answer can't shift it", async () => {
+  const g = load();
+  await settled();
+  g.handle({ kind: "approval_request", requests: [{ id: 7, agentId: "a", tool: "shell", input: { command: "ls" } }] });
+  g.answerApproval(false);
+  const call = g.calls.find((c: any) => c.path.startsWith("/approval"));
+  expect(call?.body).toEqual({ ok: false, scope: undefined, id: 7 });
+});
