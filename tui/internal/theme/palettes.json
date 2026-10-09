@@ -15,7 +15,7 @@
     "amber": "#d9b26f",
     "blue": "#6fb3b8",
     "pink": "#d49ab5",
-    "agents": ["#7aa2d6", "#b294bb", "#8fbf8a", "#d9b26f", "#6fb3b8", "#c9a58c"]
+    "agents": ["#5b9dff", "#c084fc", "#fb923c", "#8b8cff", "#fb7185", "#2dd4bf"]
   },
   {
     "name": "obsidian",
@@ -32,7 +32,7 @@
     "amber": "#e2bd7b",
     "blue": "#6fbfd4",
     "pink": "#dc9cba",
-    "agents": ["#79a8f2", "#b8a1e8", "#7ec699", "#e2bd7b", "#6fbfd4", "#d2a98c"]
+    "agents": ["#5b9dff", "#c084fc", "#fb923c", "#8b8cff", "#fb7185", "#2dd4bf"]
   },
   {
     "name": "ember",
@@ -50,7 +50,7 @@
     "amber": "#e0b35a",
     "blue": "#8fa9a3",
     "pink": "#cf8f95",
-    "agents": ["#d9895b", "#c7a76c", "#a3b86c", "#8fa9a3", "#b89bc4", "#d4b483"]
+    "agents": ["#5b9dff", "#c084fc", "#fb923c", "#8b8cff", "#fb7185", "#2dd4bf"]
   },
   {
     "name": "tide",
@@ -68,7 +68,7 @@
     "amber": "#d6b26e",
     "blue": "#7cb7d4",
     "pink": "#c99ac0",
-    "agents": ["#5fb3a9", "#8aa6d6", "#86c095", "#d6b26e", "#b59ad6", "#7cb7d4"]
+    "agents": ["#5b9dff", "#c084fc", "#fb923c", "#8b8cff", "#fb7185", "#2dd4bf"]
   },
   {
     "name": "dusk",
@@ -86,7 +86,7 @@
     "amber": "#e3c07d",
     "blue": "#8fb5d9",
     "pink": "#e0a3b8",
-    "agents": ["#b39ddb", "#e0a3b8", "#9cc4a0", "#e3c07d", "#8fb5d9", "#9fcfcf"]
+    "agents": ["#5b9dff", "#c084fc", "#fb923c", "#8b8cff", "#fb7185", "#2dd4bf"]
   },
   {
     "name": "moss",
@@ -104,7 +104,7 @@
     "amber": "#d9b26a",
     "blue": "#7fb0b8",
     "pink": "#c79aa8",
-    "agents": ["#9cbf7a", "#c9b27a", "#7fb0b8", "#b8a0cc", "#d9b26a", "#8fb5a0"]
+    "agents": ["#5b9dff", "#c084fc", "#fb923c", "#8b8cff", "#fb7185", "#2dd4bf"]
   },
   {
     "name": "graphite light",
@@ -123,7 +123,7 @@
     "amber": "#8a6212",
     "blue": "#2d7379",
     "pink": "#9c4a72",
-    "agents": ["#36629e", "#7a4f86", "#3d7a3a", "#8a6212", "#2d7379", "#8a5a3c"]
+    "agents": ["#1d5fd8", "#8a3fd8", "#c2410c", "#4f46e5", "#be123c", "#0f766e"]
   },
   {
     "name": "obsidian light",
@@ -141,7 +141,7 @@
     "amber": "#8a6212",
     "blue": "#1f6f82",
     "pink": "#a3406e",
-    "agents": ["#2f5fb3", "#6b4fa8", "#2b7a4b", "#8a6212", "#1f6f82", "#8a5a3c"]
+    "agents": ["#1d5fd8", "#8a3fd8", "#c2410c", "#4f46e5", "#be123c", "#0f766e"]
   },
   {
     "name": "ember light",
@@ -159,7 +159,7 @@
     "amber": "#88600f",
     "blue": "#3d6c65",
     "pink": "#984853",
-    "agents": ["#a24f27", "#7f6427", "#56701f", "#3d6c65", "#6f5494", "#8a5d2a"]
+    "agents": ["#1d5fd8", "#8a3fd8", "#c2410c", "#4f46e5", "#be123c", "#0f766e"]
   },
   {
     "name": "tide light",
@@ -177,7 +177,7 @@
     "amber": "#85631a",
     "blue": "#296886",
     "pink": "#8f4d80",
-    "agents": ["#1f7268", "#3e5f9e", "#37744a", "#85631a", "#6b4fa0", "#296886"]
+    "agents": ["#1d5fd8", "#8a3fd8", "#c2410c", "#4f46e5", "#be123c", "#0f766e"]
   },
   {
     "name": "dusk light",
@@ -195,7 +195,7 @@
     "amber": "#83631b",
     "blue": "#38628e",
     "pink": "#9a4265",
-    "agents": ["#664ca0", "#9a4265", "#3d7243", "#83631b", "#38628e", "#2d7272"]
+    "agents": ["#1d5fd8", "#8a3fd8", "#c2410c", "#4f46e5", "#be123c", "#0f766e"]
   },
   {
     "name": "moss light",
@@ -213,6 +213,6 @@
     "amber": "#82621a",
     "blue": "#2d6a72",
     "pink": "#914f69",
-    "agents": ["#48722b", "#7e6628", "#2d6a72", "#6d5894", "#82621a", "#3c745a"]
+    "agents": ["#1d5fd8", "#8a3fd8", "#c2410c", "#4f46e5", "#be123c", "#0f766e"]
   }
 ]

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/niti/tui/internal/theme"
 )
 
 // A tool call is shown live (spinner + what it is doing) while it runs, then collapses into one
@@ -112,6 +113,15 @@ func spinner(still bool) string {
 }
 
 type tickMsg struct{}
+
+// blinkMsg redraws the welcome's avatar art when a blink starts or ends — scheduled for exactly
+// that moment, so an idle screen costs a couple of wake-ups every few seconds, not a frame loop.
+type blinkMsg struct{}
+
+func blinkCmd(n int) tea.Cmd {
+	d := theme.NextBlinkChangeMs(max(n, 1), time.Now().UnixMilli())
+	return tea.Tick(time.Duration(d)*time.Millisecond, func(time.Time) tea.Msg { return blinkMsg{} })
+}
 
 func tick() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })

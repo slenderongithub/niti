@@ -21,7 +21,10 @@ const TARGETS = [
 
 // The dashboard's runtime files. Explicit, not a directory copy, so the *.test.ts siblings in web/
 // never end up in a published tarball (or served by GET /dashboard/*).
-const WEB_FILES = ["index.html", "graph.html", "app.js", "graph.js", "style.css", "theme.js", "avatar.js", "favicon-32.png", "apple-touch-icon.png"];
+const WEB_FILES = [
+  "index.html", "graph.html", "app.js", "graph.js", "style.css", "theme.js", "avatar.js", "favicon-32.png", "apple-touch-icon.png",
+  ...[1, 2, 3, 4, 5, 6].flatMap((n) => [`avatars/niti${n}.png`, ...(n === 4 ? [] : [`avatars/niti${n}-blink.png`])]),
+];
 
 const pkg = await Bun.file("package.json").json();
 // Deliberately not pkg.name: pkg.name is the scoped root wrapper (`@slenderbuilds/niti`), but the
@@ -49,7 +52,7 @@ for (const t of targets) {
   console.log(`\n=== ${t.platform} ===`);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(join(out, "bin"), { recursive: true });
-  mkdirSync(join(out, "web"), { recursive: true });
+  mkdirSync(join(out, "web", "avatars"), { recursive: true });
 
   await run(["go", "build", "-trimpath", "-ldflags=-s -w", "-o", join("..", out, "bin", `niti${ext}`), "./cmd/niti"], {
     cwd: "tui",

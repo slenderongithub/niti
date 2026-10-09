@@ -448,6 +448,18 @@ test("the favicon stack is public, square-sized PNGs, and both pages link it", a
   }
 });
 
+test("the agent avatars are public PNGs; nothing else under /avatars is", async () => {
+  const h = track(setup().h);
+  for (const path of ["/avatars/niti1.png", "/avatars/niti3-blink.png", "/avatars/niti4.png"]) {
+    const res = await fetch(`${h.url}${path}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+  }
+  for (const path of ["/avatars/niti7.png", "/avatars/niti4-blink.png", "/avatars/niti1.png.map"]) {
+    expect((await fetch(`${h.url}${path}`)).status).not.toBe(200);
+  }
+});
+
 test("malformed JSON is a 400, and /complete refuses a remote baseURL that would forward the stored key", async () => {
   const { h } = setup();
   track(h);

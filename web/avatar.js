@@ -77,6 +77,36 @@ const AVATAR_FACES = [
   [[3, 3], [3, 4], [4, 4], [3, 7], [3, 8], [4, 7], [6, 5], [6, 6]], // pink — heart eyes, small mouth
 ];
 
+// The six avatar drawings (web/avatars/, made by niti-app/scripts/make-avatars.py — the same art the
+// desktop app shows): an open frame per slot and a blink frame shown for an instant every 5.2s,
+// offset per slot so a team never blinks in unison. Avatar 4 laughs with its eyes shut: no blink.
+// Loaded lazily; until they've decoded (or where there's no Image at all, as in the unit tests)
+// the pixel mascot below stands in.
+const AVATAR_HAS_BLINK = [true, true, true, false, true, true];
+const AVATAR_BLINK_PERIOD = 5200;
+const AVATAR_BLINK_LENGTH = 160;
+let avatarImages = null;
+function avatarImage(slot, now) {
+  if (typeof Image !== "function") return null;
+  if (!avatarImages) {
+    avatarImages = [];
+    for (let i = 0; i < 6; i++) {
+      const open = new Image();
+      open.src = `/avatars/niti${i + 1}.png`;
+      let blink = null;
+      if (AVATAR_HAS_BLINK[i]) {
+        blink = new Image();
+        blink.src = `/avatars/niti${i + 1}-blink.png`;
+      }
+      avatarImages.push({ open, blink });
+    }
+  }
+  const a = avatarImages[slot];
+  const blinking = (now + ((slot * 1700) % AVATAR_BLINK_PERIOD)) % AVATAR_BLINK_PERIOD < AVATAR_BLINK_LENGTH;
+  const img = blinking && a.blink && a.blink.complete && a.blink.naturalWidth ? a.blink : a.open;
+  return img.complete && img.naturalWidth ? img : null;
+}
+
 // Draws the mascot centered at (cx, cy), `size` wide/tall, for roster position `colorIndex`
 // (wraps at 6 — a 7th+ agent reuses blue's shape with yellow's face rather than erroring).
 //
@@ -92,6 +122,12 @@ function drawPixelAvatar(ctx, cx, cy, size, colorIndex) {
   // sprite. Default to slot 0 instead: one wrong-looking avatar beats a frozen canvas.
   const safe = Number.isFinite(colorIndex) ? colorIndex : 0;
   const n = ((safe % AVATAR_COLORS.length) + AVATAR_COLORS.length) % AVATAR_COLORS.length;
+  // The real avatar when it has loaded; the pixel mascot otherwise.
+  const img = avatarImage(n, typeof performance !== "undefined" ? performance.now() : 0);
+  if (img) {
+    ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+    return;
+  }
   const cell = Math.max(1, Math.round(size / AVATAR_GRID));
   const left = Math.round(cx - (cell * AVATAR_GRID) / 2);
   const top = Math.round(cy - (cell * AVATAR_GRID) / 2);

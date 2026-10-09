@@ -95,3 +95,28 @@ test("every drawn cell is an integer-sized, integer-positioned square, at any in
     expect(widths.size).toBe(1); // one uniform cell size across the whole sprite
   }
 });
+
+test("draws the avatar image once it has loaded, the pixel mascot until then", () => {
+  const made: { src: string }[] = [];
+  class FakeImage {
+    src = "";
+    complete = true;
+    naturalWidth = 128;
+    constructor() {
+      made.push(this);
+    }
+  }
+  (globalThis as unknown as { Image: unknown }).Image = FakeImage;
+  try {
+    const { drawPixelAvatar } = load();
+    const calls: unknown[][] = [];
+    const ctx = { drawImage: (...a: unknown[]) => calls.push(a), fillRect() {}, set fillStyle(_v: string) {} };
+    drawPixelAvatar(ctx, 50, 50, 40, 2);
+    expect(calls).toHaveLength(1);
+    expect((calls[0]![0] as { src: string }).src).toMatch(/^\/avatars\/niti3(-blink)?\.png$/);
+    expect(calls[0]!.slice(1)).toEqual([30, 30, 40, 40]);
+    expect(made.some((m) => m.src === "/avatars/niti4-blink.png")).toBe(false); // avatar 4 never blinks
+  } finally {
+    delete (globalThis as unknown as { Image?: unknown }).Image;
+  }
+});

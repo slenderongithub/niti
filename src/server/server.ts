@@ -235,6 +235,7 @@ export function startServer(
       if (p.startsWith("/dashboard/")) return serveFile(p.slice("/dashboard/".length));
       if (p === "/app.js" || p === "/style.css" || p === "/theme.js" || p === "/avatar.js" || p === "/favicon-32.png" || p === "/apple-touch-icon.png") return serveFile(p.slice(1));
       if (p === "/favicon.ico") return serveFile("favicon-32.png"); // Safari asks for this regardless of <link>
+      if (/^\/avatars\/niti[1-6](-blink)?\.png$/.test(p)) return serveFile(p.slice(1)); // the agent avatars
       if (p === "/palettes.json") return servePalettes();
       // The interactive graph page — public shell like the dashboard; its /graph and /events calls
       // carry the token via ?token=. (Distinct from the gated data route `/graph` below.)

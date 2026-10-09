@@ -359,11 +359,13 @@ func (m Model) welcomeView(w, h int) string {
 		txt(theme.Accent, bg).Bold(true).Render(truncate(greeting(), w)),
 		txt(theme.Muted, bg).Render(truncate(fmt.Sprintf("%d agents · %s mode", len(m.order), m.mode), w)),
 		"",
-		m.avatarRow(w),
+	}
+	block = append(block, m.avatarArt(w, h-6)...)
+	block = append(block,
 		"",
 		txt(theme.Fg, bg).Render(truncate("Describe what to build in the prompt below.", w)),
 		txt(theme.Muted, bg).Render(truncate("/ for commands · ^p to search everything · f1 for keys", w)),
-	}
+	)
 	// posting's empty state: the region hatched, the message centered on clear ground — so an empty
 	// panel reads as "nothing yet", not as a rendering fault.
 	hatch := strings.Split(ui.Hatch("", w, h, bg), "\n")
@@ -376,6 +378,49 @@ func (m Model) welcomeView(w, h int) string {
 		hatch[top+i] = txt(theme.Fg, bg).Render(strings.Repeat(" ", left)) + l + txt(theme.Fg, bg).Render(strings.Repeat(" ", max(w-left-lipgloss.Width(l), 0)))
 	}
 	return strings.Join(hatch, "\n")
+}
+
+// avatarArt draws the team as its avatar characters (theme.AvatarLines) side by side, wired with ⇄
+// — 18×9 cells each when the pane has room, 12×6 when it has less, the one-cell glyphs when it has
+// neither. Each blinks on the shared schedule (the blink tick redraws at every blink boundary).
+func (m Model) avatarArt(w, h int) []string {
+	bg := theme.BgDeep
+	n := len(m.order)
+	if n == 0 {
+		return nil
+	}
+	now := time.Now().UnixMilli()
+	still := m.prefs["reduceMotion"]
+	for _, big := range []bool{true, false} {
+		cw, ch := 12, 6
+		if big {
+			cw, ch = 18, 9
+		}
+		if n*cw+(n-1)*3 > w || ch > h {
+			continue
+		}
+		arts := make([][]string, n)
+		for i := range m.order {
+			arts[i] = theme.AvatarLines(i, !still && theme.Blinking(i, now), big, bg)
+		}
+		lines := make([]string, ch)
+		for row := 0; row < ch; row++ {
+			var b strings.Builder
+			for i, art := range arts {
+				if i > 0 {
+					sep := "   "
+					if row == ch/2 {
+						sep = " ⇄ "
+					}
+					b.WriteString(txt(theme.Muted, bg).Render(sep))
+				}
+				b.WriteString(art[row])
+			}
+			lines[row] = b.String()
+		}
+		return lines
+	}
+	return []string{m.avatarRow(w)}
 }
 
 // avatarRow draws the team as its avatars wired together with ⇄ — the "visual representation of
