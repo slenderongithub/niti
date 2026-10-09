@@ -9,8 +9,8 @@ import (
 // The agent avatars (the same six drawings as the desktop app and the web dashboard) as terminal
 // art: each cell is an upper-half block "▀" whose foreground is the pixel above and background the
 // pixel below, so an 18×18 grid draws in 18×9 cells. Transparent pixels show the given background.
-// The art is drawn by hand (make-avatars.py): one silhouette for all six, each with its own colours
-// and face, at two sizes.
+// The art is drawn by hand (scripts/avatars/make-avatars.py): one silhouette for all six, each
+// with its own colours and face, at two sizes.
 
 // Blink timing, shared with the app and the web views: a 160ms blink every 5.2s, offset per slot.
 const (

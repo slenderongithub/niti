@@ -77,7 +77,7 @@ const AVATAR_FACES = [
   [[3, 3], [3, 4], [4, 4], [3, 7], [3, 8], [4, 7], [6, 5], [6, 6]], // pink — heart eyes, small mouth
 ];
 
-// The six avatar drawings (web/avatars/, made by niti-app/scripts/make-avatars.py — the same art the
+// The six avatar drawings (web/avatars/, made by scripts/avatars/make-avatars.py — the same art the
 // desktop app shows): an open frame per slot and a blink frame shown for an instant every 5.2s,
 // offset per slot so a team never blinks in unison. Avatar 4 laughs with its eyes shut: no blink.
 // Loaded lazily; until they've decoded (or where there's no Image at all, as in the unit tests)
