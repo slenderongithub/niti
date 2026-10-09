@@ -66,36 +66,35 @@ test("a nested go.mod resolves Go imports instead of leaving every file an islan
 });
 
 test("a caller-supplied file list is held to the same boundary as the walk", () => {
-  // niti's sibling products (ide/, desktop/) and the archived v1 TUI (old-tech/) live in this tree
-  // but are not the CLI. A supplied list used to bypass IGNORE entirely, so they were handed to
-  // CLI agents as part of the project — and a checked-out editor outnumbers src/ many times over.
+  // niti's desktop app (niti-app/) and the archived v1 TUI (old-tech/) live in this tree but are
+  // not the CLI. A supplied list used to bypass IGNORE entirely, so they were handed to CLI agents
+  // as part of the project.
   const supplied = [
     "src/a.ts",
-    "ide/extensions/x.ts",
-    "desktop/main.ts",
+    "niti-app/src/main/index.ts",
     "old-tech/ink-tui/theme.ts",
     "node_modules/pkg/index.js",
   ];
   const dir = scaffold({ "src/a.ts": "export const a = 1;" });
   const g = buildFileGraph(dir, 400, supplied);
   const ids = g.nodes.map((n) => n.id);
-  expect(ids).not.toContain("ide/extensions/x.ts");
-  expect(ids).not.toContain("desktop/main.ts");
+  expect(ids).not.toContain("niti-app/src/main/index.ts");
   expect(ids).not.toContain("old-tech/ink-tui/theme.ts");
   expect(ids).not.toContain("node_modules/pkg/index.js");
 });
 
 // The Files panel and @-mentions list project files too, so they are held to the same IGNORE set
-// (CLAUDE.md rule 3): ide/, desktop/, old-tech/ and dependency trees never show.
+// (CLAUDE.md rule 3): niti-app/, old-tech/ and dependency trees never show — while a user's own
+// generically named folders (desktop/, ide/) do.
 test("projectFiles honours the same IGNORE boundary as the graph", () => {
   const root = scaffold({
     "src/a.ts": "",
     "README.md": "",
-    "ide/vscodium/x.ts": "",
+    "niti-app/src/x.ts": "",
     "desktop/main.js": "",
     "old-tech/y.ts": "",
     "node_modules/z/index.js": "",
   });
   const { files } = projectFiles(root);
-  expect(files).toEqual(["README.md", "src/a.ts"]);
+  expect(files).toEqual(["README.md", "desktop/main.js", "src/a.ts"]);
 });

@@ -17,7 +17,7 @@
     "serve": "bun run src/server/main.ts",
     "build": "bun build --compile ./src/cli.ts --outfile niti-core",
     "build:tui": "cd tui && go mod tidy && go build -o ../niti ./cmd/niti",
-    "build:desktop": "cd desktop && npm install && npm run build",
+    "build:app": "cd niti-app && npm ci && npm run dist",
     "build:all": "bun run build:tui && bun run build",
     "build:release": "bun run scripts/build-release.ts",
     "test": "bun test ./src ./web",

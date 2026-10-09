@@ -18,15 +18,16 @@ export interface FileGraph {
 }
 
 const SRC_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go"]);
-// Build output and dependencies, plus niti's own sibling products. `ide/` and `desktop/` are
-// separate applications that live in this tree; `old-tech/` is the archived v1 TUI. None of them
-// is part of the CLI, so none belongs in the CLI's dependency graph or in what its agents are told
-// the project contains — a checked-out editor would otherwise outnumber src/ by an order of
-// magnitude. Listed by name rather than inferred, because "which sibling directories are their own
-// product" is a fact about this repo that nothing in the tree states.
+// Build output and dependencies, plus niti's own sibling product and archive: `niti-app/` is the
+// desktop app (its own product, sharing this tree) and `old-tech/` is the archived v1 TUI. Neither
+// is part of the CLI, so neither belongs in the CLI's dependency graph or in what its agents are
+// told the project contains. Listed by name rather than inferred, because "which sibling
+// directories are their own product" is a fact about this repo that nothing in the tree states —
+// and matched on any path segment, so the names must be ones a user's own project won't use
+// (a generic `desktop` or `app` here would hide that folder in every project niti runs on).
 const IGNORE = new Set([
   "node_modules", ".git", "dist", "build", ".niti", "vendor", ".next", "out", "target", "coverage",
-  "old-tech", "ide", "desktop",
+  "old-tech", "niti-app",
 ]);
 
 // True when any segment of a project-relative path sits in IGNORE. The walk applies IGNORE as it
@@ -59,7 +60,7 @@ export function trackedFiles(root: string, includeUntracked = false): string[] |
 
 // Every file in the project a person would browse — the TUI's Files panel and @-mentions. git's
 // list when there is one (tracked + untracked, .gitignore honoured), else a walk; either way held
-// to IGNORE (rule 3 in CLAUDE.md: ide/, desktop/, node_modules… never appear) and bounded.
+// to IGNORE (rule 3 in CLAUDE.md: niti-app/, old-tech/, node_modules… never appear) and bounded.
 export function projectFiles(root: string, max = 5000): { files: string[]; truncated: boolean } {
   let files = trackedFiles(root, true);
   if (!files) {

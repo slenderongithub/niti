@@ -1,41 +1,49 @@
-# Three products in one tree — do not mix them
+# Two products in one tree — do not mix them
 
-niti ships **three separate products** from this repository:
+niti ships **two separate products** from this repository:
 
 | Product | Lives in | What it is |
 |---|---|---|
 | **CLI** | `src/`, `tui/`, `web/`, `scripts/`, `bin/` | `niti` (Go TUI) + `niti-core` (Bun engine). **The main product.** |
-| **IDE** | `ide/` | A VS Code/VSCodium-based editor build. Its own app. |
-| **Desktop app** | `desktop/` | An Electron app. Its own app. |
+| **Desktop app** | `niti-app/` | An Electron + React app over the same engine. Its own app — see `niti-app/README.md`. |
 
-`old-tech/` is the archived v1 Ink TUI. Dead, kept for reference, part of nothing.
+`old-tech/` is the archived v1 Ink TUI. Dead, kept for reference, part of nothing. (A VS Code fork
+in `ide/` and an earlier Electron app in `desktop/` were deleted in October 2026; neither exists.)
 
 **Rules, in order of how easy they are to break by accident:**
 
 1. **Never put changes to two products in one commit.** If a file you need to edit already has
-   uncommitted changes belonging to another product, say so and ask — do not sweep them in. Check
+   uncommitted changes belonging to the other product, say so and ask — do not sweep them in. Check
    `git status` before you start, not after.
 2. **Ask which product you are working on** if the request doesn't make it obvious. Most requests
    are about the CLI. Do not assume a change to `src/` is automatically CLI-only: `src/` is
-   `niti-core`, the engine **all three** products share, so a change there can reach the IDE and the
-   desktop app.
-3. **Never let one product's files into another's view of the project.** `ide/`, `desktop/` and
+   `niti-core`, the engine **both** products run, so a change there reaches the desktop app too.
+   The desktop app never edits the engine — it bundles it (`niti-app/scripts/bundle-core.ts`) and
+   works around anything missing client-side unless an engine change is explicitly asked for.
+3. **Never let one product's files into another's view of the project.** `niti-app/` and
    `old-tech/` are in the `IGNORE` set in `src/graph/filegraph.ts`, which bounds both the `/graph`
    view and the project map injected into every agent's system prompt. A filter added anywhere else
    that lists project files must honour that same set — `filegraph.test.ts` asserts it, so if you
-   are about to make that test pass by editing the test, you have it backwards.
-4. **`ide/` is ~12GB and `desktop/` is ~670MB.** Never `git add -A` at the repo root. Never point a
-   directory walk at the repo root without a boundary — it will spend its entire budget inside
-   `ide/vscodium` and never reach `src/`. This has already happened twice.
+   are about to make that test pass by editing the test, you have it backwards. IGNORE matches any
+   path segment, so only add names a user's own project won't use (`niti-app`, not `app`).
+4. **`niti-app/node_modules` is ~630MB and `niti-app/release` holds packaged apps.** Never
+   `git add -A` at the repo root. Never point a directory walk at the repo root without a boundary.
 
 # UI & Design System Rules
 
-These apply to the **desktop app and web dashboard only** — the CLI's UI is a Go/Bubbletea terminal
-app (`tui/`) with none of this in it.
+These apply to the **desktop app (`niti-app/`) and the web dashboard only** — the CLI's UI is a
+Go/Bubbletea terminal app (`tui/`) with none of this in it.
 
-- We use `shadcn/ui` for all interactive components.
+- We use `shadcn/ui` for all interactive components (`niti-app/components.json`; primitives in
+  `niti-app/src/renderer/src/components/ui`).
 - **Rule 1:** Before creating a custom UI element, use the shadcn MCP to check if an official primitive exists (e.g., Button, Card, Dialog, Sheet, Sidebar).
 - **Rule 2:** Never write raw Tailwind buttons, inputs, or modals from scratch. Always install and use the shadcn equivalent.
 - **Rule 3:** Maintain compound component structures. If using a Card, use `CardHeader`, `CardTitle`, and `CardContent` rather than arbitrary `div`s.
-- **Rule 4:** Stick to the established theme. Do not introduce random hex codes; use our Tailwind semantic variables (e.g., `bg-primary`, `text-muted-foreground`).
+- **Rule 4:** Stick to the established theme. Do not introduce random hex codes; use our Tailwind semantic variables (e.g., `bg-primary`, `text-muted-foreground`). The tokens live in `niti-app/src/renderer/src/styles/globals.css` (the TUI's graphite / graphite light palettes).
 - **Rule 5:** Only use `lucide-react` for icons.
+
+# Checking the desktop app
+
+`cd niti-app && npm run check` — typecheck, unit tests, build, the live client check against a real
+core (`scripts/live.ts`) and the Electron smoke run (`scripts/smoke.ts`), all against the repo's fake
+model. The user does visual verification; don't screenshot the app to check it.
