@@ -5,6 +5,8 @@
 //   bun run scripts/eval/run.ts --provider google --model gemini-flash-lite-latest --repeat 3
 //   bun run scripts/eval/run.ts --only navigate --keep
 //   bun run scripts/eval/run.ts --repeat 3 --save-tokens base.json   (then --gate-tokens base.json after a change)
+//   bun run scripts/eval/run.ts --repeat 3 --repo-map off            (A/B the map in the system prompt)
+//   bun run scripts/eval/run.ts --repeat 3 --edit-format hashline    (A/B anchored edits for this model)
 //
 // Use --repeat 3 or more for any comparison you intend to act on. A single pass is a smoke test:
 // the same fixture on an unchanged harness scored 4/5 across five runs, so one run of the suite
@@ -43,6 +45,10 @@ const only = flag("only", "");
 // --edit-format hashline: run the suite with anchored edits instead of str_replace, to decide per
 // model whether to turn it on (agents.yaml `editFormat: hashline`).
 const editFormat = flag("edit-format", "") === "hashline" ? "hashline" : undefined;
+// --repo-map off: the same suite without the ranked map in the system prompt (the repo_map tool
+// stays). Context-file studies found overviews in the prompt raise cost >20% without helping; this
+// is how to find out whether niti's does, on dollars per solved task.
+const repoMap = flag("repo-map", "on") !== "off";
 const keep = args.includes("--keep");
 const verbose = args.includes("--verbose");
 // --save-tokens out.json writes this run's tokens-per-pass; --gate-tokens base.json fails the run
@@ -170,7 +176,7 @@ async function runOne(task: Task): Promise<Attempt> {
     // Same prompt the Engine assembles. repoMapSection is empty below its file threshold, so the
     // small fixtures run map-less exactly as they would under the Engine, and the larger one gets
     // the map. Leaving the per-model steering out would measure a harness nobody runs.
-    systemPrompt: SYSTEM_PROMPT + repoMapSection(dir) + TOOL_GUIDANCE + (editFormat ? HASHLINE_GUIDANCE : "") + steeringFor(provider, model),
+    systemPrompt: SYSTEM_PROMPT + (repoMap ? repoMapSection(dir) : "") + TOOL_GUIDANCE + (editFormat ? HASHLINE_GUIDANCE : "") + steeringFor(provider, model),
     allowedTools: ["read_file", "write_file", "edit", "shell"],
     ...(editFormat ? { editFormat } : {}),
   };
@@ -244,7 +250,7 @@ if (selected.length === 0) {
   process.exit(1);
 }
 
-console.log(`\n  ${provider}/${model}${editFormat ? " · hashline edits" : ""} · ${selected.length} tasks${repeat > 1 ? ` × ${repeat}` : ""}\n`);
+console.log(`\n  ${provider}/${model}${editFormat ? " · hashline edits" : ""}${repoMap ? "" : " · no repo map"} · ${selected.length} tasks${repeat > 1 ? ` × ${repeat}` : ""}\n`);
 
 let passed = 0;
 let scored = 0;
