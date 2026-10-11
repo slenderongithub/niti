@@ -89,3 +89,9 @@ test("Anthropic reports cache beside the input count, so it is still added, not 
 test("cache reads larger than the reported input never produce a negative bill", () => {
   expect(costOf("openai", "gpt-4o", 100, 0, 500).usd).toBeGreaterThanOrEqual(0);
 });
+
+test("current OpenAI models price at their own rate, not the gpt-5 prefix", () => {
+  expect(priceFor("openai", "gpt-6.1-sol")).toEqual({ input: 2, output: 10, cacheRead: 0.1 });
+  expect(priceFor("openai", "gpt-5.6-luna")?.input).toBe(0.2);
+  expect(priceFor("openai", "gpt-5.5")?.output).toBe(30);
+});

@@ -33,6 +33,23 @@ const PRICES: Record<string, Price> = {
   "gpt-4o": { input: 2.5, output: 10 },
   "gpt-4.1": { input: 2, output: 8, cacheRead: 0.5 },
   "gpt-5": { input: 1.25, output: 10, cacheRead: 0.125 },
+  "gpt-5-mini": { input: 0.25, output: 2, cacheRead: 0.025 },
+  "gpt-5.2": { input: 1.75, output: 14, cacheRead: 0.175 },
+  "gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25 },
+  "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075 },
+  "gpt-5.4-nano": { input: 0.2, output: 1.25, cacheRead: 0.02 },
+  "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5 },
+  "gpt-5.5-pro": { input: 30, output: 180 },
+  // GPT-5.6 and later also bill cache writes at 1.25x input. Chat Completions doesn't report a
+  // write count, so those writes are priced as plain input here — understated by 0.25x of the
+  // written tokens, on the first request of each prefix only. Prices above 272K context are higher.
+  "gpt-5.6": { input: 4, output: 20, cacheRead: 0.4 },
+  "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02 },
+  "gpt-6-sol": { input: 2, output: 10, cacheRead: 0.2 },
+  "gpt-6-luna": { input: 0.1, output: 0.5, cacheRead: 0.01 },
+  "gpt-6-astra": { input: 10, output: 50, cacheRead: 1 },
+  "gpt-6.1-sol": { input: 2, output: 10, cacheRead: 0.1 },
   "o3-mini": { input: 1.1, output: 4.4 },
   o3: { input: 2, output: 8 },
   o1: { input: 15, output: 60 },

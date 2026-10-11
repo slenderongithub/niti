@@ -248,3 +248,8 @@ test("streamed reasoning (OpenRouter `reasoning` + fragmented reasoning_details)
     openaiReasoning: { vendor: "openrouter", content: "think more", details: [{ type: "reasoning.text", index: 0, text: "think more", signature: "sig" }] },
   });
 });
+
+test("'off' asks later GPT-5.x and GPT-6 for 'low', which every reasoning model accepts", () => {
+  expect(reasoningEffort("off", "openai", "gpt-5.6-terra")).toEqual({ reasoning_effort: "low" });
+  expect(reasoningEffort("off", "openai", "gpt-6.1-sol")).toEqual({ reasoning_effort: "low" });
+});

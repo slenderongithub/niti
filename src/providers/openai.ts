@@ -267,7 +267,9 @@ export function mapUsage(
 // to the lowest level every vendor accepts.
 export function reasoningEffort(r?: Reasoning, vendor?: string, model = ""): Record<string, unknown> {
   if (!r || r === "auto") return {}; // auto = whatever the model does on its own
-  const level = r === "off" ? (vendor === "openai" && /gpt-5/.test(model) ? "minimal" : "low") : r;
+  // "minimal" belongs to the original GPT-5 family only; later GPT-5.x and GPT-6 renamed their
+  // lowest level, and "low" is the one every reasoning model accepts.
+  const level = r === "off" ? (vendor === "openai" && /^gpt-5(-mini|-nano)?$/.test(model) ? "minimal" : "low") : r;
   if (vendor === "openrouter") return { reasoning: { effort: level } };
   return { reasoning_effort: level };
 }
