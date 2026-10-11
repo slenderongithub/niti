@@ -1,25 +1,29 @@
-# Two products in one tree — do not mix them
+# One product, two packagings — keep them uniform
 
-niti ships **two separate products** from this repository:
+niti ships **one product in two packagings** from this repository:
 
 | Product | Lives in | What it is |
 |---|---|---|
 | **CLI** | `src/`, `tui/`, `web/`, `scripts/`, `bin/` | `niti` (Go TUI) + `niti-core` (Bun engine). **The main product.** |
-| **Desktop app** | `niti-app/` | An Electron + React app over the same engine. Its own app — see `niti-app/README.md`. |
+| **Desktop app** | `niti-app/` | The same product as an Electron + React app over the same engine — see `niti-app/README.md`. |
 
 `old-tech/` is the archived v1 Ink TUI. Dead, kept for reference, part of nothing. (A VS Code fork
 in `ide/` and an earlier Electron app in `desktop/` were deleted in October 2026; neither exists.)
 
 **Rules, in order of how easy they are to break by accident:**
 
-1. **Never put changes to two products in one commit.** If a file you need to edit already has
+1. **Never put changes to two products in one commit** — a mirrored change is two commits. If a file you need to edit already has
    uncommitted changes belonging to the other product, say so and ask — do not sweep them in. Check
    `git status` before you start, not after.
-2. **Ask which product you are working on** if the request doesn't make it obvious. Most requests
-   are about the CLI. Do not assume a change to `src/` is automatically CLI-only: `src/` is
-   `niti-core`, the engine **both** products run, so a change there reaches the desktop app too.
-   The desktop app never edits the engine — it bundles it (`niti-app/scripts/bundle-core.ts`) and
-   works around anything missing client-side unless an engine change is explicitly asked for.
+2. **Keep the two uniform.** They are the same product bundled differently, so a change on one side
+   gets its matching change on the other. `src/` is `niti-core`, the engine **both** run (the app
+   bundles it via `niti-app/scripts/bundle-core.ts`): fix or extend the engine itself rather than
+   working around it in the app. Logic the app ported from the CLI moves in step with it — e.g. the
+   graph physics in `web/graph.js` ⇄ `niti-app/src/renderer/src/features/graph/physics.ts`, the team
+   builder in `tui/internal/wizard/picker.go` ⇄ `niti-app/.../setup/team.ts`, and the test isolation
+   env in `scripts/e2e/*` ⇄ `niti-app/scripts/fixture.ts`. Verify both sides: `zsh scripts/e2e/run.sh`
+   and `cd niti-app && npm run check`. Intentional differences stay (the app's own version line,
+   its native features, each product's design tokens).
 3. **Never let one product's files into another's view of the project.** `niti-app/` and
    `old-tech/` are in the `IGNORE` set in `src/graph/filegraph.ts`, which bounds both the `/graph`
    view and the project map injected into every agent's system prompt. A filter added anywhere else
