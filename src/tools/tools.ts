@@ -11,7 +11,8 @@ import { isSecretPath } from "../secrets.ts";
 export type ToolCall =
   | { tool: "read_file"; path: string; offset?: number; limit?: number }
   | { tool: "write_file"; path: string; content: string }
-  | { tool: "edit"; path: string; oldString: string; newString: string; replaceAll?: boolean }
+  // from/to: hashline anchors ("12:a3"), set instead of oldString when the agent uses editFormat: hashline
+  | { tool: "edit"; path: string; oldString: string; newString: string; replaceAll?: boolean; from?: string; to?: string }
   | { tool: "shell"; command: string; args: string[] }
   | { tool: "list_dir"; path?: string }
   | { tool: "glob"; pattern: string; limit?: number }
@@ -240,14 +241,59 @@ export const READ_FILE_MAX_LINES = 1500; // a window, not a wall: past this the 
 // `src/app.ts:212:`, and can read straight to the window it wants instead of pulling whole files
 // and counting. The numbers are display-only — `edit` strips them back off if a model pastes one
 // into oldString (see applyEdit), which is the failure this format otherwise invites.
-function numberLines(text: string, startLine: number): string {
+function numberLines(text: string, startLine: number, hashline = false): string {
   return text
     .split("\n")
-    .map((l, i) => `${String(startLine + i).padStart(6)}\t${l}`)
+    .map((l, i) => (hashline ? `${startLine + i}:${lineTag(l)}|${l}` : `${String(startLine + i).padStart(6)}\t${l}`))
     .join("\n");
 }
 
-async function readCapped(abs: string, shown: string, offset?: number, limit?: number): Promise<string> {
+// --- Hashline edits (opt-in: `editFormat: hashline` on an agent) ----------------------------------
+//
+// With str_replace the model proves where it is editing by reproducing the old text exactly —
+// whitespace and all — and weaker models fail at that more than at the change itself. Hashline
+// reads tag every line with a 2-character content hash ("12:a3|text"); an edit names the lines by
+// those anchors instead. Across 16 models it beat patch on 14 and matched or beat str_replace on
+// most, the weakest gaining most (Grok Code Fast 1: 6.7% → 68.3%) and output tokens falling with
+// the retries (Bölük, "The Harness Problem", 2026). A stale anchor is refused, never re-targeted.
+//
+// The hash ignores whitespace, so re-indenting a line (a formatter run) doesn't invalidate it.
+export function lineTag(line: string): string {
+  let h = 0x811c9dc5; // FNV-1a
+  for (const ch of line.replace(/\s+/g, "")) {
+    h ^= ch.codePointAt(0)!;
+    h = Math.imul(h, 0x01000193);
+  }
+  return ((h >>> 0) & 0xff).toString(16).padStart(2, "0");
+}
+
+const ANCHOR = /^\s*(\d+):([0-9a-f]{2})\|?\s*$/;
+const HASHLINE_PREFIX = /^\d+:[0-9a-f]{2}\|/;
+
+// Replace lines from..to (inclusive, 1-based, both anchors) with newString. '' deletes them.
+export function applyAnchoredEdit(before: string, from: string, to: string | undefined, newString: string, path = ""): string {
+  const lines = before.split("\n");
+  const at = (anchor: string, name: string): number => {
+    const m = ANCHOR.exec(anchor);
+    if (!m) throw new Error(`edit ${path}: ${name} must be an anchor as read_file shows it, like "12:a3" — got ${JSON.stringify(anchor)}`);
+    const n = Number(m[1]);
+    if (n < 1 || n > lines.length) throw new Error(`edit ${path}: line ${n} does not exist (the file has ${lines.length} lines) — read it again`);
+    if (lineTag(lines[n - 1]!) !== m[2]) {
+      throw new Error(`edit ${path}: anchor ${n}:${m[2]} no longer matches — line ${n} is now ${JSON.stringify(lines[n - 1]!.trim().slice(0, 80))}. The file changed since you read it; read it again and use the new anchors.`);
+    }
+    return n;
+  };
+  const start = at(from, "from");
+  const end = to === undefined || to === "" ? start : at(to, "to");
+  if (end < start) throw new Error(`edit ${path}: 'to' (line ${end}) comes before 'from' (line ${start})`);
+  // A model will sometimes paste the anchors back in with the text; strip them when every line has one.
+  const body = newString.split("\n");
+  const tagged = body.filter((l) => l.trim() !== "");
+  const clean = tagged.length > 0 && tagged.every((l) => HASHLINE_PREFIX.test(l)) ? body.map((l) => l.replace(HASHLINE_PREFIX, "")) : body;
+  return [...lines.slice(0, start - 1), ...(newString === "" ? [] : clean), ...lines.slice(end)].join("\n");
+}
+
+async function readCapped(abs: string, shown: string, offset?: number, limit?: number, hashline = false): Promise<string> {
   const buf = await readFile(abs);
   if (buf.includes(0)) return `error: ${shown} looks like a binary file (${buf.length} bytes) — not read`;
   let text = buf.toString("utf8");
@@ -267,7 +313,7 @@ async function readCapped(abs: string, shown: string, offset?: number, limit?: n
     end < all.length || from > 1
       ? `\n[showing lines ${from}-${end} of ${all.length} — read again with offset ${end + 1} for more]`
       : "";
-  return numberLines(window.join("\n"), from) + note + charNote;
+  return numberLines(window.join("\n"), from, hashline) + note + charNote;
 }
 
 // Directories never worth walking. A hardcoded set rather than a .gitignore parser: these are 99%
@@ -411,14 +457,14 @@ export async function runTool(
   call: ToolCall,
   allowed: string[],
   root: string = process.cwd(),
-  hooks: { onOutput?: (chunk: string) => void; allowOutside?: boolean; sandbox?: boolean } = {}, // shell output as it arrives; a human-approved path outside the project
+  hooks: { onOutput?: (chunk: string) => void; allowOutside?: boolean; sandbox?: boolean; hashline?: boolean } = {}, // shell output as it arrives; a human-approved path outside the project
 ): Promise<string> {
   if (!allowed.includes(call.tool)) {
     throw new Error(`tool '${call.tool}' not allowed for this agent`);
   }
   switch (call.tool) {
     case "read_file":
-      return await readCapped(safePath(root, call.path, hooks.allowOutside), call.path, call.offset, call.limit);
+      return await readCapped(safePath(root, call.path, hooks.allowOutside), call.path, call.offset, call.limit, hooks.hashline);
     case "list_dir":
       return await listDir(root, call.path ?? ".", hooks.allowOutside);
     case "glob":
@@ -446,7 +492,9 @@ export async function runTool(
     case "edit": {
       const abs = safePath(root, call.path, hooks.allowOutside);
       const before = await readFile(abs, "utf8");
-      const after = applyEdit(before, call.oldString, call.newString, call.replaceAll ?? false, call.path);
+      const after = call.from
+        ? applyAnchoredEdit(before, call.from, call.to, call.newString, call.path)
+        : applyEdit(before, call.oldString, call.newString, call.replaceAll ?? false, call.path);
       await writeFile(abs, after);
       return `edited ${call.path}`;
     }
@@ -894,8 +942,39 @@ export function expandTools(allowed: string[]): string[] {
   return missing.length > 0 ? [...allowed, ...missing] : allowed;
 }
 
-export function toolSpecs(allowed: string[]): ToolSpec[] {
-  return allowed.map((n) => SPECS[n]).filter((s): s is ToolSpec => Boolean(s));
+// Appended after TOOL_GUIDANCE for a hashline agent: TOOL_GUIDANCE's "copy oldString exactly" line
+// describes the default edit, and left alone it would steer the model away from the anchors.
+export const HASHLINE_GUIDANCE = `
+- Your 'edit' takes line anchors: pass 'from' (and 'to' for a range) as the 'line:tag' read_file printed, e.g. 12:a3, and newString as the replacement lines. Don't copy the old text, and don't include the anchors in newString.`;
+
+// The two specs that change in hashline mode. Chosen once per agent, so the tool list stays
+// byte-identical call to call (it heads the provider's cache prefix).
+const HASHLINE_SPECS: Record<string, ToolSpec> = {
+  read_file: {
+    ...SPECS.read_file!,
+    description:
+      "Read a UTF-8 text file within the project root. Each line comes back as '42:a3|text': line number, a 2-character tag, then the text. Use 'line:tag' (e.g. '42:a3') as the anchors in 'edit'. Long files come back as a window: pass offset (1-based first line) and limit to page through the rest.",
+  },
+  edit: {
+    name: "edit",
+    description:
+      "Change lines of an existing file by their anchors from read_file. 'from' is the first line to replace and 'to' the last (inclusive; omit 'to' for one line), each as 'line:tag' (e.g. '12:a3'). 'newString' is the text that replaces those lines — '' deletes them; to insert, repeat the anchor line in newString with the new lines around it. If the file changed since you read it the anchors won't match and the edit is refused: read it again. Prefer this over write_file for changes to existing files.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        from: { type: "string", description: "anchor of the first line to replace, e.g. '12:a3'" },
+        to: { type: "string", description: "anchor of the last line to replace (inclusive); omit to replace just 'from'" },
+        newString: { type: "string", description: "replacement text for those lines, without anchors ('' deletes them)" },
+        oldString: { type: "string", description: "alternative to anchors: an exact snippet to replace" },
+      },
+      required: ["path", "newString"],
+    },
+  },
+};
+
+export function toolSpecs(allowed: string[], opts: { hashline?: boolean } = {}): ToolSpec[] {
+  return allowed.map((n) => (opts.hashline && HASHLINE_SPECS[n]) || SPECS[n]).filter((s): s is ToolSpec => Boolean(s));
 }
 
 // Provider tool-call → sandbox ToolCall. Throws on unknown tool (caught by the agent loop).
@@ -1002,6 +1081,7 @@ export function toSandboxCall(c: ProviderCall): ToolCall {
         oldString: String(i.oldString ?? ""),
         newString: String(i.newString ?? ""),
         replaceAll: i.replaceAll === true,
+        ...(typeof i.from === "string" && i.from ? { from: i.from, ...(typeof i.to === "string" && i.to ? { to: i.to } : {}) } : {}),
       };
     case "shell": {
       const n = NORMALIZED.has(c.input) ? { command: String(i.command ?? ""), args: (i.args as unknown[]).map(String) } : normalizeShellInput(i);

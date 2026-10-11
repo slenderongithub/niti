@@ -239,3 +239,19 @@ test("setTheme refuses to overwrite an agents.yaml that is not valid YAML", () =
 });
 
 
+
+test("editFormat: hashline is opt-in; str_replace or unset is the default; a typo is an error", () => {
+  const agent = (v: string) => writeYaml(`
+agents:
+  - id: a
+    provider: anthropic
+    model: x
+    role: r
+    systemPrompt: hi
+    ${v}
+`);
+  expect(loadAgents(agent("editFormat: hashline"))[0]?.editFormat).toBe("hashline");
+  expect(loadAgents(agent("editFormat: str_replace"))[0]?.editFormat).toBeUndefined();
+  expect(loadAgents(agent(""))[0]?.editFormat).toBeUndefined();
+  expect(() => loadAgents(agent("editFormat: hashlines"))).toThrow(/editFormat/);
+});

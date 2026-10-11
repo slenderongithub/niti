@@ -2000,3 +2000,28 @@ test("the turn budget is told twice — ~30% left and 3 left — on the tool res
   expect(toolTexts.filter((o) => o.includes("3 turns left of 10"))).toHaveLength(1);
   expect(seen.some((t) => t.role === "user" && t.text.includes("turns left"))).toBe(false);
 });
+
+test("an agent with editFormat: hashline reads anchors and edits by them, end to end", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-hashline-agent-"));
+  writeFileSync(join(root, "a.ts"), "const a = 1;\nconst b = 2;\n");
+  let n = 0;
+  let editSpec: ToolSpec | undefined;
+  const stub: Provider = {
+    async send(_s, turns, tools) {
+      n++;
+      editSpec = tools.find((t) => t.name === "edit");
+      if (n === 1) return { text: "", toolCalls: [{ id: "r", name: "read_file", input: { path: "a.ts" } }] };
+      if (n === 2) {
+        const last = turns.at(-1)!;
+        const read = last.role === "tool" ? last.results[0]!.output : "";
+        const anchor = read.split("\n")[1]!.split("|")[0]!; // "2:xx"
+        return { text: "", toolCalls: [{ id: "e", name: "edit", input: { path: "a.ts", from: anchor, newString: "const b = 3;" } }] };
+      }
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const out = await new Agent({ ...cfg, editFormat: "hashline", allowedTools: ["read_file", "edit"] }, stub, new Bus(), { root }).run("change b");
+  expect(out).toBe("done");
+  expect(readFileSync(join(root, "a.ts"), "utf8")).toBe("const a = 1;\nconst b = 3;\n");
+  expect(editSpec?.description).toContain("anchors");
+});

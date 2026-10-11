@@ -24,7 +24,7 @@ import { UsageTracker } from "../../src/usage.ts";
 import { makeProvider } from "../../src/providers/factory.ts";
 import type { Provider } from "../../src/providers/provider.ts";
 import { detectChecks } from "../../src/agent/verify.ts";
-import { TOOL_GUIDANCE } from "../../src/tools/tools.ts";
+import { TOOL_GUIDANCE, HASHLINE_GUIDANCE } from "../../src/tools/tools.ts";
 import { steeringFor } from "../../src/agent/steering.ts";
 import { repoMapSection } from "../../src/agent/repomap.ts";
 import { costOf, inputIncludesCache } from "../../src/providers/pricing.ts";
@@ -40,6 +40,9 @@ const provider = flag("provider", "google");
 const model = flag("model", "gemini-flash-latest");
 const repeat = Math.max(1, Number(flag("repeat", "1")));
 const only = flag("only", "");
+// --edit-format hashline: run the suite with anchored edits instead of str_replace, to decide per
+// model whether to turn it on (agents.yaml `editFormat: hashline`).
+const editFormat = flag("edit-format", "") === "hashline" ? "hashline" : undefined;
 const keep = args.includes("--keep");
 const verbose = args.includes("--verbose");
 // --save-tokens out.json writes this run's tokens-per-pass; --gate-tokens base.json fails the run
@@ -167,8 +170,9 @@ async function runOne(task: Task): Promise<Attempt> {
     // Same prompt the Engine assembles. repoMapSection is empty below its file threshold, so the
     // small fixtures run map-less exactly as they would under the Engine, and the larger one gets
     // the map. Leaving the per-model steering out would measure a harness nobody runs.
-    systemPrompt: SYSTEM_PROMPT + repoMapSection(dir) + TOOL_GUIDANCE + steeringFor(provider, model),
+    systemPrompt: SYSTEM_PROMPT + repoMapSection(dir) + TOOL_GUIDANCE + (editFormat ? HASHLINE_GUIDANCE : "") + steeringFor(provider, model),
     allowedTools: ["read_file", "write_file", "edit", "shell"],
+    ...(editFormat ? { editFormat } : {}),
   };
   const bus = new Bus();
   // Tool names for the trace. file_edit is what a write tool publishes instead of tool_call.
@@ -240,7 +244,7 @@ if (selected.length === 0) {
   process.exit(1);
 }
 
-console.log(`\n  ${provider}/${model} · ${selected.length} tasks${repeat > 1 ? ` × ${repeat}` : ""}\n`);
+console.log(`\n  ${provider}/${model}${editFormat ? " · hashline edits" : ""} · ${selected.length} tasks${repeat > 1 ? ` × ${repeat}` : ""}\n`);
 
 let passed = 0;
 let scored = 0;

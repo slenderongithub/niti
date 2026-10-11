@@ -11,7 +11,7 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, normalizePath, projectRelative, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, applyAnchoredEdit, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import { isSecretPath, shellTouchesSecret } from "../secrets.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
@@ -284,6 +284,10 @@ export interface AgentConfig {
   reasoning?: Reasoning;
   // Per-response output cap. Unset → each client's own default (Anthropic 16000, others: the model's).
   maxOutput?: number;
+  // "hashline": read_file tags each line ("12:a3|text") and edit takes those anchors instead of an
+  // exact snippet. Opt-in per agent — it helps most on weaker / cheaper models; measure it with
+  // scripts/eval before turning it on for a model (see applyAnchoredEdit in tools.ts).
+  editFormat?: "hashline";
 }
 
 export interface AgentDeps {
@@ -929,7 +933,7 @@ export class Agent {
     // entirely, so an agent restricted to `read_file` was still handed every write tool of every
     // configured MCP server — a field named allowedTools that did not bound the tools.
     // `"mcp"` in the list is the opt-in for "all of them", so the common case stays one word.
-    const specs = [...toolSpecs(allowed), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)];
+    const specs = [...toolSpecs(allowed, { hashline: this.config.editFormat === "hashline" }), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)];
     // Offered even once the breadth budget is spent — fork() refuses it at call time instead.
     // Dropping it mid-task changed the tool list, which sits first in Anthropic's cache prefix, so
     // the whole cached conversation was rewritten at 1.25× on the next call.
@@ -1300,7 +1304,17 @@ export class Agent {
     // and showed the model a `diff` argument that isn't in the tool's schema.
     let diff: string | undefined;
     if (call.name === "edit" && before) {
-      diff = editDiff(before, String(call.input.oldString ?? ""), String(call.input.newString ?? ""));
+      if (typeof call.input.from === "string" && call.input.from) {
+        // An anchored edit has no oldString to render; diff the whole result instead. A stale
+        // anchor throws here and again at execution, where it reaches the model as the error.
+        try {
+          diff = writeFileDiff(before, applyAnchoredEdit(before, call.input.from, typeof call.input.to === "string" ? call.input.to : undefined, String(call.input.newString ?? "")));
+        } catch {
+          diff = undefined;
+        }
+      } else {
+        diff = editDiff(before, String(call.input.oldString ?? ""), String(call.input.newString ?? ""));
+      }
     }
     if (call.name === "write_file") {
       diff = writeFileDiff(before ?? null, String(call.input.content ?? ""));
@@ -1376,7 +1390,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox }); // only ever past a human's yes
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, hashline: this.config.editFormat === "hashline" }); // only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo

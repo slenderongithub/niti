@@ -214,6 +214,7 @@ export function saveAgents(agents: AgentConfig[], path = ".niti/agents.yaml"): v
       ...(a.reviewer ? { reviewer: a.reviewer } : {}),
       ...(a.reasoning ? { reasoning: a.reasoning } : {}),
       ...(a.maxOutput ? { maxOutput: a.maxOutput } : {}),
+      ...(a.editFormat ? { editFormat: a.editFormat } : {}),
     })),
   };
   editConfig(path, (doc) => doc.set("agents", next.agents));
@@ -237,6 +238,13 @@ export function setOption(key: string, value: boolean, path = ".niti/agents.yaml
 }
 
 export const setAuto = (on: boolean, path?: string): void => setOption("auto", on, path);
+
+// Unset is the default str_replace edit; a typo is an error rather than silently the default.
+function parseEditFormat(v: unknown, where: string): "hashline" | undefined {
+  if (v === undefined || v === null || v === "" || v === "str_replace") return undefined;
+  if (v === "hashline") return "hashline";
+  throw new Error(`${where}: editFormat must be "hashline" or "str_replace", got ${JSON.stringify(v)}`);
+}
 
 function validate(a: unknown, i: number, path: string): AgentConfig {
   const rec = (a ?? {}) as Record<string, unknown>;
@@ -267,5 +275,6 @@ function validate(a: unknown, i: number, path: string): AgentConfig {
     reviewer: typeof rec.reviewer === "string" ? rec.reviewer : undefined,
     reasoning: parseReasoning(rec.reasoning),
     maxOutput: Number.isInteger(rec.maxOutput) && (rec.maxOutput as number) > 0 ? (rec.maxOutput as number) : undefined,
+    editFormat: parseEditFormat(rec.editFormat, `${path} agent[${i}]`),
   };
 }
