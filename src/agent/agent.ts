@@ -210,6 +210,28 @@ export function overContextThreshold(inputTokens: number, context: number, ratio
 // checks never passed on it. Kept distinct from "failed" so the scheduler can do the one thing
 // that actually helps here — hand the task to a different model, with the check output attached —
 // before falling back to a replan.
+// The turn budget, told to the model twice: once with about 30% left and once with 3 left. An agent
+// that doesn't know the cap exists spends it exploring and hits it mid-edit — the commonest failure
+// above. Budget awareness alone beat simply raising the budget in Google's tool-use study (BATS,
+// "Budget-Aware Tool Use Enables Effective Agent Scaling", 2025). It rides on the tool results the
+// turn already sends, so it is never an extra user turn (see openai.ts on why those cost reasoning).
+export function budgetNote(turn: number, maxTurns: number): string | undefined {
+  const left = maxTurns - turn - 1; // turns after this one
+  if (maxTurns < 8 || left <= 0) return undefined;
+  if (left === 3) return `[niti: 3 turns left of ${maxTurns}. Finish the change you are making, check it, and give your final answer — or say exactly what is left undone.]`;
+  if (left === Math.round(maxTurns * 0.3) && left > 3) return `[niti: turn ${turn + 1} of ${maxTurns}; ${left} left. Leave enough of them to finish and check the change.]`;
+  return undefined;
+}
+
+// A copy of `results` with the budget note on the last one. The originals stay unannotated for the
+// stall detector, which compares outputs round to round.
+function withBudgetNote(results: ToolResult[], turn: number, maxTurns: number): ToolResult[] {
+  const note = budgetNote(turn, maxTurns);
+  if (!note || results.length === 0) return results;
+  const last = results[results.length - 1]!;
+  return [...results.slice(0, -1), { ...last, output: `${last.output}\n\n${note}` }];
+}
+
 export type RunOutcome = "done" | "failed" | "exhausted" | "unverified";
 
 // One run's own result. Read this instead of the `output`/`error` getters when correctness depends
@@ -583,7 +605,7 @@ export class Agent {
         // Pushed after execution (not before): execTool can mutate a call's input in place (e.g.
         // attaching the approval-time diff) — persisting first would silently drop that from history.
         this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
-        this.push(turns, { role: "tool", results }, sessionId);
+        this.push(turns, { role: "tool", results: withBudgetNote(results, i, this.maxTurns) }, sessionId);
         const verdict = stall.observe(reply.toolCalls, results);
         if (verdict === "stop") {
           this.lastError = stall.kind === "recurring"
@@ -750,7 +772,7 @@ export class Agent {
         const results = await this.execCalls(reply.toolCalls, allowed, ctx);
         // See run(): pushed after execution so any input mutation from execTool (e.g. the diff) persists.
         this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
-        this.push(turns, { role: "tool", results }, sessionId);
+        this.push(turns, { role: "tool", results: withBudgetNote(results, i, o.maxTurns) }, sessionId);
       }
       if (sessionId) this.store?.setStatus(sessionId, "done");
       return text || "(no answer)";

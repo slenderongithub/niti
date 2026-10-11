@@ -11,6 +11,7 @@ import {
   isSensitiveConfigWrite,
   SHELL_LOCK,
   MAX_FORK_DEPTH,
+  budgetNote,
   type AgentConfig,
 } from "./agent.ts";
 import { Bus } from "../events/bus.ts";
@@ -1973,4 +1974,29 @@ test("a tool the agent is not allowed is refused before anyone is asked to appro
   const asked: string[] = [];
   await new Agent({ ...cfg, allowedTools: ["read_file", "write_file"] }, stub, new Bus(), { root, approve: async (tool) => (asked.push(tool), true) }).run("edit it");
   expect(asked).toEqual([]);
+});
+
+test("the turn budget is told twice — ~30% left and 3 left — on the tool results, never as a user turn", async () => {
+  expect(budgetNote(20, 30)).toContain("turn 21 of 30; 9 left");
+  expect(budgetNote(26, 30)).toContain("3 turns left of 30");
+  const said = Array.from({ length: 30 }, (_, i) => budgetNote(i, 30)).filter(Boolean);
+  expect(said).toHaveLength(2);
+  expect(Array.from({ length: 6 }, (_, i) => budgetNote(i, 6)).filter(Boolean)).toHaveLength(0); // short loops: noise
+
+  // In the loop: a model that keeps reading until the 3-left mark sees the note on its tool result.
+  const root = mkdtempSync(join(tmpdir(), "niti-budget-"));
+  writeFileSync(join(root, "f.txt"), "x");
+  let seen: Turn[] = [];
+  let n = 0;
+  const stub: Provider = {
+    async send(_s, turns) {
+      seen = turns;
+      n++;
+      return n < 10 ? { text: "", toolCalls: [{ id: String(n), name: "read_file", input: { path: "f.txt", offset: n } }] } : { text: "done", toolCalls: [] };
+    },
+  };
+  await new Agent({ ...cfg, allowedTools: ["read_file"] }, stub, new Bus(), { root, maxTurns: 10 }).run("look");
+  const toolTexts = seen.filter((t) => t.role === "tool").map((t) => (t.role === "tool" ? t.results.at(-1)!.output : ""));
+  expect(toolTexts.filter((o) => o.includes("3 turns left of 10"))).toHaveLength(1);
+  expect(seen.some((t) => t.role === "user" && t.text.includes("turns left"))).toBe(false);
 });
