@@ -10,6 +10,7 @@ import { openDb } from "../store/db.ts";
 import { SessionStore } from "../store/session-store.ts";
 import { AuditLog } from "../store/audit-log.ts";
 import { startServer, type ServerHandle } from "./server.ts";
+import { startModelRefresh, isDeprecated } from "../providers/live-catalog.ts";
 
 export interface ServeResult {
   engine: Engine;
@@ -72,6 +73,16 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   const server = startServer(engine, { port: opts.port, theme: options.theme, prefs: options });
   // Handshake — the ONLY thing on stdout, first line, machine-readable for the Go TUI.
   process.stdout.write(JSON.stringify({ nitiServer: { url: server.url, token: server.token } }) + "\n");
+  // Model lists: the cached copy applies at once, a fresh one is fetched in the background at most
+  // once a day. Either way, an agent configured with a model its provider has deprecated is told.
+  const warnDeprecated = () => {
+    for (const c of configs) {
+      if (isDeprecated(c.provider, c.model)) {
+        engine.bus.publish({ agentId: c.id, type: "warning", payload: `${c.provider}/${c.model} is deprecated by its provider — pick a current model with /model`, time: Date.now() });
+      }
+    }
+  };
+  void startModelRefresh().then(warnDeprecated);
   return { engine, server };
 }
 

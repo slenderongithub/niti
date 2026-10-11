@@ -1,4 +1,4 @@
-import { GENERATED_CATALOG, GENERATED_CONTEXT } from "./catalog.generated.ts";
+import { GENERATED_CATALOG, GENERATED_CONTEXT, GENERATED_MODELS } from "./catalog.generated.ts";
 
 // Provider catalog — the single source of provider metadata (client, baseURL, env var, models).
 // Anthropic and Google use native clients; everything else speaks the OpenAI chat API via baseURL,
@@ -59,6 +59,10 @@ const MODEL_CONTEXT: Record<string, number> = {
 // table below because they describe the server actually running, not the model in general.
 const LEARNED_CONTEXT = new Map<string, number>();
 
+// Windows from the live model registry (see live-catalog.ts), keyed "provider/model". Fresher than
+// the build-time GENERATED_CONTEXT, and they cover the hand-maintained providers it doesn't.
+export const LIVE_CONTEXT = new Map<string, number>();
+
 // Ollama serves each model with its own num_ctx — often 4–8k, however large the model's trained
 // window — and silently drops the oldest part of an oversized prompt (the system prompt first)
 // instead of erroring. Read what it will really accept from /api/show so compaction fires in time.
@@ -88,7 +92,8 @@ export async function probeOllamaContext(model: string, baseURL = "http://localh
 // first, then the exact models.dev entry, then the model-name prefix table, then the provider's
 // own figure, then a conservative default.
 export function contextWindow(provider: string, model = ""): number {
-  const exact = LEARNED_CONTEXT.get(`${provider}/${model}`) ?? GENERATED_CONTEXT[`${provider}/${model}`];
+  const key = `${provider}/${model}`;
+  const exact = LEARNED_CONTEXT.get(key) ?? LIVE_CONTEXT.get(key) ?? GENERATED_CONTEXT[key];
   if (exact) return exact;
   const name = (model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model).toLowerCase();
   let best = 0;
@@ -233,6 +238,14 @@ const MANUAL_CATALOG: Record<string, CatalogEntry> = {
 };
 
 export const CATALOG: Record<string, CatalogEntry> = { ...GENERATED_CATALOG, ...MANUAL_CATALOG };
+export const MANUAL_IDS = Object.keys(MANUAL_CATALOG); // for scripts/gen-catalog.ts
+
+// The hand-maintained entries above carry client, auth and category; their model lists come from
+// the registry snapshot like everyone else's, so none is frozen by hand. live-catalog.ts replaces
+// all of these again at runtime with the day's list.
+for (const [id, models] of Object.entries(GENERATED_MODELS)) {
+  if (Object.hasOwn(MANUAL_CATALOG, id) && models.length > 0) CATALOG[id] = { ...CATALOG[id]!, models };
+}
 
 export function providerKeys(): string[] {
   return Object.keys(CATALOG);

@@ -8,6 +8,7 @@ import palettes from "../../tui/internal/theme/palettes.json";
 import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "./events.ts";
 import { CATALOG, contextWindow, providersByCategory, splitModelId, type Category } from "../providers/catalog.ts";
+import { localModels } from "../providers/live-catalog.ts";
 import { costOf } from "../providers/pricing.ts";
 import { buildFileGraph, trackedFiles, projectFiles, ignored } from "../graph/filegraph.ts";
 import { safePath } from "../tools/tools.ts";
@@ -480,7 +481,9 @@ export function startServer(
       }
       if (p === "/models" && method === "GET") {
         const prov = u.searchParams.get("provider") ?? "";
-        return json({ provider: prov, models: CATALOG[prov]?.models ?? [] });
+        // Ollama and LM Studio: what is installed right now, not a list of names that might be.
+        const local = await localModels(prov);
+        return json({ provider: prov, models: local ?? CATALOG[prov]?.models ?? [] });
       }
       if (p === "/model" && method === "POST") {
         const { agentId, provider, model, baseURL } = (await readBody(req)) as {

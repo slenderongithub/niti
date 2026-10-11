@@ -66,6 +66,7 @@ const PRICES: Record<string, Price> = {
   "gemini-flash-lite": { input: 0.1, output: 0.4 },
   "gemini-flash": { input: 0.3, output: 2.5 },
   "gemini-pro": { input: 1.25, output: 10 },
+  gemma: { input: 0, output: 0 }, // open-weights Gemma on the Gemini API is free of charge (models.dev lists no cost)
   "deepseek-chat": { input: 0.27, output: 1.1 },
   "deepseek-reasoner": { input: 0.55, output: 2.19 },
   "glm-4": { input: 0.6, output: 2.2 },
@@ -84,8 +85,14 @@ const PRICES: Record<string, Price> = {
 // $0.59/Mtok would be plainly wrong, and "—" would be too.
 const FREE_PROVIDERS = new Set(["ollama", "lmstudio"]);
 
+// Prices from the live model registry (see live-catalog.ts), keyed "provider/model" — the most
+// current figure for a model, consulted before the build-time snapshot and the prefix table.
+export const LIVE_PRICES = new Map<string, Price>();
+
 export function priceFor(provider: string, model: string): Price | undefined {
   if (FREE_PROVIDERS.has(provider)) return { input: 0, output: 0 };
+  const live = LIVE_PRICES.get(`${provider}/${model}`);
+  if (live) return live;
   // Exact match from models.dev first — it knows the actual per-model price, including for names
   // the prefix table below has no hope of matching (`gemini-flash-latest`, `nvidia/nemotron-…`).
   const exact = GENERATED_PRICES[`${provider}/${model}`];
