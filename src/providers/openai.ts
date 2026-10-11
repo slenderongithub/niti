@@ -11,6 +11,52 @@ function parseArgs(s: string | undefined): Record<string, unknown> {
   }
 }
 
+// What an OpenAI-compatible reasoning model returned alongside its answer, kept on the assistant
+// turn's `raw` and replayed on the next request. Chat Completions has no field for it, so most
+// clients drop it — and the models built on interleaved thinking get measurably worse when they
+// do (MiniMax's ablation: BrowseComp 44.0 → 31.4, τ²-bench 87 → 64), or 400 outright (DeepSeek
+// thinking mode with tools, Kimi K2 thinking). Tagged with the vendor so a history replayed to a
+// different endpoint never carries a field that endpoint has never seen.
+interface OpenAIRaw {
+  openaiReasoning: { vendor: string; content?: string; details?: unknown[] };
+}
+
+function reasoningOf(raw: unknown, vendor: string): OpenAIRaw["openaiReasoning"] | undefined {
+  const r = (raw as Partial<OpenAIRaw> | undefined)?.openaiReasoning;
+  return r && r.vendor === vendor ? r : undefined;
+}
+
+// The vendors' field names differ: DeepSeek, Kimi, GLM and Qwen use `reasoning_content`; OpenRouter
+// sends a plain `reasoning` string plus structured `reasoning_details` (which carry the encrypted /
+// signed blocks Claude and Gemini need back); MiniMax uses `reasoning_details` alone.
+function captureReasoning(vendor: string, content: string, details: unknown[]): OpenAIRaw | undefined {
+  if (!content && details.length === 0) return undefined;
+  return { openaiReasoning: { vendor, ...(content ? { content } : {}), ...(details.length ? { details } : {}) } };
+}
+
+// Streamed reasoning_details arrive as fragments sharing an `index`; concatenate their text fields.
+function mergeDetails(into: Record<string, unknown>[], fragments: unknown): void {
+  for (const f of Array.isArray(fragments) ? (fragments as Record<string, unknown>[]) : []) {
+    const prev = typeof f.index === "number" ? into.find((d) => d.index === f.index && d.type === f.type) : undefined;
+    if (!prev) {
+      into.push({ ...f });
+      continue;
+    }
+    for (const k of ["text", "summary", "data"] as const) {
+      if (typeof f[k] === "string") prev[k] = ((prev[k] as string | undefined) ?? "") + f[k];
+    }
+    if (f.signature) prev.signature = f.signature;
+  }
+}
+
+// DeepSeek's rule (V3.2 report): reasoning is kept across tool calls and discarded only when a new
+// *user* message arrives. niti speaks to the model mid-task as the user — verification failures,
+// stall nudges, the inbox, the notes board, the todo checklist — so on this wire each of those
+// would wipe the reasoning the replay above just preserved. When the assistant turn before them
+// carried reasoning, those notes ride on the last tool message instead. Anthropic needs none of
+// this: it merges consecutive user messages into the tool-result turn already.
+const HARNESS_NOTE = "\n\n[niti — note from the harness, not part of the tool output]\n";
+
 export interface OpenAIOptions {
   vendor?: string; // catalog key ("openai", "openrouter", "deepseek", …) — picks the per-vendor dialect
   cacheKey?: string; // OpenAI prompt_cache_key: requests sharing it are routed to the same prefix cache
@@ -58,13 +104,25 @@ export class OpenAIProvider implements Provider {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: "system", content: sysPrompt },
     ];
+    const { vendor } = this.opts;
+    const tag = vendor ?? "default"; // which endpoint a captured reasoning trace belongs to
+    let reasoningLive = false; // the latest assistant turn carried reasoning we replayed
     for (const t of turns) {
       if (t.role === "user") {
+        const last = messages[messages.length - 1];
+        if (reasoningLive && last?.role === "tool") {
+          last.content = `${last.content as string}${HARNESS_NOTE}${t.text}`;
+          continue;
+        }
         messages.push({ role: "user", content: t.text });
       } else if (t.role === "assistant") {
+        const r = reasoningOf(t.raw, tag);
+        reasoningLive = !!r;
         messages.push({
           role: "assistant",
           content: t.text || null,
+          ...(r?.content ? { reasoning_content: r.content } : {}),
+          ...(r?.details ? { reasoning_details: r.details } : {}),
           ...(t.toolCalls.length
             ? {
                 tool_calls: t.toolCalls.map((c) => ({
@@ -74,7 +132,7 @@ export class OpenAIProvider implements Provider {
                 })),
               }
             : {}),
-        });
+        } as OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam);
       } else {
         for (const r of t.results) {
           messages.push({ role: "tool", tool_call_id: r.id, content: r.output });
@@ -82,7 +140,7 @@ export class OpenAIProvider implements Provider {
       }
     }
 
-    const { vendor, cacheKey, maxOutput } = this.opts;
+    const { cacheKey, maxOutput } = this.opts;
     // OpenRouter forwards Anthropic's cache_control to Claude models, which cache nothing without it
     // (OpenAI and DeepSeek cache automatically; Claude does not). Same breakpoints as anthropic.ts.
     const openrouterClaude = vendor === "openrouter" && this.model.startsWith("anthropic/");
@@ -108,11 +166,12 @@ export class OpenAIProvider implements Provider {
 
     if (!onDelta) {
       const res = await this.client.chat.completions.create(params, { signal });
-      const msg = res.choices[0]?.message;
+      const msg = res.choices[0]?.message as (OpenAI.Chat.Completions.ChatCompletionMessage & ReasoningFields) | undefined;
       const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).flatMap((tc) =>
         tc.type === "function" ? [{ id: tc.id, name: tc.function.name, input: parseArgs(tc.function.arguments) }] : [],
       );
-      return { text: msg?.content ?? "", toolCalls, usage: mapUsage(res.usage), rateLimit: this.lastRateLimit };
+      const raw = captureReasoning(tag, msg?.reasoning_content ?? msg?.reasoning ?? "", Array.isArray(msg?.reasoning_details) ? msg.reasoning_details : []);
+      return { text: msg?.content ?? "", toolCalls, usage: mapUsage(res.usage), rateLimit: this.lastRateLimit, ...(raw ? { raw } : {}) };
     }
 
     // Streaming: accumulate text (emitted live) and tool-call fragments (arrive by index).
@@ -126,11 +185,15 @@ export class OpenAIProvider implements Provider {
       ...(this.supportsUsageOption ? { stream_options: { include_usage: true } } : {}),
     }, { signal });
     let text = "";
+    let reasoning = "";
+    const details: Record<string, unknown>[] = [];
     let usage: ReturnType<typeof mapUsage>;
     const acc: Record<number, { id?: string; name?: string; args: string }> = {};
     for await (const chunk of stream) {
       if (chunk.usage) usage = mapUsage(chunk.usage);
-      const d = chunk.choices[0]?.delta;
+      const d = chunk.choices[0]?.delta as (OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta & ReasoningFields) | undefined;
+      reasoning += d?.reasoning_content ?? d?.reasoning ?? "";
+      if (d?.reasoning_details) mergeDetails(details, d.reasoning_details);
       if (d?.content) {
         text += d.content;
         onDelta(d.content);
@@ -145,8 +208,16 @@ export class OpenAIProvider implements Provider {
     const toolCalls: ToolCall[] = Object.values(acc)
       .filter((a) => a.name)
       .map((a) => ({ id: a.id ?? a.name!, name: a.name!, input: parseArgs(a.args) }));
-    return { text, toolCalls, usage, rateLimit: this.lastRateLimit };
+    const raw = captureReasoning(tag, reasoning, details);
+    return { text, toolCalls, usage, rateLimit: this.lastRateLimit, ...(raw ? { raw } : {}) };
   }
+}
+
+// Non-standard fields OpenAI-compatible vendors add to a message or a stream delta.
+interface ReasoningFields {
+  reasoning_content?: string | null;
+  reasoning?: string | null;
+  reasoning_details?: unknown[];
 }
 
 // Puts an Anthropic-style cache_control on a Chat Completions message's last text part (see the

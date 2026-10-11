@@ -177,3 +177,74 @@ test("setThinking(false) drops reasoning_effort from the request; true restores 
   await p.send("S", [{ role: "user", text: "hi" }], []);
   expect(seen.params.reasoning_effort).toBe("high");
 });
+
+test("reasoning_content comes back on raw and is replayed on the next request (DeepSeek / Kimi)", async () => {
+  const p = new OpenAIProvider("deepseek-reasoner", "k", "https://api.deepseek.com", undefined, undefined, { vendor: "deepseek" });
+  const seen = withStub(p, reply({ content: null, reasoning_content: "check a.ts first", tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"a.ts"}' } }] }));
+  const out = await p.send("s", [{ role: "user", text: "fix it" }], []);
+  expect(out.raw).toEqual({ openaiReasoning: { vendor: "deepseek", content: "check a.ts first" } });
+
+  await p.send("s", [
+    { role: "user", text: "fix it" },
+    { role: "assistant", text: "", toolCalls: out.toolCalls, raw: out.raw },
+    { role: "tool", results: [{ id: "c1", name: "read_file", output: "x" }] },
+  ], []);
+  expect(seen.params.messages[2].reasoning_content).toBe("check a.ts first");
+});
+
+test("reasoning captured from one vendor is never replayed to another", async () => {
+  const p = new OpenAIProvider("m", "k", "https://x", undefined, undefined, { vendor: "groq" });
+  const seen = withStub(p, reply({ content: "ok" }));
+  await p.send("s", [
+    { role: "user", text: "go" },
+    { role: "assistant", text: "a", toolCalls: [], raw: { openaiReasoning: { vendor: "deepseek", content: "secret" } } },
+    { role: "user", text: "next" },
+  ], []);
+  expect(seen.params.messages[2].reasoning_content).toBeUndefined();
+  // Anthropic-shaped raw (an array of blocks) is ignored too.
+  await p.send("s", [{ role: "user", text: "go" }, { role: "assistant", text: "a", toolCalls: [], raw: [{ type: "thinking" }] }], []);
+  expect(seen.params.messages[2].reasoning_content).toBeUndefined();
+});
+
+test("a harness note after tool results rides on the tool message when reasoning is live, so it is not a new user turn", async () => {
+  const p = new OpenAIProvider("deepseek-reasoner", "k", "https://api.deepseek.com", undefined, undefined, { vendor: "deepseek" });
+  const seen = withStub(p, reply({ content: "ok" }));
+  const call = [{ id: "c1", name: "shell", input: { command: "bun test" } }];
+  await p.send("s", [
+    { role: "user", text: "fix it" },
+    { role: "assistant", text: "", toolCalls: call, raw: { openaiReasoning: { vendor: "deepseek", content: "r" } } },
+    { role: "tool", results: [{ id: "c1", name: "shell", output: "1 fail" }] },
+    { role: "user", text: "Verification failed" },
+  ], []);
+  const msgs = seen.params.messages;
+  expect(msgs).toHaveLength(4); // system, user, assistant, tool — no trailing user message
+  expect(msgs[3].role).toBe("tool");
+  expect(msgs[3].content).toContain("1 fail");
+  expect(msgs[3].content).toContain("Verification failed");
+
+  // Without reasoning in play nothing changes: the note stays its own user message.
+  await p.send("s", [
+    { role: "user", text: "fix it" },
+    { role: "assistant", text: "", toolCalls: call },
+    { role: "tool", results: [{ id: "c1", name: "shell", output: "1 fail" }] },
+    { role: "user", text: "Verification failed" },
+  ], []);
+  expect(seen.params.messages.at(-1)).toEqual({ role: "user", content: "Verification failed" });
+});
+
+test("streamed reasoning (OpenRouter `reasoning` + fragmented reasoning_details) is accumulated", async () => {
+  const p = new OpenAIProvider("anthropic/claude-x", "k", "https://openrouter.ai/api/v1", undefined, undefined, { vendor: "openrouter" });
+  const chunks = [
+    { choices: [{ delta: { reasoning: "think ", reasoning_details: [{ type: "reasoning.text", index: 0, text: "think " }] } }] },
+    { choices: [{ delta: { reasoning: "more", reasoning_details: [{ type: "reasoning.text", index: 0, text: "more", signature: "sig" }] } }] },
+    { choices: [{ delta: { content: "done" } }] },
+  ];
+  (p as unknown as { client: unknown }).client = {
+    chat: { completions: { create: async () => ({ async *[Symbol.asyncIterator]() { for (const c of chunks) yield c; } }) } },
+  };
+  const out = await p.send("s", [{ role: "user", text: "x" }], [], () => {});
+  expect(out.text).toBe("done");
+  expect(out.raw).toEqual({
+    openaiReasoning: { vendor: "openrouter", content: "think more", details: [{ type: "reasoning.text", index: 0, text: "think more", signature: "sig" }] },
+  });
+});
