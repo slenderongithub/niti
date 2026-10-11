@@ -166,6 +166,10 @@ function boardBlock(unfinished: string[]): string {
   );
 }
 
+// The "split only independent work" rule: across 180 agent configurations, multi-agent setups gained
+// on parallelisable tasks and lost 39-70% on sequential ones (Google, "Towards a Science of Scaling
+// Agent Systems", 2025), and a single agent beat a fixed pipeline on bug fixing and multi-file
+// coding (ECER 2026). See docs/research/2026-10-merged.md.
 export function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, history: Exchange[] = [], unfinished: string[] = []): string {
   const roster = roles
     .map((r) => `  - id "${r.id}" — role: ${r.role}${r.description ? ` (${r.description})` : ""}`)
@@ -178,7 +182,11 @@ export function plannerPrompt(goal: string, roles: RoleInfo[], correction?: stri
     `{"question": "<the question, restated so it stands alone>"}; the lead will look at the code and answer\n` +
     `- a request to build, change, fix or run something → plan it.\n\n` +
     `To plan: break the work into a small DAG of concrete tasks (1-6 — one is fine for a small change; ` +
-    `never invent work the user did not ask for). Assign each task to exactly one teammate by their id. ` +
+    `never invent work the user did not ask for). Split only work that can go ahead independently, on ` +
+    `different files or parts of the project. A chain where each step needs what the previous one ` +
+    `found — locate a bug, fix it, test the fix — is ONE task for one teammate: handing a half-understood ` +
+    `problem to another agent loses what was learned and costs more. When unsure, use fewer tasks. ` +
+    `Assign each task to exactly one teammate by their id. ` +
     `Sequence work with "dependsOn" (task ids that must finish first) so prerequisites run before ` +
     `consumers — e.g. UI/design tasks before the frontend that uses them. Use "handoffTo" to name ` +
     `teammate ids that should receive a task's output.\n\n` +

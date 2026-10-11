@@ -87,7 +87,7 @@ function factsFrom(turns: Turn[]): string {
   for (const t of turns) {
     if (t.role !== "tool") continue;
     for (const r of t.results) {
-      const m = FILE_RESULT.exec(r.output.trim());
+      const m = FILE_RESULT.exec(r.output.trim().split("\n")[0]!); // first line: a harness note may follow
       if (m) files.add(m[1]!);
       // Only the most recent few, and only the first line: a stack trace re-pasted into every
       // later turn is how a context window fills up in the first place.

@@ -5,6 +5,8 @@
 //   bun run scripts/eval/run.ts --provider google --model gemini-flash-lite-latest --repeat 3
 //   bun run scripts/eval/run.ts --only navigate --keep
 //   bun run scripts/eval/run.ts --repeat 3 --save-tokens base.json   (then --gate-tokens base.json after a change)
+//   bun run scripts/eval/run.ts --repeat 3 --repo-map off            (A/B the map in the system prompt)
+//   bun run scripts/eval/run.ts --repeat 3 --edit-format hashline    (A/B anchored edits for this model)
 //
 // Use --repeat 3 or more for any comparison you intend to act on. A single pass is a smoke test:
 // the same fixture on an unchanged harness scored 4/5 across five runs, so one run of the suite
@@ -24,7 +26,7 @@ import { UsageTracker } from "../../src/usage.ts";
 import { makeProvider } from "../../src/providers/factory.ts";
 import type { Provider } from "../../src/providers/provider.ts";
 import { detectChecks } from "../../src/agent/verify.ts";
-import { TOOL_GUIDANCE } from "../../src/tools/tools.ts";
+import { TOOL_GUIDANCE, HASHLINE_GUIDANCE } from "../../src/tools/tools.ts";
 import { steeringFor } from "../../src/agent/steering.ts";
 import { repoMapSection } from "../../src/agent/repomap.ts";
 import { costOf, inputIncludesCache } from "../../src/providers/pricing.ts";
@@ -40,6 +42,13 @@ const provider = flag("provider", "google");
 const model = flag("model", "gemini-flash-latest");
 const repeat = Math.max(1, Number(flag("repeat", "1")));
 const only = flag("only", "");
+// --edit-format hashline: run the suite with anchored edits instead of str_replace, to decide per
+// model whether to turn it on (agents.yaml `editFormat: hashline`).
+const editFormat = flag("edit-format", "") === "hashline" ? "hashline" : undefined;
+// --repo-map off: the same suite without the ranked map in the system prompt (the repo_map tool
+// stays). Context-file studies found overviews in the prompt raise cost >20% without helping; this
+// is how to find out whether niti's does, on dollars per solved task.
+const repoMap = flag("repo-map", "on") !== "off";
 const keep = args.includes("--keep");
 const verbose = args.includes("--verbose");
 // --save-tokens out.json writes this run's tokens-per-pass; --gate-tokens base.json fails the run
@@ -167,8 +176,9 @@ async function runOne(task: Task): Promise<Attempt> {
     // Same prompt the Engine assembles. repoMapSection is empty below its file threshold, so the
     // small fixtures run map-less exactly as they would under the Engine, and the larger one gets
     // the map. Leaving the per-model steering out would measure a harness nobody runs.
-    systemPrompt: SYSTEM_PROMPT + repoMapSection(dir) + TOOL_GUIDANCE + steeringFor(provider, model),
+    systemPrompt: SYSTEM_PROMPT + (repoMap ? repoMapSection(dir) : "") + TOOL_GUIDANCE + (editFormat ? HASHLINE_GUIDANCE : "") + steeringFor(provider, model),
     allowedTools: ["read_file", "write_file", "edit", "shell"],
+    ...(editFormat ? { editFormat } : {}),
   };
   const bus = new Bus();
   // Tool names for the trace. file_edit is what a write tool publishes instead of tool_call.
@@ -221,19 +231,33 @@ async function runOne(task: Task): Promise<Attempt> {
   };
 }
 
+// 95% Wilson score interval for a pass rate, in whole percent. Printed beside the rate because the
+// suite is small: 5/7 is "somewhere between 36% and 92%", and two runs whose intervals overlap
+// this much have not been told apart (agentic evals need ~9 paired runs to see a 2-point change).
+function wilson(k: number, n: number): [number, number] {
+  if (n === 0) return [0, 0];
+  const z = 1.96;
+  const p = k / n;
+  const d = 1 + (z * z) / n;
+  const c = (p + (z * z) / (2 * n)) / d;
+  const m = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d;
+  return [Math.round(Math.max(0, c - m) * 100), Math.round(Math.min(1, c + m) * 100)];
+}
+
 const selected = only ? TASKS.filter((t) => t.tests === only || t.name.includes(only)) : TASKS;
 if (selected.length === 0) {
   console.error(`no tasks match '${only}'. Tasks: ${TASKS.map((t) => t.name).join(", ")}`);
   process.exit(1);
 }
 
-console.log(`\n  ${provider}/${model} · ${selected.length} tasks${repeat > 1 ? ` × ${repeat}` : ""}\n`);
+console.log(`\n  ${provider}/${model}${editFormat ? " · hashline edits" : ""}${repoMap ? "" : " · no repo map"} · ${selected.length} tasks${repeat > 1 ? ` × ${repeat}` : ""}\n`);
 
 let passed = 0;
 let scored = 0;
 let errors = 0;
 let cost = 0;
 let tokens = 0;
+let calls = 0;
 let allUncached = 0;
 let allCached = 0;
 const byKind = new Map<string, { pass: number; total: number }>();
@@ -249,6 +273,7 @@ for (const task of selected) {
     }
     tokens += a.tokens;
     cost += a.cost;
+    calls += a.calls;
     const label = `${task.name}${repeat > 1 ? ` #${i + 1}` : ""}`.padEnd(34);
     const stats = `${String(a.calls).padStart(2)} calls  ${a.seconds.toFixed(1)}s`;
     if (a.errored) {
@@ -277,7 +302,16 @@ for (const task of selected) {
 const pct = scored > 0 ? Math.round((passed / scored) * 100) : 0;
 // Cost of the harness per unit of success — what a token optimization is actually trying to move.
 const perPass = passed > 0 ? Math.round(tokens / passed) : 0;
-console.log(`\n  ${passed}/${scored} passed (${pct}%)  ·  ${tokens.toLocaleString()} tokens  ·  ${perPass.toLocaleString()} tokens/pass  ·  $${cost.toFixed(4)}`);
+// Dollars per solved task is the number a token optimization is supposed to move: it prices cache
+// reads and writes at their real rates (a token count does not — "Token Reduction Is Not Cost
+// Reduction", 2026: the most aggressive compression cut tokens 38% and raised the bill 7%), and it
+// keeps failed runs in the numerator, so a change that saves tokens by giving up sooner shows as
+// worse. Calls per pass is the turn count, which sets most of the bill on its own.
+const usdPerPass = passed > 0 ? cost / passed : 0;
+const callsPerPass = passed > 0 ? calls / passed : 0;
+const [lo, hi] = wilson(passed, scored);
+console.log(`\n  ${passed}/${scored} passed (${pct}%, 95% CI ${lo}–${hi}%)  ·  ${tokens.toLocaleString()} tokens  ·  ${perPass.toLocaleString()} tokens/pass  ·  $${cost.toFixed(4)}`);
+console.log(`  per solved task: $${usdPerPass.toFixed(4)}  ·  ${callsPerPass.toFixed(1)} model calls`);
 if (allUncached + allCached > 0) {
   console.log(`  cache: ${allCached.toLocaleString()} of ${(allUncached + allCached).toLocaleString()} input tokens served from cache (${Math.round((allCached / (allUncached + allCached)) * 100)}%)`);
 }
@@ -292,12 +326,19 @@ if (repeat === 1 && passed < scored) {
 for (const [kind, s] of [...byKind].sort()) console.log(`    ${kind.padEnd(10)} ${s.pass}/${s.total}`);
 console.log();
 
-if (saveTokens) writeFileSync(saveTokens, JSON.stringify({ provider, model, perPass, passed, scored }, null, 2));
+if (saveTokens) writeFileSync(saveTokens, JSON.stringify({ provider, model, perPass, usdPerPass, callsPerPass, passed, scored }, null, 2));
 let tokenRegression = false;
 if (gateTokens) {
-  const base = JSON.parse(readFileSync(gateTokens, "utf8")) as { perPass: number };
+  const base = JSON.parse(readFileSync(gateTokens, "utf8")) as { perPass: number; usdPerPass?: number };
   tokenRegression = perPass > base.perPass * 1.15;
   console.log(`  tokens/pass ${perPass.toLocaleString()} vs baseline ${base.perPass.toLocaleString()}${tokenRegression ? "  — REGRESSED >15%" : ""}`);
+  // Dollars gate too, when both runs were priced: a change can hold tokens flat and still move
+  // them from cached to uncached.
+  if (base.usdPerPass && usdPerPass > 0) {
+    const usdRegression = usdPerPass > base.usdPerPass * 1.15;
+    tokenRegression ||= usdRegression;
+    console.log(`  $/pass ${usdPerPass.toFixed(4)} vs baseline ${base.usdPerPass.toFixed(4)}${usdRegression ? "  — REGRESSED >15%" : ""}`);
+  }
 }
 
 // Non-zero on a regression, so this can gate a change rather than merely describe one. An

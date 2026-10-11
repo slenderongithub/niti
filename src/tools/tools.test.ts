@@ -3,7 +3,7 @@ import { mkdtempSync, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { diffHunks, summarizeResult, runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, editDiff, snippetDiff, splitCommand, normalizeShellInput, canonicalizeShellCall } from "./tools.ts";
+import { diffHunks, summarizeResult, runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, applyAnchoredEdit, lineTag, editDiff, snippetDiff, splitCommand, normalizeShellInput, canonicalizeShellCall } from "./tools.ts";
 
 const root = mkdtempSync(join(tmpdir(), "niti-tools-"));
 const ALL = ["read_file", "write_file", "edit", "shell"];
@@ -384,4 +384,55 @@ test.skipIf(process.platform === "win32")("a command that leaves a background pr
   expect(Date.now() - t0).toBeLessThan(5000);
   expect(r.stdout).toContain("started");
   expect(r.code).toBe(0);
+});
+
+test("a project-wide grep skips saved test logs in .niti/logs, but a log named directly is searchable", async () => {
+  const dir = await searchFixture();
+  mkdirSyncFs(join(dir, ".niti/logs"), { recursive: true });
+  writeSync(join(dir, ".niti/logs/run.log"), "export function total() — from an old test run\n");
+  mkdirSyncFs(join(dir, "logs"), { recursive: true });
+  writeSync(join(dir, "logs/app.ts"), "export function total() { return 1; }\n"); // a user's own logs/ dir is searched
+  const out = await runTool({ tool: "grep", pattern: "function total" }, SEARCH, dir);
+  expect(out).not.toContain(".niti/logs");
+  expect(out).toContain("logs/app.ts:1:");
+  expect(await runTool({ tool: "grep", pattern: "old test run", path: ".niti/logs" }, SEARCH, dir)).toContain("run.log");
+});
+
+test("hashline: reads tag each line, edits by anchor, stale anchors are refused", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-hashline-"));
+  const src = "function hello() {\n  return \"world\";\n}\n";
+  await runTool({ tool: "write_file", path: "a.ts", content: src }, ["write_file"], dir);
+  const read = await runTool({ tool: "read_file", path: "a.ts" }, ["read_file"], dir, { hashline: true });
+  expect(read.split("\n")[1]).toBe(`2:${lineTag('  return "world";')}|  return "world";`);
+  expect(await runTool({ tool: "read_file", path: "a.ts" }, ["read_file"], dir)).toContain("     2\t"); // default unchanged
+
+  const t2 = `2:${lineTag('  return "world";')}`;
+  await runTool({ tool: "edit", path: "a.ts", oldString: "", newString: '  return "there";', from: t2 }, ["edit"], dir);
+  expect(await readFile(join(dir, "a.ts"), "utf8")).toBe('function hello() {\n  return "there";\n}\n');
+
+  // The line changed since t2 was read: refused, not re-targeted.
+  await expect(runTool({ tool: "edit", path: "a.ts", oldString: "", newString: "x", from: t2 }, ["edit"], dir)).rejects.toThrow(/no longer matches/);
+});
+
+test("anchored edits: ranges, deletes, inserts, pasted anchors stripped, re-indent tolerated", () => {
+  const f = "a\nb\nc\nd";
+  const t = (n: number) => `${n}:${lineTag(f.split("\n")[n - 1]!)}`;
+  expect(applyAnchoredEdit(f, t(2), t(3), "X")).toBe("a\nX\nd");
+  expect(applyAnchoredEdit(f, t(2), t(3), "")).toBe("a\nd");
+  expect(applyAnchoredEdit(f, t(2), undefined, "b\nnew")).toBe("a\nb\nnew\nc\nd"); // insert after 2
+  expect(applyAnchoredEdit(f, t(1), undefined, `1:${lineTag("A")}|A`)).toBe("A\nb\nc\nd"); // anchor pasted back
+  expect(applyAnchoredEdit(f, `${t(2)}|`, undefined, "B")).toBe("a\nB\nc\nd"); // "2:xx|" accepted
+  expect(lineTag("  return x;")).toBe(lineTag("return x;")); // a formatter's re-indent keeps the anchor
+  expect(() => applyAnchoredEdit(f, t(3), t(2), "x")).toThrow(/comes before/);
+  expect(() => applyAnchoredEdit(f, "9:00", undefined, "x")).toThrow(/does not exist/);
+  expect(() => applyAnchoredEdit(f, "two", undefined, "x")).toThrow(/anchor/);
+});
+
+test("hashline mode swaps only the read_file and edit specs", () => {
+  const plain = toolSpecs(["read_file", "edit", "grep"]);
+  const hl = toolSpecs(["read_file", "edit", "grep"], { hashline: true });
+  expect(hl.map((s) => s.name)).toEqual(["read_file", "edit", "grep"]);
+  expect(hl[1]!.parameters).toMatchObject({ required: ["path", "newString"] });
+  expect(hl[2]).toBe(plain[2]!);
+  expect(plain[1]!.parameters).toMatchObject({ required: ["path", "oldString", "newString"] });
 });

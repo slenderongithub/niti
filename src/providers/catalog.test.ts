@@ -102,3 +102,8 @@ test("an Ollama server's own num_ctx overrides the table, since it truncates sil
     server.stop(true);
   }
 });
+
+test("current OpenAI models get their real window, so compaction doesn't fire at a third of it", () => {
+  expect(contextWindow("openai", "gpt-6.1-sol")).toBe(1_050_000);
+  expect(contextWindow("openai", "gpt-5.4-mini")).toBe(400_000);
+});

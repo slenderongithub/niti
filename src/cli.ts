@@ -20,6 +20,7 @@ import { setCredential, removeCredential, listCredentials } from "./auth/auth-st
 import { CATALOG, providerKeys } from "./providers/catalog.ts";
 import type { AgentConfig } from "./agent/agent.ts";
 import type { AgentEvent } from "./events/bus.ts";
+import { applyCachedModels } from "./providers/live-catalog.ts";
 
 const args = process.argv.slice(2);
 function die(msg: string): never {
@@ -327,6 +328,7 @@ async function buildEngine(interactive: boolean): Promise<Engine> {
     await mcp.connect(mcpServers, (name, err) => console.error(`niti: MCP server '${name}' unavailable: ${err}`));
   }
   const db = openDb();
+  applyCachedModels(); // current prices and windows as of the last refresh; no fetch for a one-shot run
   return new Engine({
     configs,
     makeProvider,

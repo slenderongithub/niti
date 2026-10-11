@@ -263,6 +263,27 @@ function repulse(tree, p, k2, theta, out) {
   }
 }
 
+// Hard collision, the same pass as the desktop app's physics.ts: overlapping circles (plus room for a
+// label) are pushed apart by position, not force, so they separate even late in the cooldown when
+// alpha has decayed and the forces alone would leave them stacked. The tree is queried only for
+// cells whose box can reach p, keeping it O(n log n).
+const PAD = 10;
+function collide(tree, p, reach) {
+  if (!tree || tree.mass === 0) return;
+  if (p.x + reach < tree.x || p.x - reach > tree.x + tree.s || p.y + reach < tree.y || p.y - reach > tree.y + tree.s) return;
+  if (tree.kids) { for (const c of tree.kids) collide(c, p, reach); return; }
+  const o = tree.body;
+  if (!o || o === p) return;
+  const min = p.r + o.r + PAD;
+  let dx = p.x - o.x, dy = p.y - o.y, d = Math.hypot(dx, dy);
+  if (d >= min) return;
+  if (d < 1e-6) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d = Math.hypot(dx, dy); }
+  const push = (min - d) / d;
+  const pf = p.pinned ? 0 : o.pinned ? 1 : 0.5, qf = o.pinned ? 0 : p.pinned ? 1 : 0.5;
+  p.x += dx * push * pf; p.y += dy * push * pf;
+  o.x -= dx * push * qf; o.y -= dy * push * qf;
+}
+
 // ---------- physics tick (Fruchterman–Reingold: k²/d repulsion, d²/k edge attraction) ----------
 // Forces drive *velocity*, which is damped every step, not position directly. Position-driven FR
 // overshoots equilibrium on every frame and buzzes there forever; damped velocity converges — and
@@ -318,6 +339,9 @@ function tick() {
     const sp = p.vx * p.vx + p.vy * p.vy;
     if (sp > vmax) vmax = sp;
   }
+  let rmax = 0; for (const p of nodes) if (p.r > rmax) rmax = p.r;
+  const after = buildTree(nodes);
+  for (const p of nodes) collide(after, p, p.r + rmax + PAD);
   // Freeze on actual stillness, not just on a cold alpha: parking the layout while it's still
   // creeping means the next reheat resumes that leftover motion, and the whole graph lurches the
   // moment you touch one node. 0.05 world-units/frame is ~3/sec — invisible.

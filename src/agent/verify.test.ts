@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseChecks, checkSurface, taskEditsCheckFile } from "./verify.ts";
+import { parseChecks, checkSurface, taskEditsCheckFile, runChecks } from "./verify.ts";
 
 const surface = checkSurface(parseChecks(["node check.js", "npm run typecheck"]));
 
@@ -92,4 +92,13 @@ test("negated directives keep the guard on, shorthand or not", () => {
   expect(taskEditsCheckFile("tsconfig: leave unchanged", "tsconfig.json")).toBe(false);
   expect(taskEditsCheckFile("keep tsconfig as is", "tsconfig.json")).toBe(false);
   expect(taskEditsCheckFile("deps: don't bump typescript", "package.json")).toBe(false);
+});
+
+test("a long failing check keeps its end, where test runners print the failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-verify-tail-"));
+  const script = 'for i in $(seq 1 400); do echo "ok case $i"; done; echo "FAILED: the real failure"; exit 1';
+  const v = await runChecks(root, [{ name: "sh -c long", command: "sh", args: ["-c", script] }]);
+  expect(v.ok).toBe(false);
+  expect(v.report).toContain("FAILED: the real failure");
+  expect(v.report.length).toBeLessThan(4_600);
 });

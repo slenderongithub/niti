@@ -6,15 +6,15 @@
 // Providers needing non-API-key auth (AWS SigV4, Azure AD, GCP service accounts, gateway
 // abstractions) are skipped — they need a dedicated SDK/auth flow niti doesn't implement.
 // Anthropic/OpenAI/Google themselves are hand-maintained in catalog.ts and override these
-// generated entries on id collision, so this script doesn't special-case them.
+// generated entries on id collision, so this script doesn't special-case them — except for their
+// model lists, prices and windows, which come from here too (GENERATED_MODELS) so no provider's
+// list is frozen by hand. At runtime src/providers/live-catalog.ts refreshes all of it daily; this
+// file is only the offline fallback. Both use the same filter (live-catalog's pickModels).
 
-interface RawModel {
-  id: string;
-  limit?: { context?: number };
-  tool_call?: boolean; // niti is a tool-use loop; a model without this cannot run an agent at all
-  modalities?: { output?: string[] };
-  cost?: { input?: number; output?: number; cache_read?: number }; // $ per 1M tokens, same unit as pricing.ts
-}
+import { pickModels, digest } from "../src/providers/live-catalog.ts";
+import { MANUAL_IDS } from "../src/providers/catalog.ts";
+
+type RawModel = import("../src/providers/live-catalog.ts").RawModel;
 interface RawProvider {
   id: string;
   name: string;
@@ -114,10 +114,10 @@ async function main() {
     }
     // Only models that can actually call tools and emit text. Without this filter the picker
     // offered embedding and image models that physically cannot run an niti agent.
-    const usable = Object.entries(p.models ?? {}).filter(
-      ([, m]) => m.tool_call && (m.modalities?.output?.includes("text") ?? true),
-    );
-    const models = usable.map(([id]) => id).slice(0, 8); // cap for a scannable selector list
+    // Only models an agent can run (tool calls, text out, not deprecated), newest first. Without a
+    // filter the picker offered embedding and image models, and kept deprecated ones forever.
+    const models = pickModels(p.models ?? {}, p.id);
+    const usable = models.map((id) => [id, p.models![id]!] as const);
     if (models.length === 0) {
       skipped++;
       continue;
@@ -131,7 +131,7 @@ async function main() {
     // models.dev publishes cost per 1M tokens, the same unit pricing.ts uses. Emitting it turns
     // the cost meter from "$0.00+ for every model the hand-written prefix table missed" into a
     // real number, and it stays in step with the catalog because it is regenerated with it.
-    for (const [id, m] of usable.slice(0, 8)) {
+    for (const [id, m] of usable) {
       if (typeof m.cost?.input === "number" && typeof m.cost?.output === "number") {
         const cacheRead = typeof m.cost.cache_read === "number" ? `, cacheRead: ${m.cost.cache_read}` : "";
         prices.push(`  ${JSON.stringify(`${p.id}/${id}`)}: { input: ${m.cost.input}, output: ${m.cost.output}${cacheRead} },`);
@@ -160,6 +160,23 @@ async function main() {
     seenHosts.set(url, id);
   }
 
+  // Lists, prices and windows for the hand-maintained providers too (anthropic, openai, google, …),
+  // in the same shape the live refresh writes. Keyed by niti's provider id.
+  // A hand-maintained entry can share its id with a generated one (deepseek, openrouter): the hand
+  // entry wins in CATALOG, so its list has to come from here too. Prices and windows for those ids
+  // were already emitted above under the same keys.
+  const manual = digest(data, MANUAL_IDS);
+  const manualModels = Object.entries(manual).map(([id, p]) => `  ${JSON.stringify(id)}: ${JSON.stringify(p.models)},`);
+  const generatedIds = new Set(hostsById.map(([g]) => g));
+  for (const [id, p] of Object.entries(manual)) {
+    if (generatedIds.has(id)) continue;
+    for (const mid of p.models) {
+      const c = p.prices[mid];
+      if (c) prices.push(`  ${JSON.stringify(`${id}/${mid}`)}: { input: ${c.input}, output: ${c.output}${c.cacheRead !== undefined ? `, cacheRead: ${c.cacheRead}` : ""} },`);
+      if (p.contexts[mid]) contexts.push(`  ${JSON.stringify(`${id}/${mid}`)}: ${p.contexts[mid]},`);
+    }
+  }
+
   const out = `// GENERATED — do not hand-edit. Regenerate with: bun run gen:catalog
 // Source: https://models.dev/api.json (the same provider registry opencode uses), filtered to ALLOW_IDS.
 // ${generated} providers included, ${skipped} skipped (unlisted, need a dedicated SDK/auth flow, or missing an env var/base URL/model list).
@@ -167,6 +184,11 @@ import type { CatalogEntry } from "./catalog.ts";
 
 export const GENERATED_CATALOG: Record<string, CatalogEntry> = {
 ${entries.join("\n")}
+};
+
+// Model lists for the hand-maintained providers in catalog.ts, which replace their seed lists.
+export const GENERATED_MODELS: Record<string, string[]> = {
+${manualModels.join("\n")}
 };
 
 // Exact "provider/model" → USD per 1M tokens, straight from models.dev. pricing.ts consults this

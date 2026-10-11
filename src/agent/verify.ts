@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { shell } from "../tools/tools.ts";
+import { condenseForModel } from "../tools/condense.ts";
+import { truncateMiddle } from "./context.ts";
 
 // A model's "done" is a claim, not a fact. Everything else in the harness — the review gate, the
 // hand-off, the DAG releasing dependents — treats it as a fact, so a task that doesn't compile
@@ -60,7 +62,10 @@ export function parseChecks(lines: string[]): Check[] {
 }
 
 const VERIFY_TIMEOUT_MS = 180_000;
-const REPORT_MAX = 4_000; // per check: enough for a compiler's first errors, not a whole log
+// Per check: enough for a compiler's first errors, not a whole log. Kept from both ends — a
+// compiler's first error is at the top, a test runner's failures and summary are at the bottom,
+// and a head-only cut used to hand the model forty lines of passing tests and none of the failure.
+const REPORT_MAX = 4_000;
 
 export interface VerifyResult {
   ok: boolean;
@@ -78,7 +83,7 @@ export async function runChecks(root: string, checks: Check[]): Promise<VerifyRe
     // otherwise be reported to the model as "your code is broken", and it would set about fixing
     // code that was never the problem.
     if (r.code === -1 && /ENOENT|not found/i.test(r.stderr)) continue;
-    const detail = `${r.stdout}\n${r.stderr}`.trim().slice(0, REPORT_MAX);
+    const detail = truncateMiddle(condenseForModel(root, c.name, `${r.stdout}\n${r.stderr}`.trim()), REPORT_MAX);
     failures.push(`$ ${c.name}\nexit ${r.code}\n${detail}`);
   }
   if (failures.length === 0) return { ok: true, report: "" };

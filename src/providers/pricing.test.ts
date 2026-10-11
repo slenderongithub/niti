@@ -4,10 +4,10 @@ import { CATALOG } from "./catalog.ts";
 import { GENERATED_PRICES } from "./catalog.generated.ts";
 
 test("longest matching prefix wins, so a family's variants don't all collapse to one price", () => {
-  expect(priceFor("anthropic", "claude-opus-4-8")).toEqual({ input: 5, output: 25 });
+  expect(priceFor("anthropic", "claude-opus-4-8")).toMatchObject({ input: 5, output: 25 });
   expect(priceFor("anthropic", "claude-opus-4-1")).toEqual({ input: 15, output: 75 }); // pre-4.5 Opus kept the old price
-  expect(priceFor("anthropic", "claude-haiku-4-5")).toEqual({ input: 1, output: 5 });
-  expect(priceFor("anthropic", "claude-sonnet-5")).toEqual({ input: 2, output: 10 });
+  expect(priceFor("anthropic", "claude-haiku-4-5")).toMatchObject({ input: 1, output: 5 });
+  expect(priceFor("anthropic", "claude-sonnet-5")).toMatchObject({ input: 2, output: 10 });
   // "gpt-4o-mini" must not match the shorter "gpt-4o" entry.
   expect(priceFor("openai", "gpt-4o-mini")).toEqual({ input: 0.15, output: 0.6 });
 });
@@ -46,12 +46,13 @@ test("costOf defaults cache tokens to 0 — omitting them changes nothing", () =
 });
 
 test("the shipped default models are priced, not silently $0.00", () => {
-  // Google is hand-maintained in catalog.ts, so GENERATED_PRICES never covers it — and the
-  // `-latest` aliases match no version-prefixed entry. The default team read "$0.00+" out of the box.
-  for (const model of CATALOG["google"]!.models) {
-    expect(priceFor("google", model)).toBeDefined();
+  // The default team runs the `-latest` aliases, which used to match no price at all and read
+  // "$0.00+" out of the box. Every model the pickers offer must be priced (Gemma at $0 — it's free).
+  for (const [provider, entry] of Object.entries(CATALOG)) {
+    if (entry.category === "local" || provider === "custom") continue;
+    for (const model of entry.models) expect({ provider, model, price: priceFor(provider, model) }).toMatchObject({ price: expect.anything() });
   }
-  expect(priceFor("google", "gemini-flash-lite-latest")).toEqual({ input: 0.1, output: 0.4 });
+  expect(priceFor("google", "gemini-flash-lite-latest")).toEqual({ input: 0.3, output: 2.5, cacheRead: 0.03 });
 });
 
 test("models.dev prices are used for generated providers", () => {
@@ -63,10 +64,10 @@ test("models.dev prices are used for generated providers", () => {
 
 test("OpenAI and Gemini report cached tokens inside the input count, so reads are billed at their discount, not on top", () => {
   // 1M prompt tokens, of which 800k were served from cache: 200k full price + 800k at the read rate
-  // (GPT-4o 0.5x, Gemini's implicit cache 0.25x, GPT-5's exact $0.125).
+  // (GPT-4o 0.5x, GPT-5's and Flash-Lite's exact cache prices from the registry).
   for (const [provider, model, input, read] of [
     ["openai", "gpt-4o", 2.5, 1.25],
-    ["google", "gemini-flash-lite-latest", 0.1, 0.025],
+    ["google", "gemini-flash-lite-latest", 0.3, 0.03], // models.dev, exact cacheRead
     ["openai", "gpt-5", 1.25, 0.125],
   ] as const) {
     const cached = costOf(provider, model, 1_000_000, 0, 800_000);
@@ -88,4 +89,10 @@ test("Anthropic reports cache beside the input count, so it is still added, not 
 
 test("cache reads larger than the reported input never produce a negative bill", () => {
   expect(costOf("openai", "gpt-4o", 100, 0, 500).usd).toBeGreaterThanOrEqual(0);
+});
+
+test("current OpenAI models price at their own rate, not the gpt-5 prefix", () => {
+  expect(priceFor("openai", "gpt-6.1-sol")).toEqual({ input: 2, output: 10, cacheRead: 0.1 });
+  expect(priceFor("openai", "gpt-5.6-luna")?.input).toBe(0.2);
+  expect(priceFor("openai", "gpt-5.5")?.output).toBe(30);
 });

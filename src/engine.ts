@@ -25,7 +25,7 @@ import type { AuditLog } from "./store/audit-log.ts";
 import { AUTO_RULES, type PermissionRules } from "./permissions.ts";
 import { costOf } from "./providers/pricing.ts";
 import { watchProject, type ProjectWatcher } from "./watch.ts";
-import { TOOL_GUIDANCE } from "./tools/tools.ts";
+import { TOOL_GUIDANCE, HASHLINE_GUIDANCE } from "./tools/tools.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
 import { isGitRepo, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
 
@@ -180,7 +180,7 @@ export class Engine {
       this.declaredPrompts.set(c.id, c.systemPrompt);
       // Per agent, because two agents on the same team routinely run different model families.
       // Appended last so it qualifies the shared guidance rather than being buried above it.
-      const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + mapSection + TOOL_GUIDANCE + steeringFor(c.provider, c.model) };
+      const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + mapSection + TOOL_GUIDANCE + (c.editFormat === "hashline" ? HASHLINE_GUIDANCE : "") + steeringFor(c.provider, c.model) };
       // A missing key (revoked, keychain wiped, never set) must not take the whole server down —
       // that would crash boot before the handshake line prints, leaving the TUI staring at an EOF
       // with no way back in short of editing agents.yaml by hand. Defer the failure to first use,

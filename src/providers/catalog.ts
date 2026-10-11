@@ -1,4 +1,4 @@
-import { GENERATED_CATALOG, GENERATED_CONTEXT } from "./catalog.generated.ts";
+import { GENERATED_CATALOG, GENERATED_CONTEXT, GENERATED_MODELS } from "./catalog.generated.ts";
 
 // Provider catalog — the single source of provider metadata (client, baseURL, env var, models).
 // Anthropic and Google use native clients; everything else speaks the OpenAI chat API via baseURL,
@@ -38,6 +38,12 @@ const MODEL_CONTEXT: Record<string, number> = {
   "gpt-4o": 128_000,
   "gpt-4.1": 1_047_576,
   "gpt-5": 400_000,
+  "gpt-5.4": 1_050_000,
+  "gpt-5.4-mini": 400_000,
+  "gpt-5.4-nano": 400_000,
+  "gpt-5.5": 1_050_000,
+  "gpt-5.6": 1_050_000,
+  "gpt-6": 1_050_000,
   o1: 200_000,
   o3: 200_000,
   "o4-mini": 200_000,
@@ -52,6 +58,10 @@ const MODEL_CONTEXT: Record<string, number> = {
 // Windows learned at runtime (see probeOllamaContext), keyed "provider/model". They win over every
 // table below because they describe the server actually running, not the model in general.
 const LEARNED_CONTEXT = new Map<string, number>();
+
+// Windows from the live model registry (see live-catalog.ts), keyed "provider/model". Fresher than
+// the build-time GENERATED_CONTEXT, and they cover the hand-maintained providers it doesn't.
+export const LIVE_CONTEXT = new Map<string, number>();
 
 // Ollama serves each model with its own num_ctx — often 4–8k, however large the model's trained
 // window — and silently drops the oldest part of an oversized prompt (the system prompt first)
@@ -82,7 +92,8 @@ export async function probeOllamaContext(model: string, baseURL = "http://localh
 // first, then the exact models.dev entry, then the model-name prefix table, then the provider's
 // own figure, then a conservative default.
 export function contextWindow(provider: string, model = ""): number {
-  const exact = LEARNED_CONTEXT.get(`${provider}/${model}`) ?? GENERATED_CONTEXT[`${provider}/${model}`];
+  const key = `${provider}/${model}`;
+  const exact = LEARNED_CONTEXT.get(key) ?? LIVE_CONTEXT.get(key) ?? GENERATED_CONTEXT[key];
   if (exact) return exact;
   const name = (model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model).toLowerCase();
   let best = 0;
@@ -113,7 +124,9 @@ const MANUAL_CATALOG: Record<string, CatalogEntry> = {
     label: "OpenAI",
     client: "openai",
     envVar: "OPENAI_API_KEY",
-    models: ["gpt-4o", "gpt-4o-mini", "o3-mini", "o1"],
+    // Newest first; the first is the default a fresh agent gets. Ids and prices from models.dev
+    // (2026-10). Older ids still work by typing them — this list is only what the picker offers.
+    models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4-mini"],
   },
   google: {
     label: "Google Gemini",
@@ -127,7 +140,7 @@ const MANUAL_CATALOG: Record<string, CatalogEntry> = {
     client: "openai",
     baseURL: "https://openrouter.ai/api/v1",
     envVar: "OPENROUTER_API_KEY",
-    models: ["anthropic/claude-opus-4-8", "openai/gpt-4o", "meta-llama/llama-3.3-70b-instruct"],
+    models: ["anthropic/claude-opus-4-8", "openai/gpt-6.1-sol", "meta-llama/llama-3.3-70b-instruct"],
   },
   deepseek: {
     label: "DeepSeek",
@@ -225,6 +238,14 @@ const MANUAL_CATALOG: Record<string, CatalogEntry> = {
 };
 
 export const CATALOG: Record<string, CatalogEntry> = { ...GENERATED_CATALOG, ...MANUAL_CATALOG };
+export const MANUAL_IDS = Object.keys(MANUAL_CATALOG); // for scripts/gen-catalog.ts
+
+// The hand-maintained entries above carry client, auth and category; their model lists come from
+// the registry snapshot like everyone else's, so none is frozen by hand. live-catalog.ts replaces
+// all of these again at runtime with the day's list.
+for (const [id, models] of Object.entries(GENERATED_MODELS)) {
+  if (Object.hasOwn(MANUAL_CATALOG, id) && models.length > 0) CATALOG[id] = { ...CATALOG[id]!, models };
+}
 
 export function providerKeys(): string[] {
   return Object.keys(CATALOG);

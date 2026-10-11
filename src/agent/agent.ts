@@ -11,13 +11,14 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, normalizePath, projectRelative, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, applyAnchoredEdit, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import { isSecretPath, shellTouchesSecret } from "../secrets.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { contextWindow } from "../providers/catalog.ts";
 import { StallGuard, stallNudge, recurringNudge } from "./stall.ts";
+import { condenseForModel, shellCommandLine } from "../tools/condense.ts";
 import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
 import { createHash } from "node:crypto";
 import { defaultSettings, type RuntimeSettings } from "../settings.ts";
@@ -209,6 +210,28 @@ export function overContextThreshold(inputTokens: number, context: number, ratio
 // checks never passed on it. Kept distinct from "failed" so the scheduler can do the one thing
 // that actually helps here — hand the task to a different model, with the check output attached —
 // before falling back to a replan.
+// The turn budget, told to the model twice: once with about 30% left and once with 3 left. An agent
+// that doesn't know the cap exists spends it exploring and hits it mid-edit — the commonest failure
+// above. Budget awareness alone beat simply raising the budget in Google's tool-use study (BATS,
+// "Budget-Aware Tool Use Enables Effective Agent Scaling", 2025). It rides on the tool results the
+// turn already sends, so it is never an extra user turn (see openai.ts on why those cost reasoning).
+export function budgetNote(turn: number, maxTurns: number): string | undefined {
+  const left = maxTurns - turn - 1; // turns after this one
+  if (maxTurns < 8 || left <= 0) return undefined;
+  if (left === 3) return `[niti: 3 turns left of ${maxTurns}. Finish the change you are making, check it, and give your final answer — or say exactly what is left undone.]`;
+  if (left === Math.round(maxTurns * 0.3) && left > 3) return `[niti: turn ${turn + 1} of ${maxTurns}; ${left} left. Leave enough of them to finish and check the change.]`;
+  return undefined;
+}
+
+// A copy of `results` with the budget note on the last one. The originals stay unannotated for the
+// stall detector, which compares outputs round to round.
+function withBudgetNote(results: ToolResult[], turn: number, maxTurns: number): ToolResult[] {
+  const note = budgetNote(turn, maxTurns);
+  if (!note || results.length === 0) return results;
+  const last = results[results.length - 1]!;
+  return [...results.slice(0, -1), { ...last, output: `${last.output}\n\n${note}` }];
+}
+
 export type RunOutcome = "done" | "failed" | "exhausted" | "unverified";
 
 // One run's own result. Read this instead of the `output`/`error` getters when correctness depends
@@ -261,6 +284,10 @@ export interface AgentConfig {
   reasoning?: Reasoning;
   // Per-response output cap. Unset → each client's own default (Anthropic 16000, others: the model's).
   maxOutput?: number;
+  // "hashline": read_file tags each line ("12:a3|text") and edit takes those anchors instead of an
+  // exact snippet. Opt-in per agent — it helps most on weaker / cheaper models; measure it with
+  // scripts/eval before turning it on for a model (see applyAnchoredEdit in tools.ts).
+  editFormat?: "hashline";
 }
 
 export interface AgentDeps {
@@ -582,7 +609,7 @@ export class Agent {
         // Pushed after execution (not before): execTool can mutate a call's input in place (e.g.
         // attaching the approval-time diff) — persisting first would silently drop that from history.
         this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
-        this.push(turns, { role: "tool", results }, sessionId);
+        this.push(turns, { role: "tool", results: withBudgetNote(results, i, this.maxTurns) }, sessionId);
         const verdict = stall.observe(reply.toolCalls, results);
         if (verdict === "stop") {
           this.lastError = stall.kind === "recurring"
@@ -749,7 +776,7 @@ export class Agent {
         const results = await this.execCalls(reply.toolCalls, allowed, ctx);
         // See run(): pushed after execution so any input mutation from execTool (e.g. the diff) persists.
         this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
-        this.push(turns, { role: "tool", results }, sessionId);
+        this.push(turns, { role: "tool", results: withBudgetNote(results, i, o.maxTurns) }, sessionId);
       }
       if (sessionId) this.store?.setStatus(sessionId, "done");
       return text || "(no answer)";
@@ -906,7 +933,7 @@ export class Agent {
     // entirely, so an agent restricted to `read_file` was still handed every write tool of every
     // configured MCP server — a field named allowedTools that did not bound the tools.
     // `"mcp"` in the list is the opt-in for "all of them", so the common case stays one word.
-    const specs = [...toolSpecs(allowed), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)];
+    const specs = [...toolSpecs(allowed, { hashline: this.config.editFormat === "hashline" }), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)];
     // Offered even once the breadth budget is spent — fork() refuses it at call time instead.
     // Dropping it mid-task changed the tool list, which sits first in Anthropic's cache prefix, so
     // the whole cached conversation was rewritten at 1.25× on the next call.
@@ -1033,6 +1060,8 @@ export class Agent {
         return `[unchanged: ${call.input.path} is identical to your earlier read of it (same range), which is still in this conversation above. Not repeated — use that copy.]`;
       }
     }
+    // Test and build output is condensed before the cap, so the cap spends its room on failures.
+    if (call.name === "shell") output = condenseForModel(this.root, shellCommandLine(call.input), output);
     const capped = truncateMiddle(output, limit);
     // Only a read that went into the history in full can be pointed back to.
     if (key && hash && capped === output) (ctx.reads ??= new Map()).set(key, hash);
@@ -1275,7 +1304,17 @@ export class Agent {
     // and showed the model a `diff` argument that isn't in the tool's schema.
     let diff: string | undefined;
     if (call.name === "edit" && before) {
-      diff = editDiff(before, String(call.input.oldString ?? ""), String(call.input.newString ?? ""));
+      if (typeof call.input.from === "string" && call.input.from) {
+        // An anchored edit has no oldString to render; diff the whole result instead. A stale
+        // anchor throws here and again at execution, where it reaches the model as the error.
+        try {
+          diff = writeFileDiff(before, applyAnchoredEdit(before, call.input.from, typeof call.input.to === "string" ? call.input.to : undefined, String(call.input.newString ?? "")));
+        } catch {
+          diff = undefined;
+        }
+      } else {
+        diff = editDiff(before, String(call.input.oldString ?? ""), String(call.input.newString ?? ""));
+      }
     }
     if (call.name === "write_file") {
       diff = writeFileDiff(before ?? null, String(call.input.content ?? ""));
@@ -1351,7 +1390,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox }); // only ever past a human's yes
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, hashline: this.config.editFormat === "hashline" }); // only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo

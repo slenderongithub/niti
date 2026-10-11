@@ -167,6 +167,12 @@ async function runReviewGate(t: TaskNode, prompt: string, runner: Agent, agentsB
         // at the questions a compiler cannot answer.
         `The project's automated checks already pass on this change — do not re-litigate whether it builds. ` +
         `Judge what a check cannot: whether it does what was actually asked, whether it broke behaviour no test covers, and whether any check, test or type was weakened to get here. ` +
+        // Two findings from the review research (docs/research/2026-10-merged.md): a reviewer that
+        // rewrites already-passing code makes it worse more often than better (cross-model review,
+        // 91.4% -> 82.8% when one model "fixed" another's working drafts), and a separate evaluator
+        // told to be skeptical is far more useful than one left to its default generosity.
+        `Be skeptical: approve only what you have checked yourself, not what the summary claims. ` +
+        `Do not edit files — describe each change you want and why; the author makes it. ` +
         `End with exactly one line: "VERDICT: approve" or "VERDICT: changes_requested" followed by why.`,
       { taskId: t.id },
     );
