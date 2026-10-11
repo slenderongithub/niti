@@ -238,3 +238,19 @@ test("fit frames the graph inside the free area, centred and un-clipped", () => 
   expect(Math.abs((y0 + y1) / 2 - (free.y0 + free.y1) / 2)).toBeLessThan(1);
   expect(Math.max(x1 - x0, y1 - y0)).toBeGreaterThan(0.7 * Math.min(free.x1 - free.x0, free.y1 - free.y0)); // …and actually filling it
 });
+
+test("nodes never settle on top of each other, even squeezed by short links and strong gravity", () => {
+  // The desktop app's physics.ts collision pass, ported: without it a dense hub settled with its
+  // leaves stacked on one another and their labels unreadable.
+  const g = load();
+  g.sim.link = 10; g.sim.gravity = 30;
+  const star = Array.from({ length: 30 }, (_, i) => ({ id: `s${i}`, label: `s${i}`, group: "g" }));
+  g.setGraph(star, star.slice(1).map((n) => ({ from: "s0", to: n.id })));
+  settle(g);
+  const ns = g.nodes();
+  let worst = Infinity;
+  for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) {
+    worst = Math.min(worst, Math.hypot(ns[i].x - ns[j].x, ns[i].y - ns[j].y) - (ns[i].r + ns[j].r + 10));
+  }
+  expect(worst).toBeGreaterThan(-1);
+});
