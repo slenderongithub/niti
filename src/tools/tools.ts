@@ -1,4 +1,4 @@
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, realpathSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
@@ -303,7 +303,9 @@ async function listFiles(root: string, dir: string): Promise<string[]> {
     for (const e of entries) {
       const abs = join(current, e.name);
       if (e.isDirectory()) {
-        if (!IGNORED_DIRS.has(e.name)) stack.push(abs);
+        // .niti/logs holds raw test output saved by condense.ts; a project-wide search turning up
+        // old test logs is noise. Named directly (a file path) it is still readable and greppable.
+        if (!IGNORED_DIRS.has(e.name) && !(e.name === "logs" && basename(current) === ".niti")) stack.push(abs);
       } else if (e.isFile()) {
         out.push(relative(root, abs).split(sep).join("/")); // "/" on every OS — it's what the model and the globs speak
         if (out.length >= MAX_WALK_FILES) break;

@@ -385,3 +385,15 @@ test.skipIf(process.platform === "win32")("a command that leaves a background pr
   expect(r.stdout).toContain("started");
   expect(r.code).toBe(0);
 });
+
+test("a project-wide grep skips saved test logs in .niti/logs, but a log named directly is searchable", async () => {
+  const dir = await searchFixture();
+  mkdirSyncFs(join(dir, ".niti/logs"), { recursive: true });
+  writeSync(join(dir, ".niti/logs/run.log"), "export function total() — from an old test run\n");
+  mkdirSyncFs(join(dir, "logs"), { recursive: true });
+  writeSync(join(dir, "logs/app.ts"), "export function total() { return 1; }\n"); // a user's own logs/ dir is searched
+  const out = await runTool({ tool: "grep", pattern: "function total" }, SEARCH, dir);
+  expect(out).not.toContain(".niti/logs");
+  expect(out).toContain("logs/app.ts:1:");
+  expect(await runTool({ tool: "grep", pattern: "old test run", path: ".niti/logs" }, SEARCH, dir)).toContain("run.log");
+});

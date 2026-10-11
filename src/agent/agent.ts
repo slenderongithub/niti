@@ -18,6 +18,7 @@ import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { contextWindow } from "../providers/catalog.ts";
 import { StallGuard, stallNudge, recurringNudge } from "./stall.ts";
+import { condenseForModel, shellCommandLine } from "../tools/condense.ts";
 import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
 import { createHash } from "node:crypto";
 import { defaultSettings, type RuntimeSettings } from "../settings.ts";
@@ -1033,6 +1034,8 @@ export class Agent {
         return `[unchanged: ${call.input.path} is identical to your earlier read of it (same range), which is still in this conversation above. Not repeated — use that copy.]`;
       }
     }
+    // Test and build output is condensed before the cap, so the cap spends its room on failures.
+    if (call.name === "shell") output = condenseForModel(this.root, shellCommandLine(call.input), output);
     const capped = truncateMiddle(output, limit);
     // Only a read that went into the history in full can be pointed back to.
     if (key && hash && capped === output) (ctx.reads ??= new Map()).set(key, hash);
