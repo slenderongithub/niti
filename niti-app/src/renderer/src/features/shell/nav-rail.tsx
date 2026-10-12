@@ -48,7 +48,7 @@ export function NavRail() {
       </div>
 
       <div className={cn("mt-5 px-2.5", collapsed && "px-0")}>
-        {!collapsed && <div className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Team</div>}
+        {!collapsed && <div className="mb-1.5 px-2.5 text-xs font-medium text-muted-foreground">Team</div>}
         <div className={cn("flex flex-col gap-0.5", collapsed && "items-center gap-1.5")}>
           {agents.map((a) => {
             const id = a.id;
@@ -134,7 +134,11 @@ function NavItem({
         collapsed && "justify-center px-0",
       )}
     >
-      {active && <motion.span layoutId="nav-active" className="absolute inset-0 rounded-md border bg-background shadow-sm" transition={{ type: "spring", stiffness: 500, damping: 38 }} />}
+      {active && (
+        <motion.span layoutId="nav-active" className="absolute inset-0 rounded-lg border bg-card shadow-panel" transition={{ type: "spring", stiffness: 500, damping: 38 }}>
+          {!collapsed && <span className="absolute inset-y-2 left-0 w-[3px] rounded-r-full bg-primary" />}
+        </motion.span>
+      )}
       <Icon className={cn("relative z-10", active && "text-primary")} />
       {!collapsed && <span className="relative z-10 text-[13px]">{label}</span>}
       {!!badge && (

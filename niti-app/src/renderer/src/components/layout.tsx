@@ -21,7 +21,7 @@ export function PageHeader({ title, description, actions }: { title: string; des
   return (
     <header data-audit="section" className="flex h-14 shrink-0 items-center gap-4">
       <div className="min-w-0 flex-1">
-        <h1 className="truncate text-xl font-semibold leading-7 tracking-tight">{title}</h1>
+        <h1 className="truncate text-[22px] font-semibold leading-7 tracking-[-0.02em]">{title}</h1>
         {description && <p className="truncate text-[13px] leading-5 text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
@@ -38,13 +38,13 @@ export function StatTile({ icon: Icon, label, value, sub, tone, className, onCli
       tabIndex={onClick ? 0 : undefined}
       onClick={onClick}
       onKeyDown={onClick ? (e) => e.key === "Enter" && onClick() : undefined}
-      className={cn("h-[104px] min-w-0 justify-between gap-0 px-4 py-3.5 shadow-none", onClick && "cursor-pointer transition-colors hover:bg-accent/40", className)}
+      className={cn("h-[104px] min-w-0 justify-between gap-0 px-4 py-3.5", onClick && "cursor-pointer transition-[background-color,box-shadow] hover:bg-accent/40 hover:shadow-float", className)}
     >
       <div className="flex h-4 items-center gap-1.5 text-xs text-muted-foreground">
         <Icon className="size-3.5 shrink-0" style={tone ? { color: tone } : undefined} />
         <span className="truncate">{label}</span>
       </div>
-      <div className="truncate text-2xl font-semibold leading-8 tracking-tight tabular">{value}</div>
+      <div className="truncate text-2xl font-semibold leading-8 tracking-[-0.02em] tabular">{value}</div>
       <div className="h-4 truncate text-[11px] leading-4 text-muted-foreground">{sub ?? " "}</div>
     </Card>
   );
@@ -70,7 +70,7 @@ export function SectionCard({
   flush?: boolean;
 }) {
   return (
-    <Card data-audit="card" className={cn("min-w-0 gap-0 overflow-hidden py-0 shadow-none", className)}>
+    <Card data-audit="card" className={cn("min-w-0 gap-0 overflow-hidden py-0", className)}>
       <CardHeader className="flex min-h-16 items-center gap-3 border-b px-5 py-3 [.border-b]:pb-3">
         <div className="min-w-0 flex-1">
           <CardTitle className="flex items-center gap-2 text-sm leading-5">

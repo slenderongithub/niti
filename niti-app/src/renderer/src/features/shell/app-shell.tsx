@@ -38,7 +38,8 @@ export function AppShell() {
       <Titlebar />
       <div className="flex min-h-0 flex-1">
         <AnimatePresence initial={false}>{!focusMode && <NavRail />}</AnimatePresence>
-        <main className="relative min-w-0 flex-1 overflow-hidden rounded-tl-xl border-l border-t bg-background shadow-[0_0_0_1px_var(--border)]">
+        {/* The work surface floats on the window ground: one raised panel, lit faintly from the top. */}
+        <main className="ambient relative mr-2 min-w-0 flex-1 overflow-hidden rounded-xl border bg-background shadow-float">
           {/* Enter-only and short: the page you clicked is on screen the next frame. */}
           <motion.div key={page} data-page={page} className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.12, ease: "easeOut" }}>
             <ErrorBoundary name={page}>

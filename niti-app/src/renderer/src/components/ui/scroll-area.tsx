@@ -17,7 +17,7 @@ function ScrollArea({
         data-slot="scroll-area-viewport"
         // Radix wraps content in `display: table; min-width: 100%`, which lets it grow past the
         // viewport instead of wrapping — text and right-hand columns then get clipped. Block fixes it.
-        className="size-full rounded-[inherit] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 [&>div]:!block"
+        className="size-full rounded-[inherit] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/70 focus-visible:outline-1 [&>div]:!block"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

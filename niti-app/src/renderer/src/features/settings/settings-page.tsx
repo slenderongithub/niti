@@ -89,7 +89,7 @@ export default function SettingsPage() {
         <nav className="flex flex-col gap-0.5">
           {SECTIONS.map((s) => (
             <Button key={s.id} variant="ghost" size="sm" onClick={() => pick(s.id)} className={cn("relative h-8 justify-start gap-2.5 px-2.5 font-normal text-muted-foreground", section === s.id && "text-foreground hover:bg-transparent")}>
-              {section === s.id && <motion.span layoutId="settings-nav" className="absolute inset-0 rounded-md border bg-background shadow-sm" />}
+              {section === s.id && <motion.span layoutId="settings-nav" className="absolute inset-0 rounded-lg border bg-card shadow-panel" />}
               <s.icon className={cn("relative z-10", section === s.id && "text-primary")} />
               <span className="relative z-10 text-[13px]">{s.label}</span>
             </Button>
@@ -166,16 +166,36 @@ function useSetting(key: string): [boolean, (v: boolean) => void] {
   return [value, (v) => void set(v)];
 }
 
+// A miniature of the window, drawn with the theme's own tokens (scoped by class), so the preview
+// can never drift from the palette.
+function ThemePreview({ scheme, split }: { scheme: "light" | "dark"; split?: boolean }) {
+  return (
+    <div className={cn(scheme === "dark" ? "dark" : "theme-light", "absolute inset-0 flex gap-1.5 bg-sidebar p-2", split && "[clip-path:polygon(100%_0,100%_100%,0_100%)]")}>
+      <div className="flex w-3 flex-col items-center gap-1 pt-1">
+        <div className="size-1.5 rounded-full bg-primary" />
+        <div className="size-1.5 rounded-full bg-muted-foreground/40" />
+        <div className="size-1.5 rounded-full bg-muted-foreground/40" />
+      </div>
+      <div className="ambient flex-1 space-y-1.5 rounded-md bg-background p-2 shadow-panel">
+        <div className="h-1.5 w-2/3 rounded-full bg-foreground/50" />
+        <div className="h-1.5 w-1/2 rounded-full bg-foreground/25" />
+        <div className="mt-2 h-5 rounded border bg-card shadow-panel" />
+        <div className="ml-auto h-1.5 w-1/4 rounded-full bg-primary" />
+      </div>
+    </div>
+  );
+}
+
 function Appearance() {
   const theme = useUI((s) => s.theme);
   const setTheme = useUI((s) => s.setTheme);
   const [reduce, setReduce] = useSetting("reduceMotion");
   const [dur, setDur] = useSetting("showTurnDuration");
   const [notify, setNotify] = useSetting("notifyOnDone");
-  const options: { id: ThemeSource; label: string; icon: LucideIcon; bg: string; fg: string; card: string; accent: string }[] = [
-    { id: "light", label: "Light", icon: Sun, bg: "#f3f3f3", fg: "#171717", card: "#ffffff", accent: "#5a46d8" },
-    { id: "dark", label: "Dark", icon: Moon, bg: "#0a0a0a", fg: "#ededed", card: "#161616", accent: "#9d8cff" },
-    { id: "system", label: "System", icon: Monitor, bg: "linear-gradient(135deg,#f3f3f3 50%,#0a0a0a 50%)", fg: "#8f8f8f", card: "transparent", accent: "#9d8cff" },
+  const options: { id: ThemeSource; label: string; icon: LucideIcon }[] = [
+    { id: "light", label: "Light", icon: Sun },
+    { id: "dark", label: "Dark", icon: Moon },
+    { id: "system", label: "System", icon: Monitor },
   ];
   return (
     <>
@@ -183,21 +203,9 @@ function Appearance() {
       <div className="grid grid-cols-3 gap-3">
         {options.map((o) => (
           <Button key={o.id} variant="outline" onClick={() => setTheme(o.id)} className={cn("h-auto flex-col items-stretch gap-2.5 rounded-xl p-2.5", theme === o.id && "border-primary shadow-[inset_0_0_0_1px_var(--primary)]")}>
-            <div className="relative h-24 overflow-hidden rounded-lg border" style={{ background: o.bg }}>
-              {o.id !== "system" && (
-                <div className="absolute inset-2.5 flex gap-1.5">
-                  <div className="w-1/4 space-y-1 rounded-md p-1.5" style={{ background: o.card }}>
-                    {[0, 1, 2].map((i) => (
-                      <div key={i} className="h-1.5 rounded-full" style={{ background: i === 0 ? o.accent : o.fg, opacity: i === 0 ? 1 : 0.25 }} />
-                    ))}
-                  </div>
-                  <div className="flex-1 space-y-1.5 rounded-md p-2" style={{ background: o.card }}>
-                    <div className="h-1.5 w-2/3 rounded-full" style={{ background: o.fg, opacity: 0.5 }} />
-                    <div className="h-1.5 w-1/2 rounded-full" style={{ background: o.fg, opacity: 0.25 }} />
-                    <div className="mt-3 h-4 rounded" style={{ background: o.accent, opacity: 0.85 }} />
-                  </div>
-                </div>
-              )}
+            <div className="relative h-24 overflow-hidden rounded-lg border">
+              {o.id !== "dark" && <ThemePreview scheme="light" />}
+              {o.id !== "light" && <ThemePreview scheme="dark" split={o.id === "system"} />}
             </div>
             <span className="flex items-center gap-2 text-[13px]">
               <o.icon className="size-3.5" /> {o.label}
@@ -206,7 +214,7 @@ function Appearance() {
           </Button>
         ))}
       </div>
-      <Card className="gap-0 py-1 shadow-none">
+      <Card className="gap-0 py-1">
         <CardContent className="divide-y">
           <Row title="Reduce motion" description="Still spinners, no transitions.">
             <Switch checked={reduce} onCheckedChange={setReduce} />
@@ -232,7 +240,7 @@ function Team() {
   return (
     <>
       <Heading title="Team" />
-      <Card className="gap-0 py-0 shadow-none">
+      <Card className="gap-0 py-0">
         <CardContent className="divide-y px-0">
           {order.map((id) => {
             const a = agents[id]!;
@@ -279,7 +287,7 @@ function Team() {
           })}
         </CardContent>
       </Card>
-      <Card className="flex-row items-center gap-4 px-5 py-4 shadow-none">
+      <Card className="flex-row items-center gap-4 px-5 py-4">
         <span className="flex size-9 items-center justify-center rounded-lg bg-primary/12 text-primary">
           <Users className="size-4" />
         </span>
@@ -334,7 +342,7 @@ function ProvidersSection() {
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter providers…" className="pl-9" />
       </div>
-      <Card className="gap-0 py-0 shadow-none">
+      <Card className="gap-0 py-0">
         <CardContent className="divide-y px-0">
           {!providers ? (
             <div className="flex justify-center py-10 text-muted-foreground">
@@ -462,7 +470,7 @@ function Behaviour() {
   return (
     <>
       <Heading title="Agent behaviour" />
-      <Card className="gap-0 py-1 shadow-none">
+      <Card className="gap-0 py-1">
         <CardContent className="divide-y">
           <Row icon={ShieldCheck} title="Auto-approve writes and shell" description="Risky commands and paths outside the project still ask.">
             <Switch checked={auto} onCheckedChange={(v) => void setAuto(v)} />
@@ -493,7 +501,7 @@ function CommandOutput({ name, title, description, icon }: { name: string; title
   }, [api, name]);
   const Icon = icon;
   return (
-    <Card className="gap-3 shadow-none">
+    <Card className="gap-3">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-sm">
           <Icon className="size-4 text-muted-foreground" /> {title}
@@ -516,7 +524,7 @@ function Integrations() {
   return (
     <>
       <Heading title="Integrations" />
-      <Card className="gap-0 py-0 shadow-none">
+      <Card className="gap-0 py-0">
         <CardHeader className="border-b py-4 [.border-b]:pb-4">
           <CardTitle className="text-sm">Connected servers</CardTitle>
         </CardHeader>
@@ -582,7 +590,7 @@ function Worktree() {
       {w === null ? (
         <Loader2 className="size-5 animate-spin text-muted-foreground" />
       ) : w.active === false ? (
-        <Card className="flex-row items-center gap-4 px-5 py-5 shadow-none">
+        <Card className="flex-row items-center gap-4 px-5 py-5">
           <span className="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground">
             <GitBranch className="size-5" />
           </span>
@@ -591,7 +599,7 @@ function Worktree() {
           </div>
         </Card>
       ) : (
-        <Card className="gap-4 shadow-none">
+        <Card className="gap-4">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
               <GitBranch className="size-4 text-primary" /> {w.branch}
@@ -647,7 +655,7 @@ function HistorySection() {
   return (
     <>
       <Heading title="History" />
-      <Card className="gap-3 shadow-none">
+      <Card className="gap-3">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <Undo2 className="size-4 text-muted-foreground" /> Rewind
@@ -678,7 +686,7 @@ function HistorySection() {
           )}
         </CardContent>
       </Card>
-      <Card className="gap-3 shadow-none">
+      <Card className="gap-3">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
             <GitBranch className="size-4 text-muted-foreground" /> Snapshot to a branch
@@ -692,7 +700,7 @@ function HistorySection() {
           </Button>
         </CardContent>
       </Card>
-      <Card className="gap-0 py-1 shadow-none">
+      <Card className="gap-0 py-1">
         <CardContent className="divide-y">
           <Row icon={History} title="Saved sessions" description="Every agent conversation is stored in .niti/niti.db.">
             <Button variant="outline" size="sm" onClick={() => void runSlash("/sessions")}>
@@ -744,7 +752,7 @@ function About() {
   return (
     <>
       <Heading title="About" />
-      <Card className="flex-row items-center gap-5 px-6 py-6 shadow-none">
+      <Card className="flex-row items-center gap-5 px-6 py-6">
         <Wordmark size="lg" />
         <Separator orientation="vertical" className="h-10" />
         <div className="text-sm">
@@ -754,7 +762,7 @@ function About() {
           <div className="text-xs text-muted-foreground">Electron · React · niti-core</div>
         </div>
       </Card>
-      <Card className="gap-0 py-1 shadow-none">
+      <Card className="gap-0 py-1">
         <CardContent className="divide-y">
           <Row icon={Cpu} title="Engine" description={<span className="font-mono">{info?.core}</span>}>
             <Button variant="outline" size="sm" onClick={() => void restart()}>

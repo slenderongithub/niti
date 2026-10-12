@@ -7,6 +7,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/kbd";
 import { Wordmark } from "@/components/brand";
+import { BorderBeam } from "@/components/ui/border-beam";
 import { Spinner } from "@/components/spinner";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useApp } from "@/store/app";
@@ -91,7 +92,9 @@ export function Titlebar() {
         <AnimatePresence mode="wait" initial={false}>
           {active ? (
             <motion.div key="run" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }} className="no-drag min-w-0">
-              <Button variant="ghost" size="sm" className="h-7 max-w-[min(520px,45vw)] gap-2 rounded-full border bg-card px-3 text-xs" onClick={() => go("tasks")}>
+              <Button variant="ghost" size="sm" className="relative h-7 max-w-[min(520px,45vw)] gap-2 rounded-full border bg-card px-3 text-xs shadow-panel" onClick={() => go("tasks")}>
+                {/* The team is at work: a light travels the pill's rim for as long as the run lasts. */}
+                <BorderBeam size={36} duration={5} />
                 <Spinner className="text-info" />
                 <span className="truncate font-normal">{goal || "Working"}</span>
                 {c.total > 0 && (
