@@ -57,7 +57,7 @@ export default function TasksPage() {
       <header data-audit="section" className="shrink-0 border-b px-6 pb-4 pt-6">
         <div className="flex items-start gap-4">
           <div className="min-w-0 flex-1">
-            <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
               <Target className="size-3.5" /> Goal
               {active && (
                 <span className="flex items-center gap-1 normal-case tracking-normal text-info">
@@ -97,18 +97,18 @@ export default function TasksPage() {
               {COLUMNS.map((col) => {
                 const list = tasks.filter((t) => t.status === col.status);
                 return (
-                  <div key={col.status} className="flex min-h-0 flex-col rounded-xl bg-muted/40">
+                  <div key={col.status} className="flex min-h-0 flex-col rounded-2xl border border-border/60 bg-muted/30">
                     <div className="flex items-center gap-2 px-3 py-2.5">
                       <col.icon className="size-3.5" style={{ color: statusColor(col.status) }} />
                       <span className="text-[12.5px] font-semibold">{col.label}</span>
-                      <span className="ml-auto rounded-full bg-background px-1.5 text-[11px] text-muted-foreground tabular">{list.length}</span>
+                      <span className="ml-auto rounded-full bg-card px-1.5 text-[11px] text-muted-foreground shadow-panel tabular">{list.length}</span>
                     </div>
                     <ScrollArea className="min-h-0 flex-1">
                       <div className="flex flex-col gap-2 px-2 pb-2">
                         {list.map((t) => (
                           <TaskCard key={t.id} task={t} agents={agents} onOpen={() => setOpenId(t.id)} />
                         ))}
-                        {list.length === 0 && <div className="h-20 rounded-lg border border-dashed" />}
+                        {list.length === 0 && <div className="h-20 rounded-xl border border-dashed" />}
                       </div>
                     </ScrollArea>
                   </div>
@@ -260,7 +260,7 @@ function TaskSheet({ id, onClose, onOpen }: { id: string | null; onClose: () => 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mb-1.5 text-xs font-medium text-muted-foreground">{label}</div>
       {children}
     </div>
   );

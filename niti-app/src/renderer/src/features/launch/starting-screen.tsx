@@ -4,6 +4,7 @@ import { Wordmark } from "@/components/brand";
 import { Spinner } from "@/components/spinner";
 import { useApp } from "@/store/app";
 import { basename } from "@/lib/format";
+import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { WindowChrome } from "./window-chrome";
 
 export function StartingScreen({ restarting }: { restarting?: boolean }) {
@@ -14,13 +15,13 @@ export function StartingScreen({ restarting }: { restarting?: boolean }) {
     return () => clearTimeout(t);
   }, []);
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="ambient flex h-full flex-col bg-background">
       <WindowChrome />
       <div className="flex flex-1 flex-col items-center justify-center gap-7 pb-20">
         <Wordmark size="lg" />
         <div className="flex items-center gap-2.5 text-sm text-muted-foreground">
           <Spinner />
-          <span>{restarting ? "Restarting with your new team" : `Starting niti in ${basename(root ?? "")}`}…</span>
+          <AnimatedShinyText shimmerWidth={120}>{restarting ? "Restarting with your new team" : `Starting niti in ${basename(root ?? "")}`}…</AnimatedShinyText>
         </div>
         <AnimatePresence>
           {slow && (

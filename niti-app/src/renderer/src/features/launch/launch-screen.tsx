@@ -37,7 +37,7 @@ export function LaunchScreen() {
 
   return (
     <div
-      className="relative flex h-full flex-col overflow-hidden bg-background"
+      className="ambient relative flex h-full flex-col overflow-hidden bg-background"
       onDragOver={(e) => {
         e.preventDefault();
         setDragging(true);
@@ -65,7 +65,7 @@ export function LaunchScreen() {
         </motion.div>
 
         <motion.div className="mt-14" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}>
-          <Card className="gap-0 py-0 shadow-none">
+          <Card className="gap-0 py-0 shadow-float">
             <CardHeader className="min-h-14 items-center border-b py-3 [.border-b]:pb-3">
               <CardTitle className="text-sm">Recent projects</CardTitle>
               <CardAction>

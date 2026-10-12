@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import { RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { BorderBeam } from "@/components/ui/border-beam";
 import { Card } from "@/components/ui/card";
 import { PixelAvatar } from "@/components/pixel-avatar";
 import { statusColor, TASK_GLYPH, tint } from "@/lib/identity";
@@ -19,11 +20,11 @@ export function TaskCard({ task, agents, onOpen, compact }: { task: Task; agents
         onClick={onOpen}
         onKeyDown={(e) => e.key === "Enter" && onOpen?.()}
         className={cn(
-          "relative cursor-pointer gap-2 overflow-hidden rounded-lg px-3 py-2.5 shadow-none transition-shadow hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring",
+          "relative cursor-pointer gap-2 overflow-hidden rounded-xl px-3 py-2.5 transition-shadow hover:shadow-float focus-visible:ring-2 focus-visible:ring-ring",
           task.status === "done" && "opacity-80",
         )}
       >
-        {running && <span className="absolute inset-x-0 top-0 h-[2px] animate-pulse bg-info" />}
+        {running && <BorderBeam size={60} duration={6} colorFrom={who?.color ?? "var(--primary)"} borderWidth={1.5} />}
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10.5px] text-muted-foreground">{task.id}</span>
           {(task.attempts ?? 0) > 0 && (

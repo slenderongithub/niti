@@ -394,7 +394,7 @@ export function TeamSetup() {
           {/* preview */}
           <aside className="flex min-h-0 flex-col border-l bg-muted/40">
             <div className="px-6 pb-3 pt-5">
-              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Your team</div>
+              <div className="text-xs font-medium text-muted-foreground">Your team</div>
             </div>
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 pb-4 pt-1 scrollbar-thin">
               <AnimatePresence initial={false}>
@@ -466,7 +466,7 @@ function StepBody({ icon, title, eyebrow, description, children }: { icon: React
       <div className="mb-5 flex items-start gap-3.5">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary [&_svg]:size-[18px]">{icon}</span>
         <div>
-          {eyebrow && <div className="mb-0.5 text-[11px] font-medium uppercase tracking-wider text-primary">{eyebrow}</div>}
+          {eyebrow && <div className="mb-0.5 text-xs font-medium text-primary">{eyebrow}</div>}
           <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
           <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
         </div>
@@ -516,7 +516,7 @@ function OptionCard({
 function ProviderPicker({ providers, creds, value, onPick }: { providers: Providers; creds: Set<string>; value?: string; onPick: (id: string) => void }) {
   const ready = useMemo(() => (["byok", "local", "login"] as const).flatMap((k) => providers[k].filter((p) => creds.has(p.id)).map((p) => ({ ...p, cat: k }))), [providers, creds]);
   return (
-    <Command className="min-h-0 flex-1 rounded-xl border" defaultValue={value}>
+    <Command className="min-h-0 flex-1 rounded-xl border bg-card shadow-panel" defaultValue={value}>
       <CommandInput autoFocus placeholder="Filter providers…" />
       <CommandList className="max-h-none flex-1">
         <CommandEmpty>No provider matches.</CommandEmpty>
@@ -564,7 +564,7 @@ function ModelPicker({ provider, value, onPick }: { provider: string; value?: st
   const typed = q.trim();
   const exact = models?.some((m) => m === typed);
   return (
-    <Command className="min-h-0 flex-1 rounded-xl border" defaultValue={value}>
+    <Command className="min-h-0 flex-1 rounded-xl border bg-card shadow-panel" defaultValue={value}>
       <CommandInput autoFocus placeholder="Filter, or type any model id…" value={q} onValueChange={setQ} />
       <CommandList className="max-h-none flex-1">
         {models === null ? (

@@ -16,7 +16,7 @@ export function ErrorScreen() {
     void window.niti.coreLog().then(setLog);
   }, []);
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="ambient flex h-full flex-col bg-background">
       <WindowChrome />
       <div className="flex flex-1 items-center justify-center px-6 pb-16">
         <Card className="w-full max-w-2xl">

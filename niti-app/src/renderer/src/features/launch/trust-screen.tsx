@@ -29,11 +29,11 @@ export function TrustScreen() {
 
   const changed = trust?.changed;
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="ambient flex h-full flex-col bg-background">
       <WindowChrome />
       <div className="flex flex-1 items-center justify-center px-6 pb-16">
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-lg">
-          <Card className="gap-5 shadow-xl shadow-black/5">
+          <Card className="gap-5 shadow-overlay">
             <CardHeader>
               <div className={`mb-2 flex size-11 items-center justify-center rounded-xl ${changed ? "bg-warning/15 text-warning" : "bg-primary/12 text-primary"}`}>
                 {changed ? <ShieldAlert className="size-5" /> : <ShieldCheck className="size-5" />}

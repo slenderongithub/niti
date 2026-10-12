@@ -46,7 +46,7 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
   - A notification when a long run ends, and a Dock badge for pending approvals.
   - Drop a folder on the window or the Dock icon to open it.
 
-The look: the TUI's obsidian palettes with a violet accent (`#9D8CFF` / `#5A46D8`), the logo's spider web for empty space, the braille spinner, and the transcript's glyph language.
+The look, "Studio": panels that float on a deeper window ground, with soft shadows tinted by the ground's own hue; one accent, vermilion (`#FF6B3D` / `#C2361A`); Hanken Grotesk with JetBrains Mono. Motion marks work in progress: a light travels the rim of whatever is running (an agent, a task, the run itself), the team's conversations flow as beams between avatars on the dashboard, and a focused agent grows out of its card. Reduce motion turns all of it off. The tokens, light and dark, are in `src/renderer/src/styles/globals.css`.
 
 ## Develop
 

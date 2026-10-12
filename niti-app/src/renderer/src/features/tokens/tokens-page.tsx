@@ -394,7 +394,7 @@ function Heatmap({ perDay }: { perDay: Stats["perDay"] }) {
         ))}
       </div>
       {hover && (
-        <div className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-md border bg-popover px-2.5 py-1.5 text-xs shadow-md" style={{ left: hover.x, top: hover.y - 6 }}>
+        <div className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full glass rounded-lg border px-2.5 py-1.5 text-xs" style={{ left: hover.x, top: hover.y - 6 }}>
           <div className="whitespace-nowrap font-medium">{new Date(`${hover.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</div>
           <div className="whitespace-nowrap text-[11px] text-muted-foreground">{hover.tokens ? `${fmtInt(hover.tokens)} tokens · ${hover.msgs} messages` : "No activity"}</div>
         </div>

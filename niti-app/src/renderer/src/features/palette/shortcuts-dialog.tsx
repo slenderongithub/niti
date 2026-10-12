@@ -55,7 +55,7 @@ export function ShortcutsDialog() {
         <div className="grid gap-6 md:grid-cols-2">
           {GROUPS.map((g) => (
             <div key={g.title} className={g.title === "Everywhere" ? "md:row-span-2" : ""}>
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{g.title}</div>
+              <div className="mb-2 text-xs font-medium text-muted-foreground">{g.title}</div>
               <div className="space-y-1.5">
                 {g.items.map(([label, keys]) => (
                   <div key={label} className="flex items-center justify-between gap-4 text-[13px]">
