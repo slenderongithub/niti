@@ -74,10 +74,10 @@ export function Composer() {
   const toolbar = (
     <>
       <ToggleGroup type="single" size="sm" value={mode} onValueChange={(v) => v && setMode(v as "build" | "plan")} className="h-7 rounded-lg bg-muted p-0.5">
-        <ToggleGroupItem value="build" className="h-6 gap-1 rounded-md px-2 text-[11.5px] data-[state=on]:bg-background data-[state=on]:text-primary data-[state=on]:shadow-sm">
+        <ToggleGroupItem value="build" className="h-6 gap-1 rounded-md px-2 text-[11.5px] data-[state=on]:bg-card data-[state=on]:text-primary data-[state=on]:shadow-panel">
           <Hammer className="size-3" /> Build
         </ToggleGroupItem>
-        <ToggleGroupItem value="plan" className="h-6 gap-1 rounded-md px-2 text-[11.5px] data-[state=on]:bg-background data-[state=on]:text-plan data-[state=on]:shadow-sm">
+        <ToggleGroupItem value="plan" className="h-6 gap-1 rounded-md px-2 text-[11.5px] data-[state=on]:bg-card data-[state=on]:text-plan data-[state=on]:shadow-panel">
           <ListChecks className="size-3" /> Plan
         </ToggleGroupItem>
       </ToggleGroup>
@@ -337,7 +337,8 @@ const ComposerInput = memo(function ComposerInput({ placeholder, suggestion, act
     <div className="relative px-4 pb-4 pt-2">
       {menu && menuValues.length > 0 && (
         <div className="absolute inset-x-4 bottom-full z-20 mb-1 animate-in fade-in slide-in-from-bottom-1 duration-100">
-          <Command value={sel} onValueChange={setSel} shouldFilter={false} className="rounded-xl border shadow-xl">
+          <div className="glass overflow-hidden rounded-xl border">
+          <Command value={sel} onValueChange={setSel} shouldFilter={false} className="bg-transparent">
             <CommandList className="max-h-72">
               <CommandGroup heading={menu.kind === "slash" ? "Commands" : files === null ? "Loading files…" : "Files"}>
                 {menu.kind === "slash"
@@ -360,10 +361,11 @@ const ComposerInput = memo(function ComposerInput({ placeholder, suggestion, act
               </CommandGroup>
             </CommandList>
           </Command>
+          </div>
         </div>
       )}
 
-      <div className={cn("rounded-xl border bg-card shadow-sm transition-[box-shadow,border-color] focus-within:shadow-md", mode === "plan" ? "focus-within:border-plan/60" : "focus-within:border-primary/50", active && "border-info/30")}>
+      <div className={cn("rounded-2xl border bg-card shadow-float transition-[box-shadow,border-color] focus-within:shadow-overlay", mode === "plan" ? "focus-within:border-plan/60" : "focus-within:border-primary/50", active && "border-primary/25")}>
         <Textarea
           ref={ta}
           data-perf="composer"

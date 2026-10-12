@@ -21,6 +21,7 @@ import { useUI } from "@/store/ui";
 import { useApprovalUI } from "@/features/approvals/approval-center";
 import { AgentPanel } from "@/features/session/agent-transcript";
 import { Conversations } from "./conversations";
+import { TeamLinks } from "./team-links";
 
 function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
@@ -84,6 +85,8 @@ export default function DashboardPage() {
           className={cn(s.approvals.length > 0 && "border-warning/50 bg-warning/5")}
         />
       </div>
+
+      <TeamLinks />
 
       <Conversations />
 

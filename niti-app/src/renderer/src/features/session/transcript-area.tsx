@@ -1,7 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import { motion, type TargetAndTransition } from "motion/react";
 import { FileCode2, LayoutGrid, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentAvatar } from "@/components/agent-avatar";
+import { BorderBeam } from "@/components/ui/border-beam";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/store/app";
 import { closeFileTab, useEditor } from "@/store/editor";
@@ -9,6 +11,19 @@ import { useUI } from "@/store/ui";
 import { CodeEditor } from "@/features/editor/code-editor";
 import { AgentPanel } from "./agent-transcript";
 import { Welcome } from "./welcome";
+
+const FRAME = { type: "spring", stiffness: 380, damping: 38 } as const;
+
+// Where a focused agent's panel grows from: its card's box, as a transform on the full panel.
+// Measured once, on the click (a hand-rolled FLIP, not motion's shared layout: that keeps a
+// projection tree over the whole transcript and made every page switch pay to measure it).
+function grownFrom(card: Element | null, area: Element | null): TargetAndTransition | null {
+  if (!card || !area) return null;
+  const c = card.getBoundingClientRect();
+  const a = area.getBoundingClientRect();
+  if (!a.width || !a.height) return null;
+  return { x: c.left - a.left, y: c.top - a.top, scaleX: c.width / a.width, scaleY: c.height / a.height, borderRadius: 14 };
+}
 
 // The session's centre: all agents side by side (the TUI's overview), one agent, or a file you
 // opened — all as tabs in one strip. Esc goes back to everyone.
@@ -24,6 +39,8 @@ export function TranscriptArea() {
   const viewFile = useUI((s) => s.viewFile);
   const dirty = useEditor((s) => s.bufs);
   const shown = !activeFile && focused && agents[focused] ? focused : null;
+  const area = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState<{ id: string; from: TargetAndTransition } | null>(null);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -70,7 +87,8 @@ export function TranscriptArea() {
           ))}
         </div>
       )}
-      <div className="relative min-h-0 flex-1">
+      {/* Focusing an agent from its card grows the card into the panel instead of cutting to it. */}
+      <div ref={area} className="relative min-h-0 flex-1">
         {activeFile ? (
           <div key={`f-${activeFile}`} className="absolute inset-0 animate-in fade-in duration-150">
             <CodeEditor path={activeFile} />
@@ -78,8 +96,18 @@ export function TranscriptArea() {
         ) : !hasContent ? (
           <Welcome />
         ) : shown ? (
-          <div key={`a-${shown}`} className="absolute inset-0 animate-in fade-in duration-150">
-            <AgentPanel agent={agents[shown]!} onToggleFocus={order.length > 1 ? () => focus(null) : undefined} focused />
+          <div key={`a-${shown}`} className="absolute inset-0">
+            {/* The card's frame grows to fill the area, then hands over to the panel and fades. */}
+            <motion.div
+              className="pointer-events-none absolute inset-0 origin-top-left border bg-card shadow-float"
+              initial={zoom?.id === shown ? { ...zoom.from, opacity: 1 } : false}
+              animate={{ x: 0, y: 0, scaleX: 1, scaleY: 1, borderRadius: 0, opacity: 0 }}
+              transition={{ ...FRAME, opacity: { delay: 0.2, duration: 0.18 } }}
+              onAnimationComplete={() => setZoom(null)}
+            />
+            <motion.div className="absolute inset-0" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18, delay: 0.06 }}>
+              <AgentPanel agent={agents[shown]!} onToggleFocus={order.length > 1 ? () => focus(null) : undefined} focused />
+            </motion.div>
           </div>
         ) : order.length === 1 ? (
           <div className="absolute inset-0">
@@ -90,11 +118,31 @@ export function TranscriptArea() {
             className={cn("absolute inset-0 grid gap-4 overflow-y-auto p-4 animate-in fade-in duration-150", cols === 2 ? "grid-cols-2" : "grid-cols-3")}
             style={{ gridAutoRows: order.length > cols ? "minmax(280px, 1fr)" : "1fr" }}
           >
-            {order.map((id) => (
-              <div key={id} className="min-h-0">
-                <AgentPanel agent={agents[id]!} compact onToggleFocus={() => focus(id)} />
-              </div>
-            ))}
+            {order.map((id) => {
+              const a = agents[id]!;
+              return (
+                <div key={id} data-card={id} className="relative min-h-0">
+                  <div className="absolute inset-0 rounded-[14px] border bg-card shadow-panel" />
+                  {/* At work: a light in the agent's own colour travels the card's rim. */}
+                  {a.status === "working" && (
+                    <div className="pointer-events-none absolute inset-0 rounded-[14px]">
+                      <BorderBeam size={90} duration={7} colorFrom={a.color} borderWidth={1.5} />
+                    </div>
+                  )}
+                  <div className="relative h-full">
+                    <AgentPanel
+                      agent={a}
+                      compact
+                      onToggleFocus={() => {
+                        const from = grownFrom(area.current?.querySelector(`[data-card="${CSS.escape(id)}"]`) ?? null, area.current);
+                        setZoom(from ? { id, from } : null);
+                        focus(id);
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -104,7 +152,7 @@ export function TranscriptArea() {
 
 function Tab({ active, onClick, onClose, title, children }: { active: boolean; onClick: () => void; onClose?: () => void; title?: string; children: React.ReactNode }) {
   return (
-    <div role="tab" aria-selected={active} title={title} className={cn("group/tab relative flex h-8 shrink-0 items-center rounded-md transition-colors", active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground")}>
+    <div role="tab" aria-selected={active} title={title} className={cn("group/tab relative flex h-8 shrink-0 items-center rounded-md transition-colors", active ? "bg-card text-foreground shadow-panel" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground")}>
       <Button variant="ghost" size="sm" onClick={onClick} className={cn("h-8 gap-1.5 px-2.5 text-xs font-medium hover:bg-transparent", onClose && "pr-1")}>
         {children}
       </Button>
@@ -122,7 +170,7 @@ function Tab({ active, onClick, onClose, title, children }: { active: boolean; o
           <X className="size-3" />
         </Button>
       )}
-      {active && <span className="absolute inset-x-2 -bottom-[7px] h-0.5 rounded-full bg-primary" />}
+      {active && <motion.span layoutId="session-tab" className="absolute inset-x-2 -bottom-[7px] h-0.5 rounded-full bg-primary" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
     </div>
   );
 }

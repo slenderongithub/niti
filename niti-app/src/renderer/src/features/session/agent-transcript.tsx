@@ -3,6 +3,7 @@ import { ArrowDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgentAvatar } from "@/components/agent-avatar";
+import { AnimatedShinyText } from "@/components/ui/animated-shiny-text";
 import { EmptyState } from "@/components/empty-state";
 import { groupItems, type AgentView, type RenderItem } from "@/lib/reducer";
 import { fmtTokens } from "@/lib/format";
@@ -73,8 +74,8 @@ export const AgentPanel = memo(function AgentPanel({ agent, compact, onToggleFoc
   const tokens = agent.usage.inputTokens + agent.usage.outputTokens;
 
   return (
-    <div className={cn("relative flex h-full min-h-0 flex-col overflow-hidden", compact && "rounded-xl border bg-card")}>
-      <div className={cn("flex h-14 shrink-0 items-center gap-3 border-b px-4", !compact && "bg-background")}>
+    <div className={cn("relative flex h-full min-h-0 flex-col overflow-hidden", compact && "rounded-[14px]")}>
+      <div className={cn("flex h-14 shrink-0 items-center gap-3 border-b px-4", !compact && "bg-background/80")}>
         <AgentAvatar slot={agent.index} color={agent.color} lead={lead} status={agent.status} showStatus size={compact ? "sm" : "md"} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -83,7 +84,14 @@ export const AgentPanel = memo(function AgentPanel({ agent, compact, onToggleFoc
             </span>
             <span className="shrink-0 text-[11px] capitalize leading-5 text-muted-foreground">{agent.status}</span>
           </div>
-          <div className="truncate font-mono text-[11px] leading-4 text-muted-foreground">{agent.status === "working" && agent.activity ? agent.activity : `${agent.cfg.provider}/${agent.cfg.model}`}</div>
+          {agent.status === "working" && agent.activity ? (
+            // What it's doing right now, with a glint passing over it while it works.
+            <AnimatedShinyText shimmerWidth={80} className="block truncate font-mono text-[11px] leading-4">
+              {agent.activity}
+            </AnimatedShinyText>
+          ) : (
+            <div className="truncate font-mono text-[11px] leading-4 text-muted-foreground">{`${agent.cfg.provider}/${agent.cfg.model}`}</div>
+          )}
         </div>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -132,7 +140,7 @@ export const AgentPanel = memo(function AgentPanel({ agent, compact, onToggleFoc
 
       {!atBottom && (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 duration-150">
-          <Button size="sm" variant="secondary" className="h-7 gap-1.5 rounded-full border px-3 text-xs shadow-md" onClick={jump}>
+          <Button size="sm" variant="secondary" className="h-7 gap-1.5 rounded-full border px-3 text-xs shadow-float" onClick={jump}>
             <ArrowDown /> {unseen > 0 ? `${unseen} new below` : "Jump to latest"}
           </Button>
         </div>

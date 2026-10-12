@@ -83,6 +83,8 @@ export class GraphEngine {
   links: SimLink[] = [];
   sim: SimParams = defaultParams();
   showLabels = true;
+  // Reduce motion: no travelling pulses, and a working agent's ring holds still.
+  reduceMotion = false;
   insets = { top: 70, right: 20, bottom: 20, left: 20 };
 
   private ctx: CanvasRenderingContext2D;
@@ -428,7 +430,7 @@ export class GraphEngine {
       // Live only while something moves: a pulse in flight (60fps), or a working agent's ring
       // (30fps is plenty for a slow pulse). A quiet team costs nothing.
       if (this.pulses.length || this.dragging >= 0 || this.fading || !this.camSettled()) return false;
-      if (this.nodes.some((n) => n.status === "working")) return (this.frameNo++ & 1) === 1;
+      if (!this.reduceMotion && this.nodes.some((n) => n.status === "working")) return (this.frameNo++ & 1) === 1;
       // Blinks: redraw only when one starts or ends.
       const now = performance.now();
       const blinkKey = this.nodes.map((n) => (isBlinking(n.slot ?? 0, now) ? 1 : 0)).join("");
@@ -493,11 +495,22 @@ export class GraphEngine {
       const t = this.nodes[this.byId.get(p.b)!];
       if (!s || !t) continue;
       const tt = (now - p.born) / 1600;
-      const e = 1 - Math.pow(1 - tt, 3);
-      ctx.globalAlpha = 1 - tt * tt;
+      const fade = 1 - tt * tt;
       ctx.fillStyle = p.color;
+      // A comet: the head, and a tail of earlier positions shrinking and fading behind it.
+      for (let k = 5; k >= 0; k--) {
+        const tk = Math.max(0, tt - k * 0.028);
+        const e = 1 - Math.pow(1 - tk, 3);
+        ctx.globalAlpha = fade * (k === 0 ? 1 : 0.42 * (1 - k / 6));
+        ctx.beginPath();
+        ctx.arc(s.x + (t.x - s.x) * e, s.y + (t.y - s.y) * e, ((k === 0 ? 4.5 : 3.6 - k * 0.4) / cam.k), 0, 7);
+        ctx.fill();
+      }
+      // The head's glow.
+      const e0 = 1 - Math.pow(1 - tt, 3);
+      ctx.globalAlpha = fade * 0.22;
       ctx.beginPath();
-      ctx.arc(s.x + (t.x - s.x) * e, s.y + (t.y - s.y) * e, 4.5 / cam.k, 0, 7);
+      ctx.arc(s.x + (t.x - s.x) * e0, s.y + (t.y - s.y) * e0, 11 / cam.k, 0, 7);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
@@ -534,9 +547,15 @@ export class GraphEngine {
         ctx.strokeStyle = T.bg;
         ctx.stroke();
       } else {
+        ctx.fillStyle = n.color || T.muted;
+        // The glow: a wide, faint disc of the node's own colour under it.
+        ctx.globalAlpha = alpha * 0.16;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.r * 2.3 + 2 / cam.k, 0, 7);
+        ctx.fill();
+        ctx.globalAlpha = alpha;
         ctx.beginPath();
         ctx.arc(n.x, n.y, n.r, 0, 7);
-        ctx.fillStyle = n.color || T.muted;
         ctx.fill();
         if (n.pinned) {
           ctx.lineWidth = 1 / cam.k;
@@ -545,9 +564,9 @@ export class GraphEngine {
         }
       }
       if (n.status === "working") {
-        const pw = (now % 1200) / 1200;
+        const pw = this.reduceMotion ? 0.35 : (now % 1200) / 1200;
         ctx.globalAlpha = (1 - pw) * alpha;
-        ctx.strokeStyle = T.info;
+        ctx.strokeStyle = (agentsMode && n.color) || T.info;
         ctx.lineWidth = 2 / cam.k;
         ctx.beginPath();
         ctx.arc(n.x, n.y, n.r + (2 + pw * 9) / cam.k, 0, 7);
@@ -559,7 +578,7 @@ export class GraphEngine {
     const zoomA = agentsMode ? 1 : Math.min(1, Math.max(0, (cam.k - 0.62) / 0.28));
     if (this.showLabels) {
       const fs = agentsMode ? 12.5 : 11;
-      ctx.font = `${agentsMode ? 600 : 400} ${fs / cam.k}px ${agentsMode ? '"Inter Variable", ui-sans-serif' : '"JetBrains Mono Variable", ui-monospace'}, monospace`;
+      ctx.font = `${agentsMode ? 600 : 400} ${fs / cam.k}px ${agentsMode ? '"Hanken Grotesk Variable", ui-sans-serif' : '"JetBrains Mono Variable", ui-monospace'}, monospace`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       const boxes: { x0: number; y0: number; x1: number; y1: number }[] = [];

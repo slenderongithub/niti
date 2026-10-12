@@ -25,7 +25,7 @@ export function SummaryCard() {
     <AnimatePresence>
       {show && summary && (
         <motion.div initial={{ opacity: 0, y: 16, height: 0 }} animate={{ opacity: 1, y: 0, height: "auto" }} exit={{ opacity: 0, y: 10, height: 0 }} className="px-4">
-          <Card className="gap-0 overflow-hidden py-0 shadow-md">
+          <Card className="gap-0 overflow-hidden py-0 shadow-float">
             <div className="flex items-center gap-2.5 border-b px-4 py-2.5">
               <Icon className={`size-4 ${color}`} />
               <span className={`text-sm font-semibold ${color}`}>{tone === "done" ? "Done" : tone === "cancelled" ? "Cancelled" : "Finished with failures"}</span>

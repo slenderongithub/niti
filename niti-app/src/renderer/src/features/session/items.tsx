@@ -133,7 +133,7 @@ function ShellBlock({ item }: { item: Extract<Item, { kind: "shell" }> }) {
   const shown = open ? lines : lines.slice(0, 3);
   const hidden = Math.max(item.lines, lines.length) - shown.length;
   return (
-    <div className={cn("my-1 overflow-hidden rounded-lg border bg-card", !item.ok && "border-destructive/40")}>
+    <div className={cn("my-1.5 overflow-hidden rounded-xl border bg-card shadow-panel", !item.ok && "border-destructive/40")}>
       <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-[12px]">
         <Terminal className="size-3.5 shrink-0 text-muted-foreground" />
         <code className="selectable min-w-0 flex-1 truncate font-mono text-foreground">{item.command}</code>
@@ -165,7 +165,7 @@ function DiffBlock({ item }: { item: Extract<Item, { kind: "diff" }> }) {
   const view = useUI((s) => s.viewFile);
   const Icon = item.created ? FilePlus2 : FilePen;
   return (
-    <div className="my-1 overflow-hidden rounded-lg border bg-card">
+    <div className="my-1.5 overflow-hidden rounded-xl border bg-card shadow-panel">
       <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-[12px]">
         <Icon className={cn("size-3.5 shrink-0", item.created ? "text-success" : "text-primary")} />
         <span className="text-muted-foreground">{item.created ? "Created" : "Updated"}</span>

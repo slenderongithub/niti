@@ -38,7 +38,7 @@ const components: Components = {
   code: ({ className, children }) => {
     const block = /language-/.test(className ?? "") || String(children).includes("\n");
     if (block) return <code className="font-mono">{children}</code>;
-    return <code className="rounded-[5px] bg-muted px-1.5 py-[1px] font-mono text-[0.86em] text-primary">{children}</code>;
+    return <code className="rounded-[5px] border border-border/60 bg-muted px-1.5 py-[1px] font-mono text-[0.86em] text-foreground">{children}</code>;
   },
 };
 

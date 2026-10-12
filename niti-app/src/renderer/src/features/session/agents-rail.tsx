@@ -18,7 +18,7 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   return (
     <section className="px-3 pb-4">
       <div className="flex h-8 items-center gap-2 px-1">
-        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</span>
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">{title}</span>
         {action}
       </div>
       {children}
@@ -41,7 +41,7 @@ const AgentRow = memo(function AgentRow({ a, lead, selected }: { a: AgentView; l
           onClick={() => focus(selected ? null : a.id)}
           className={cn(
             "relative h-auto w-full min-w-0 flex-col items-stretch gap-2 whitespace-normal rounded-lg border border-transparent p-2.5 text-left font-normal hover:bg-muted/60",
-            selected && "border-border bg-card shadow-sm hover:bg-card",
+            selected && "border-border bg-card shadow-panel hover:bg-card",
           )}
         >
           {selected && <span className="absolute inset-y-3 left-0 w-[3px] rounded-full" style={{ background: a.color }} />}

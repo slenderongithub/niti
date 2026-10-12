@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import type { FileGraph } from "@/lib/types";
 import { useApp } from "@/store/app";
 import { useUI } from "@/store/ui";
+import { useStill } from "@/hooks/use-still";
 import { GraphEngine, type GraphMode, type HoverInfo } from "./engine";
 
 function cssVar(name: string): string {
@@ -190,17 +191,24 @@ export default function GraphPage() {
     if (!e || mode !== "agents") return;
     for (const id of order) e.updateAgent(id, { status: agents[id]!.status });
   }, [agents, order, mode]);
+  const still = useStill();
+  useEffect(() => {
+    const e = engine.current;
+    if (!e) return;
+    e.reduceMotion = still;
+    e.reheat(0.0001);
+  }, [still]);
   // new messages → pulses
   useEffect(() => {
     const e = engine.current;
     const fresh = messages.slice(seenMsgs.current);
     seenMsgs.current = messages.length;
-    if (!e || mode !== "agents") return;
+    if (!e || mode !== "agents" || still) return;
     for (const m of fresh) {
       const tos = m.to === "*" ? order.filter((id) => id !== m.from) : [m.to];
       for (const to of tos) e.pulse(m.from, to, resolveColor(messageColor(m.kind)));
     }
-  }, [messages, mode, order]);
+  }, [messages, mode, order, still]);
 
   useEffect(() => {
     const e = engine.current;
@@ -242,16 +250,16 @@ export default function GraphPage() {
   const selAgent = mode === "agents" && selected ? agents[selected] : undefined;
 
   return (
-    <div ref={wrap} className="relative h-full overflow-hidden">
+    <div ref={wrap} className="dot-grid relative h-full overflow-hidden">
       <canvas ref={canvas} className="absolute inset-0 cursor-grab touch-none" />
 
       {/* toolbar */}
-      <Card className="absolute left-3 top-3 flex-row items-center gap-2 rounded-xl p-1.5 shadow-lg">
+      <Card className="shadow-float absolute left-3 top-3 flex-row items-center gap-2 rounded-xl p-1.5">
         <ToggleGroup type="single" size="sm" value={mode} onValueChange={(v) => v && setMode(v as GraphMode)} className="rounded-lg bg-muted/70 p-0.5">
-          <ToggleGroupItem value="project" className="h-7 gap-1.5 rounded-md px-2.5 text-xs data-[state=on]:bg-background data-[state=on]:shadow-sm">
+          <ToggleGroupItem value="project" className="h-7 gap-1.5 rounded-md px-2.5 text-xs data-[state=on]:bg-card data-[state=on]:shadow-panel">
             <Waypoints className="size-3.5" /> Project
           </ToggleGroupItem>
-          <ToggleGroupItem value="agents" className="h-7 gap-1.5 rounded-md px-2.5 text-xs data-[state=on]:bg-background data-[state=on]:shadow-sm">
+          <ToggleGroupItem value="agents" className="h-7 gap-1.5 rounded-md px-2.5 text-xs data-[state=on]:bg-card data-[state=on]:shadow-panel">
             <Users className="size-3.5" /> Agents
           </ToggleGroupItem>
         </ToggleGroup>
@@ -283,7 +291,7 @@ export default function GraphPage() {
       </Card>
 
       {/* controls */}
-      <Card className="absolute right-3 top-3 flex-row items-center gap-0.5 rounded-xl p-1 shadow-lg">
+      <Card className="shadow-float absolute right-3 top-3 flex-row items-center gap-0.5 rounded-xl p-1">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="icon-sm" onClick={() => engine.current?.zoomBy(1 / 1.3)} aria-label="Zoom out">
@@ -359,8 +367,8 @@ export default function GraphPage() {
       <AnimatePresence>
         {mode === "project" && legend.length > 0 && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} className="absolute bottom-3 left-3">
-            <Card className="max-w-[min(560px,60vw)] gap-1.5 rounded-xl px-3 py-2 shadow-lg">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Directories</div>
+            <Card className="shadow-float max-w-[min(560px,60vw)] gap-1.5 rounded-xl px-3 py-2">
+              <div className="text-[11px] font-medium text-muted-foreground">Directories</div>
               <div className="flex flex-wrap gap-x-3 gap-y-1">
                 {legend.slice(0, 14).map((g) => (
                   <span key={g.label} className="flex items-center gap-1.5 text-[11px]">
@@ -375,8 +383,8 @@ export default function GraphPage() {
         )}
         {mode === "agents" && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} className="absolute bottom-3 left-3">
-            <Card className="gap-1.5 rounded-xl px-3 py-2 shadow-lg">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Messages</div>
+            <Card className="shadow-float gap-1.5 rounded-xl px-3 py-2">
+              <div className="text-[11px] font-medium text-muted-foreground">Messages</div>
               <div className="flex flex-wrap gap-x-3 gap-y-1">
                 {(["question", "answer", "handoff", "review", "note"] as const).map((k) => (
                   <span key={k} className="flex items-center gap-1.5 text-[11px] capitalize">
@@ -402,7 +410,7 @@ export default function GraphPage() {
             className="pointer-events-none absolute z-10"
             style={{ left: Math.min(hover.x + 16, (wrap.current?.clientWidth ?? 800) - 260), top: hover.y + 18 }}
           >
-            <Card className="w-60 gap-1 rounded-lg px-3 py-2 shadow-xl">
+            <Card className="shadow-float w-60 gap-1 rounded-xl px-3 py-2">
               <div className="truncate text-[12.5px] font-semibold">{hover.node.label}</div>
               <div className="truncate font-mono text-[10.5px] text-muted-foreground">
                 {mode === "project" ? hover.node.id : `${hover.node.status ?? "idle"}`} · {hover.node.deg} link{hover.node.deg === 1 ? "" : "s"}
@@ -426,7 +434,7 @@ export default function GraphPage() {
       <AnimatePresence>
         {selNode && (
           <motion.div key={selNode.id} initial={{ opacity: 0, x: 12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 12 }} className="absolute right-3 top-16 z-10 w-72">
-            <Card className="gap-3 rounded-xl p-4 shadow-xl">
+            <Card className="shadow-float gap-3 rounded-xl p-4">
               <div className="flex items-start gap-2.5">
                 {selAgent ? (
                   <AgentAvatar slot={selAgent.index} color={selAgent.color} lead={selected === lead} status={selAgent.status} showStatus />
@@ -493,7 +501,7 @@ export default function GraphPage() {
       {/* states */}
       {mode === "project" && (loading || err || (graph && graph.nodes.length === 0)) && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className={cn("flex flex-col items-center gap-2 rounded-xl border bg-card px-6 py-5 text-center text-sm shadow-lg", err && "text-destructive")}>
+          <div className={cn("flex flex-col items-center gap-2 rounded-xl border bg-card px-6 py-5 text-center text-sm shadow-float", err && "text-destructive")}>
             {loading ? <Loader2 className="size-5 animate-spin text-muted-foreground" /> : <Waypoints className="size-5 text-muted-foreground" />}
             {loading ? "Mapping the project…" : err ? err : "No source files with imports found yet."}
           </div>

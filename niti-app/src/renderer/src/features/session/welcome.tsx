@@ -30,13 +30,13 @@ export function Welcome() {
             </Fragment>
           ))}
         </div>
-        <h1 className="text-2xl font-semibold tracking-tight">{greeting()}.</h1>
+        <h1 className="text-[28px] font-semibold leading-9 tracking-[-0.025em]">{greeting()}.</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           {order.length} agent{order.length === 1 ? "" : "s"} ready · {auto ? "auto-approve" : "manual approvals"} · tell the team what to do below
         </p>
         <div className="mt-8 grid w-full grid-cols-2 gap-3">
           {STARTERS.map((s) => (
-            <Button key={s.text} variant="outline" className="group h-[72px] w-full items-start justify-start gap-3 whitespace-normal rounded-xl bg-card p-3.5 text-left font-normal" onClick={() => fill(s.text)}>
+            <Button key={s.text} variant="outline" className="group h-[72px] w-full items-start justify-start gap-3 whitespace-normal rounded-xl bg-card p-3.5 text-left font-normal shadow-panel hover:shadow-float" onClick={() => fill(s.text)}>
               <s.icon className="mt-0.5 text-muted-foreground transition-colors group-hover:text-primary" />
               <span className="line-clamp-2 min-w-0 flex-1 text-[13px] leading-snug">{s.text}</span>
             </Button>

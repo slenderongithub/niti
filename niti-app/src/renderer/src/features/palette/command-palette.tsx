@@ -44,7 +44,7 @@ export function CommandPalette() {
   const close = useUI((s) => s.closePalette);
   return (
     <Dialog open={open} onOpenChange={(o) => !o && close()}>
-      <DialogContent className="top-[18%] w-[min(640px,92vw)] max-w-none translate-y-0 gap-0 overflow-hidden p-0 sm:max-w-none" showCloseButton={false}>
+      <DialogContent className="top-[18%] w-[min(640px,92vw)] max-w-none translate-y-0 gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-none" showCloseButton={false}>
         <DialogTitle className="sr-only">Command palette</DialogTitle>
         <DialogDescription className="sr-only">Search pages, actions, agents and commands</DialogDescription>
         {open && <PaletteBody />}

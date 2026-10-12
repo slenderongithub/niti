@@ -103,7 +103,7 @@ export function Conversations() {
 
 function ThreadButton({ active, onClick, title, sub, count, children }: { active: boolean; onClick: () => void; title: string; sub: string; count: number; children: React.ReactNode }) {
   return (
-    <Button variant="ghost" onClick={onClick} className={cn("h-14 w-full min-w-0 justify-start gap-2.5 rounded-lg px-2 text-left font-normal", active && "bg-muted hover:bg-muted")}>
+    <Button variant="ghost" onClick={onClick} className={cn("h-14 w-full min-w-0 justify-start gap-2.5 rounded-lg px-2 text-left font-normal", active && "bg-card shadow-panel hover:bg-card")}>
       {children}
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[12.5px] font-medium leading-5">{title}</span>
@@ -156,7 +156,7 @@ function Stream({ items, agents, name }: { items: FeedItem[]; agents: Record<str
         <Button
           size="sm"
           variant="secondary"
-          className="absolute bottom-3 left-1/2 h-7 -translate-x-1/2 gap-1.5 rounded-full border px-3 text-xs shadow-md"
+          className="absolute bottom-3 left-1/2 h-7 -translate-x-1/2 gap-1.5 rounded-full border px-3 text-xs shadow-float"
           onClick={() => {
             ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: "smooth" });
             bottom.current = true;
