@@ -1,0 +1,35 @@
+appId: dev.niti.app
+productName: niti
+copyright: Copyright © 2026 Shubhadeep Datta
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+extraResources:
+  - from: resources/${arch}/niti-core
+    to: niti-core
+asar: true
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  # Ad-hoc signed: runs locally and on Apple Silicon. A Developer ID identity + notarization is the
+  # step before distributing it.
+  identity: "-"
+  hardenedRuntime: false
+  darkModeSupport: true
+  artifactName: niti-${version}-${arch}-mac.${ext}
+  # Arch comes from the command line: `npm run dist` builds this Mac's, `npm run dist:all` both.
+  target: [dmg, zip]
+  extendInfo:
+    NSHumanReadableCopyright: Copyright © 2026 Shubhadeep Datta
+    # Dropping a folder on the Dock icon opens it as a project.
+    CFBundleDocumentTypes:
+      - CFBundleTypeName: Folder
+        CFBundleTypeRole: Viewer
+        LSHandlerRank: Alternate
+        LSItemContentTypes: [public.folder]
+dmg:
+  title: niti
+  artifactName: niti-${version}-${arch}.${ext}

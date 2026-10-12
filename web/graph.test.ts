@@ -19,7 +19,7 @@ function load() {
     fetch: () => Promise.reject(new Error("offline")), EventSource: class {},
     document: doc, location: { search: "" }, performance,
   };
-  // graph.js calls into avatar.js's globals (drawPixelAvatar, themeColors, refreshAvatarColors) the
+  // graph.js calls into avatar.js's globals (drawAvatar, themeColors, refreshAvatarColors) the
   // same way it does in the browser, where avatar.js loads first as its own <script> tag — so it has
   // to be concatenated ahead of graph.js here too, not just its own separate module.
   const avatarSrc = readFileSync(new URL("./avatar.js", import.meta.url), "utf8");

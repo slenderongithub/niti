@@ -6,9 +6,9 @@ node_modules/
 # `go build` run inside the TUI's main package drops its binary here.
 /tui/cmd/niti/niti
 /npm/
-desktop/dist/
 *.tgz
 *.log
+*.log.[0-9]*
 .DS_Store
 .niti/agents.yaml
 .niti/session.json
@@ -17,3 +17,6 @@ desktop/dist/
 .niti/history
 .env
 .env.*
+# eval token baseline: scripts/eval/run.ts --save-tokens base.json
+/base.json
+.serena/

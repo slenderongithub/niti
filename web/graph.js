@@ -199,8 +199,8 @@ function setGraph(rawNodes, rawEdges) {
   for (const e of rawEdges) { const s = byId.get(e.from), t = byId.get(e.to); if (s !== undefined && t !== undefined && s !== t) links.push({ s, t }); }
   adj = nodes.map(() => new Set());
   for (const l of links) { adj[l.s].add(l.t); adj[l.t].add(l.s); nodes[l.s].deg++; nodes[l.t].deg++; }
-  // Models-mode avatars are a fixed, readable size for every agent, lead included — the pixel
-  // mascot isn't meant to shrink to a dot for a quiet agent the way a plain degree-sized circle
+  // Models-mode avatars are a fixed, readable size for every agent, lead included — the avatar
+  // isn't meant to shrink to a dot for a quiet agent the way a plain degree-sized circle
   // was, and a *different* fixed size for lead just made same-shaped sprites look inconsistent
   // side by side. Lead gets a ring around it instead (drawn in render()).
   for (const n of nodes) n.r = mode === "models" ? 20 : 4 + Math.sqrt(n.deg) * 2.4 + (n.lead ? 3 : 0);
@@ -478,9 +478,8 @@ function render() {
       ctx.fillStyle = `rgba(${ACCENT_RGB},0.20)`; ctx.fill();
     }
     if (mode === "models") {
-      // Agent identity is the pixel avatar's color/face now, not a plain fill — no border, per the
-      // mascot reference art. Status moves to a small dot instead of the old fill color.
-      drawPixelAvatar(ctx, n.x, n.y, n.r * 2, n.colorIndex);
+      // Agent identity is the avatar drawing now, not a plain fill — no border. Status moves to a small dot instead of the old fill color.
+      drawAvatar(ctx, n.x, n.y, n.r * 2, n.colorIndex);
       if (n.lead) { ctx.lineWidth = 2 / cam.k; ctx.strokeStyle = ACCENT; ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 5 / cam.k, 0, 7); ctx.stroke(); }
       ctx.fillStyle = STATUS_FILL[n.status] || STATUS_FILL.idle;
       ctx.beginPath(); ctx.arc(n.x + n.r * 0.7, n.y - n.r * 0.7, 4 / cam.k, 0, 7); ctx.fill();

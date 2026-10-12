@@ -33,7 +33,7 @@
     const dot = $("theme-dot");
     if (dot) dot.style.background = p.accent;
     // CSS custom properties re-theme the DOM automatically, but canvas drawing (graph.js's force
-    // graph, app.js's dashboard graph, avatar.js's mascots) is imperative — it can't "just inherit"
+    // graph, app.js's dashboard graph, avatar.js's avatars) is imperative — it can't "just inherit"
     // a var() the way CSS rules do. This is their one hook to re-read the vars and repaint.
     document.dispatchEvent(new CustomEvent("niti-theme"));
   }
