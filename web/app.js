@@ -17,7 +17,7 @@ function refreshAppTheme() {
 }
 refreshAppTheme();
 const PULSE_MS = 2200;
-const AVATAR_R = 20; // every agent's pixel avatar is this size, no exceptions — lead is a ring around it, not a bigger sprite
+const AVATAR_R = 20; // every agent's avatar is this size, no exceptions — lead is a ring around it, not a bigger sprite
 
 const $ = (id) => document.getElementById(id);
 const nodes = new Map(); // id -> {id,label,role,lead,x,y,vx,vy,status,activity,tokens}
@@ -44,7 +44,7 @@ function ensureNode(id, role, lead) {
       label: id,
       role: role || id,
       lead: !!lead,
-      colorIndex: nodes.size, // first-seen roster position — the pixel avatar's stable identity color/face
+      colorIndex: nodes.size, // first-seen roster position — the avatar's stable identity
       x: 0.5 + 0.28 * Math.cos(angle),
       y: 0.5 + 0.28 * Math.sin(angle),
       vx: 0,
@@ -542,7 +542,7 @@ function draw() {
       ctx.strokeStyle = `rgba(${WORKING_RGB},0.5)`; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, y, r + 4 + t * 8, 0, Math.PI * 2); ctx.globalAlpha = 1 - t; ctx.stroke(); ctx.globalAlpha = 1;
     }
-    drawPixelAvatar(ctx, x, y, r * 2, n.colorIndex);
+    drawAvatar(ctx, x, y, r * 2, n.colorIndex);
     if (n.lead) { ctx.strokeStyle = ACCENT; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 5, 0, Math.PI * 2); ctx.stroke(); }
     // Status now lives outside the sprite (its fill/face are identity, not status) — a small dot
     // at the shoulder, same colors the legend already uses.
@@ -578,7 +578,7 @@ renderLegend();
 
 // A theme switch (TUI ctrl+t, another tab) re-reads the CSS vars and repaints — draw()
 // already reads KIND_COLORS/STATUS_FILL fresh every frame, so refreshing them here is enough for the
-// live graph; the legend and avatar mascots need an explicit rebuild.
+// live graph; the legend and avatars need an explicit rebuild.
 document.addEventListener("niti-theme", () => {
   refreshAppTheme();
   refreshAvatarColors();

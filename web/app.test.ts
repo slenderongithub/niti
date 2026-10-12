@@ -64,7 +64,7 @@ function load() {
     EventSource: class { onopen: any; onerror: any; onmessage: any },
     document: doc, location: { search: "?token=t" }, performance,
   };
-  // app.js calls into avatar.js's globals (drawPixelAvatar, themeColors, refreshAvatarColors) the
+  // app.js calls into avatar.js's globals (drawAvatar, themeColors, refreshAvatarColors) the
   // same way it does in the browser, where avatar.js loads first as its own <script> tag — so it has
   // to be concatenated ahead of app.js here too, not just its own separate module.
   const avatarSrc = readFileSync(new URL("./avatar.js", import.meta.url), "utf8");

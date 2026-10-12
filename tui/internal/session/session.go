@@ -242,7 +242,7 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitFor(m.events), fetchCommands(m.client), fetchFiles(m.client), blinkCmd(len(m.order))}
+	cmds := []tea.Cmd{waitFor(m.events), fetchCommands(m.client), fetchFiles(m.client)}
 	if m.sett.open { // launched as `niti status` / `niti config`: the panels need their data
 		cmds = append(cmds, fetchStats(m.client), fetchCreds(m.client))
 	}
@@ -476,8 +476,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.glowTicking = false
 		m.glowPhase++
 		return m, m.glowCmd()
-	case blinkMsg:
-		return m, blinkCmd(len(m.order))
 	case tickMsg:
 		if m.ticking = m.anyRunning() && !m.prefs["reduceMotion"]; m.ticking {
 			return m, tick()

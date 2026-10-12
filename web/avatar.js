@@ -1,11 +1,10 @@
 "use strict";
-// Pixel-art agent mascot, shared by app.js's dashboard nodes and graph.js's Models-mode nodes so
-// both canvases draw the same shape instead of two hand-rolled ones. One 12x12 body grid (square
-// head, two ear nubs, four leg prongs) filled solid in the agent's slot color — no outline stroke
-// — topped with one of six face variants so each color also reads as a distinct personality.
+// Agent avatars, shared by app.js's dashboard nodes and graph.js's Models-mode nodes so both
+// canvases draw the same art: the six PNG drawings, with a plain disc in the slot color until
+// they've loaded.
 //
 // Loaded as a plain classic <script>, same no-bundler convention as app.js/graph.js/theme.js —
-// AVATAR_COLORS and drawPixelAvatar are deliberately real globals, not IIFE-hidden, since both
+// AVATAR_COLORS and drawAvatar are deliberately real globals, not IIFE-hidden, since both
 // app.js and graph.js call them directly.
 
 // Reads the theme's CSS custom properties (set by theme.js, from tui/internal/theme/palettes.json —
@@ -36,8 +35,8 @@ function hexToRgbTriplet(hex) {
 }
 
 let AVATAR_COLORS = ["#3b82f6", "#facc15", "#ef4444", "#a78bfa", "#4ade80", "#ec4899"]; // blue, yellow, red, purple, green, pink
-// Slot order matches AVATAR_FACES' comments (blue/yellow/red/purple/green/pink) so each face design
-// keeps reading against the theme color it was drawn for.
+// Slot order matches the six drawings (blue/yellow/red/purple/green/pink) so each
+// drawing's fallback disc matches its color.
 function refreshAvatarColors() {
   const t = themeColors();
   AVATAR_COLORS = [t.blue, t.amber, t.red, t.violet, t.green, t.pink];
@@ -45,43 +44,11 @@ function refreshAvatarColors() {
 refreshAvatarColors();
 if (typeof document !== "undefined") document.addEventListener("niti-theme", refreshAvatarColors);
 
-const AVATAR_INK = "#0d0f16";
-const AVATAR_GRID = 12;
-
-function stripe(left, mid, right) {
-  return "0".repeat(left) + "1".repeat(mid) + "0".repeat(right);
-}
-
-const AVATAR_BODY = [
-  stripe(2, 8, 2), // head
-  stripe(2, 8, 2),
-  stripe(2, 8, 2),
-  stripe(0, 12, 0), // ear nubs (full width band)
-  stripe(0, 12, 0),
-  stripe(0, 12, 0),
-  stripe(2, 8, 2), // neck
-  stripe(2, 8, 2),
-  "001010010100", // legs (4 prongs)
-  "001010010100",
-  "001010010100",
-  "001010010100",
-];
-
-// One face per color slot, as [row, col] ink pixels drawn over the body fill.
-const AVATAR_FACES = [
-  [[4, 3], [4, 8], [6, 5], [6, 6]], // blue — neutral dot eyes, flat mouth
-  [[3, 3], [3, 4], [4, 3], [4, 4], [3, 7], [3, 8], [4, 7], [4, 8], [6, 5], [6, 6]], // yellow — square eyes, flat mouth (was 2 rows tall and read as a blob next to the legs)
-  [[3, 4], [4, 3], [3, 7], [4, 8], [6, 4], [6, 5], [6, 6], [6, 7]], // red — angry brows, flat wide mouth
-  [[2, 3], [2, 4], [2, 7], [2, 8], [5, 4], [6, 5], [6, 6], [5, 7]], // purple — happy closed eyes, smile
-  [[3, 3], [4, 4], [3, 8], [4, 7], [6, 5], [6, 6]], // green — angry inward brows, flat mouth
-  [[3, 3], [3, 4], [4, 4], [3, 7], [3, 8], [4, 7], [6, 5], [6, 6]], // pink — heart eyes, small mouth
-];
-
 // The six avatar drawings (web/avatars/, made by scripts/avatars/make-avatars.py — the same art the
 // desktop app shows): an open frame per slot and a blink frame shown for an instant every 5.2s,
 // offset per slot so a team never blinks in unison. Avatar 4 laughs with its eyes shut: no blink.
 // Loaded lazily; until they've decoded (or where there's no Image at all, as in the unit tests)
-// the pixel mascot below stands in.
+// a plain disc in the slot color stands in.
 const AVATAR_HAS_BLINK = [true, true, true, false, true, true];
 const AVATAR_BLINK_PERIOD = 5200;
 const AVATAR_BLINK_LENGTH = 160;
@@ -107,37 +74,23 @@ function avatarImage(slot, now) {
   return img.complete && img.naturalWidth ? img : null;
 }
 
-// Draws the mascot centered at (cx, cy), `size` wide/tall, for roster position `colorIndex`
-// (wraps at 6 — a 7th+ agent reuses blue's shape with yellow's face rather than erroring).
-//
-// The cell size is snapped to a whole pixel: at these sprite sizes `size / 12` is rarely an integer
-// (e.g. 40/12 = 3.33), and filling adjacent cells at fractional coordinates makes the browser's
-// anti-aliasing round each row/column slightly differently — the same 12x12 grid ends up reading as
-// a slightly different shape at every non-multiple-of-12 size, which is what made same-shape
-// avatars look inconsistently squashed or stretched next to each other.
-function drawPixelAvatar(ctx, cx, cy, size, colorIndex) {
+// Draws the avatar centered at (cx, cy), `size` wide/tall, for roster position `colorIndex`
+// (wraps at 6).
+function drawAvatar(ctx, cx, cy, size, colorIndex) {
   // A non-finite colorIndex (undefined/NaN — e.g. a caller drawing a node that isn't really an
-  // agent) used to fall through the modulo below to NaN, index AVATAR_FACES out of bounds, and
+  // agent) used to fall through the modulo below to NaN, index the avatars out of bounds, and
   // throw — which silently killed the whole caller's animation loop rather than mis-drawing one
   // sprite. Default to slot 0 instead: one wrong-looking avatar beats a frozen canvas.
   const safe = Number.isFinite(colorIndex) ? colorIndex : 0;
   const n = ((safe % AVATAR_COLORS.length) + AVATAR_COLORS.length) % AVATAR_COLORS.length;
-  // The real avatar when it has loaded; the pixel mascot otherwise.
+  // The real avatar when it has loaded; a disc in the slot color otherwise.
   const img = avatarImage(n, typeof performance !== "undefined" ? performance.now() : 0);
   if (img) {
     ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
     return;
   }
-  const cell = Math.max(1, Math.round(size / AVATAR_GRID));
-  const left = Math.round(cx - (cell * AVATAR_GRID) / 2);
-  const top = Math.round(cy - (cell * AVATAR_GRID) / 2);
-  const px = (r, c) => ctx.fillRect(left + c * cell, top + r * cell, cell, cell);
-
   ctx.fillStyle = AVATAR_COLORS[n];
-  for (let r = 0; r < AVATAR_GRID; r++) {
-    const row = AVATAR_BODY[r];
-    for (let c = 0; c < AVATAR_GRID; c++) if (row[c] === "1") px(r, c);
-  }
-  ctx.fillStyle = AVATAR_INK;
-  for (const [r, c] of AVATAR_FACES[n]) px(r, c);
+  ctx.beginPath();
+  ctx.arc(cx, cy, size / 2, 0, Math.PI * 2);
+  ctx.fill();
 }
