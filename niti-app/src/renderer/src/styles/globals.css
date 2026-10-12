@@ -1,0 +1,303 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Light = the TUI's "obsidian light" neutrals with niti's violet accent. */
+:root {
+  --radius: 0.75rem;
+  --background: #fafafa;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+  --primary: #5a46d8;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f1f1;
+  --secondary-foreground: #171717;
+  --muted: #f1f1f1;
+  --muted-foreground: #5f5f5f;
+  --accent: #ececec;
+  --accent-foreground: #171717;
+  --destructive: #b03a3a;
+  --destructive-foreground: #ffffff;
+  --border: #e3e3e3;
+  --input: #d9d9d9;
+  --ring: #5a46d8;
+  --sidebar: #f3f3f3;
+  --sidebar-foreground: #171717;
+  --sidebar-border: #e3e3e3;
+  --sidebar-accent: #e9e9e9;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-primary: #5a46d8;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-ring: #5a46d8;
+  --success: #2b7a4b;
+  --warning: #8a6212;
+  --info: #1f6f82;
+  --plan: #8a6212;
+  --pink: #a3406e;
+  /* From the avatars' body colours, deepened for text on white. */
+  --agent-1: #1d5fd8;
+  --agent-2: #8a3fd8;
+  --agent-3: #c2410c;
+  --agent-4: #4f46e5;
+  --agent-5: #be123c;
+  --agent-6: #0f766e;
+  --avatar-ink: #171717;
+  --chart-1: var(--primary);
+  --chart-2: var(--agent-5);
+  --chart-3: var(--agent-3);
+  --chart-4: var(--agent-4);
+  --chart-5: var(--agent-2);
+  --grid: rgb(23 23 23 / 0.05);
+}
+
+/* Dark = the TUI's "obsidian" neutrals with niti's violet accent. */
+.dark {
+  --background: #111111;
+  --foreground: #ededed;
+  --card: #161616;
+  --card-foreground: #ededed;
+  --popover: #1a1a1a;
+  --popover-foreground: #ededed;
+  --primary: #9d8cff;
+  --primary-foreground: #0d0b1f;
+  --secondary: #1c1c1c;
+  --secondary-foreground: #ededed;
+  --muted: #1c1c1c;
+  --muted-foreground: #8f8f8f;
+  --accent: #212121;
+  --accent-foreground: #ededed;
+  --destructive: #e5787a;
+  --destructive-foreground: #111111;
+  --border: #262626;
+  --input: #2e2e2e;
+  --ring: #9d8cff;
+  --sidebar: #0a0a0a;
+  --sidebar-foreground: #ededed;
+  --sidebar-border: #1f1f1f;
+  --sidebar-accent: #171717;
+  --sidebar-accent-foreground: #ededed;
+  --sidebar-primary: #9d8cff;
+  --sidebar-primary-foreground: #0d0b1f;
+  --sidebar-ring: #9d8cff;
+  --success: #7ec699;
+  --warning: #e2bd7b;
+  --info: #6fbfd4;
+  --plan: #e2bd7b;
+  --pink: #dc9cba;
+  /* From the avatars' body colours, lifted for text on near-black. */
+  --agent-1: #5b9dff;
+  --agent-2: #c084fc;
+  --agent-3: #fb923c;
+  --agent-4: #8b8cff;
+  --agent-5: #fb7185;
+  --agent-6: #2dd4bf;
+  --avatar-ink: #0a0a0a;
+  --grid: rgb(237 237 237 / 0.035);
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-plan: var(--plan);
+  --color-pink: var(--pink);
+  --color-agent-1: var(--agent-1);
+  --color-agent-2: var(--agent-2);
+  --color-agent-3: var(--agent-3);
+  --color-agent-4: var(--agent-4);
+  --color-agent-5: var(--agent-5);
+  --color-agent-6: var(--agent-6);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --animate-spin-slow: spin 3s linear infinite;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01", "ss03";
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+    user-select: none;
+  }
+  /* Text people read or copy stays selectable. */
+  .selectable,
+  .selectable *,
+  input,
+  textarea,
+  pre,
+  code {
+    user-select: text;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 30%, transparent);
+  }
+}
+
+@layer utilities {
+  .drag {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .dot-grid {
+    background-image: radial-gradient(var(--grid) 1px, transparent 1px);
+    background-size: 18px 18px;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 30%, transparent) transparent;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--muted-foreground) 22%, transparent);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--muted-foreground) 40%, transparent);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* The streaming caret: a block after the last thing an agent is still writing. */
+.streaming-caret > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: var(--primary);
+  animation: niti-caret 1s steps(2, start) infinite;
+}
+@keyframes niti-caret {
+  to {
+    visibility: hidden;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .streaming-caret > :last-child::after {
+    animation: none;
+  }
+}
+
+/* Avatars: the blink frame shows for an instant every 5.2s (each agent offset), and a working
+   agent bobs 1px. Both stop under Reduce motion. */
+.avatar-blink {
+  opacity: 0;
+  animation: niti-blink 5.2s step-end infinite;
+}
+.avatar-working {
+  animation: niti-bob 0.9s steps(2, jump-none) infinite;
+}
+@keyframes niti-blink {
+  0% {
+    opacity: 1;
+  }
+  3% {
+    opacity: 0;
+  }
+}
+@keyframes niti-bob {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-1px);
+  }
+}
+.reduce-motion .avatar-blink,
+.reduce-motion .avatar-working {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .avatar-blink,
+  .avatar-working {
+    animation: none;
+  }
+}
+
+/* Transcript rows fade in on mount with CSS — no JS animation per row. Off-screen rows skip
+   layout and paint entirely. */
+.row-in {
+  animation: niti-row-in 160ms ease-out both;
+}
+@keyframes niti-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 28px;
+}
+.reduce-motion .row-in {
+  animation: none;
+}
