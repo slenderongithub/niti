@@ -40,10 +40,14 @@ Go/Bubbletea terminal app (`tui/`) with none of this in it.
 
 - We use `shadcn/ui` for all interactive components (`niti-app/components.json`; primitives in
   `niti-app/src/renderer/src/components/ui`).
-- **Rule 1:** Before creating a custom UI element, use the shadcn MCP to check if an official primitive exists (e.g., Button, Card, Dialog, Sheet, Sidebar).
-- **Rule 2:** Never write raw Tailwind buttons, inputs, or modals from scratch. Always install and use the shadcn equivalent.
+- **Rule 0:** Any UI design work follows the design workflow in `~/.claude/rules/ui-design.md`:
+  `ui-ux-pro-max` and `design-taste-frontend` for direction, the shadcn and Magic UI MCPs for
+  components, Context7 for library docs. Here they refine and extend the graphite design
+  language rather than replace it.
+- **Rule 1:** Before creating a custom UI element, use the shadcn MCP to check if an official primitive exists (e.g., Button, Card, Dialog, Sheet, Sidebar). For animated or showcase elements (backgrounds, text effects, marquees, special buttons), also check the Magic UI MCP.
+- **Rule 2:** Never write raw Tailwind buttons, inputs, or modals from scratch. Always install and use the shadcn equivalent. Magic UI components are allowed for visual flair on top of shadcn primitives, never as a replacement for them. Animate with `motion`.
 - **Rule 3:** Maintain compound component structures. If using a Card, use `CardHeader`, `CardTitle`, and `CardContent` rather than arbitrary `div`s.
-- **Rule 4:** Stick to the established theme. Do not introduce random hex codes; use our Tailwind semantic variables (e.g., `bg-primary`, `text-muted-foreground`). The tokens live in `niti-app/src/renderer/src/styles/globals.css` (the TUI's graphite / graphite light palettes).
+- **Rule 4:** Use our Tailwind semantic variables (e.g., `bg-primary`, `text-muted-foreground`), never raw hex codes in components, including inside Magic UI components (restyle them to the tokens). The tokens live in `niti-app/src/renderer/src/styles/globals.css` (the TUI's graphite / graphite light palettes). The palette may evolve: a new color or a palette change is proposed with its reason and lands as a semantic variable in `globals.css`, in both light and dark.
 - **Rule 5:** Only use `lucide-react` for icons.
 
 # Checking the desktop app
