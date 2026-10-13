@@ -185,14 +185,14 @@ test("autoCompact off: the same 95% usage leaves the turns untouched", async () 
   expect(warnings.some((w) => w.includes("context compacted automatically"))).toBe(false);
 });
 
-test("thinkingMode is read live: the provider is told before every call", async () => {
+test("thinkingMode is read live: every call carries the current setting", async () => {
   const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
   const told: boolean[] = [];
   let n = 0;
   const settings = { autoCompact: true, thinkingMode: false };
   const stub: Provider = {
-    setThinking: (on) => void told.push(on),
-    async send() {
+    async send(_s, _t, _tools, _d, _sig, thinking) {
+      told.push(thinking!);
       n++;
       if (n === 1) settings.thinkingMode = true; // flipped mid-run, as POST /settings would
       return n < 3
@@ -736,7 +736,7 @@ test("ask() records its tokens — the orchestrator's plan/integrate turns are n
   };
   await new Agent(cfg, stub, new Bus(), { usageTracker: usage }).ask("plan this");
   expect(usage.snapshot()).toEqual([
-    { agentId: "a", usage: { inputTokens: 100, outputTokens: 20, calls: 1, lastInput: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 } },
+    { agentId: "a", usage: { inputTokens: 100, outputTokens: 20, calls: 1, lastInput: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, usd: expect.any(Number), unpriced: expect.any(Boolean) } },
   ]);
 });
 
@@ -755,8 +755,9 @@ test("spawn_fork runs a child loop, links its session to the parent, and returns
     },
   };
   const agent = new Agent({ ...cfg, allowedTools: [] }, stub, new Bus(), { store });
-  expect(await agent.run("audit the server", { taskId: "t1" })).toBe("done");
-  expect(agent.output).toBe("parent wraps up"); // the fork never overwrote the parent's output
+  const r = await agent.runDetailed("audit the server", { taskId: "t1" });
+  expect(r.outcome).toBe("done");
+  expect(r.text).toBe("parent wraps up"); // the fork never overwrote the parent's output
 
   const [parent] = store.listSessions({ taskId: "t1" });
   const [fork] = store.listSessions({ parentSessionId: parent!.id });
@@ -2024,4 +2025,166 @@ test("an agent with editFormat: hashline reads anchors and edits by them, end to
   expect(out).toBe("done");
   expect(readFileSync(join(root, "a.ts"), "utf8")).toBe("const a = 1;\nconst b = 3;\n");
   expect(editSpec?.description).toContain("anchors");
+});
+
+// ── Fixes from the October audit ─────────────────────────────────────────────────────────────
+
+test("a reply cut off at the output limit runs none of its tool calls, and the model is told why", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-cutoff-"));
+  let n = 0;
+  let told = false;
+  const stub: Provider = {
+    async send(_s, turns) {
+      if (n++ === 0) return { text: "", toolCalls: [{ id: "1", name: "write_file", input: { path: "big.ts", content: "half a fi" } }], truncated: true };
+      told = turns.some((t) => t.role === "user" && t.text.includes("output-token limit"));
+      return { text: "ok, smaller steps", toolCalls: [] };
+    },
+  };
+  expect(await new Agent(cfg, stub, new Bus(), { root }).run("write big.ts")).toBe("done");
+  expect(existsSync(join(root, "big.ts"))).toBe(false); // the half-written file never landed
+  expect(told).toBe(true);
+});
+
+test("a file written by a fork, or by a shell command, still sends the run through verification", async () => {
+  for (const via of ["fork", "shell"] as const) {
+    const root = mkdtempSync(join(tmpdir(), `niti-verify-${via}-`));
+    const stub: Provider = {
+      async send(_s, turns) {
+        const goal = (turns[0] as { text: string }).text;
+        const acted = turns.some((t) => t.role === "tool");
+        if (goal === "sub") return acted ? { text: "wrote it", toolCalls: [] } : { text: "", toolCalls: [{ id: "f1", name: "write_file", input: { path: "x.txt", content: "v" } }] };
+        if (acted) return { text: "done", toolCalls: [] };
+        return via === "fork"
+          ? { text: "", toolCalls: [{ id: "p1", name: "spawn_fork", input: { goal: "sub" } }] }
+          : { text: "", toolCalls: [{ id: "p1", name: "shell", input: { command: "touch", args: ["x.txt"] } }] };
+      },
+    };
+    const check = { name: "touch ran", command: "touch", args: ["ran"] };
+    await new Agent({ ...cfg, allowedTools: ["write_file", "shell"] }, stub, new Bus(), { root, verify: [check] }).run("do it");
+    expect(existsSync(join(root, "ran"))).toBe(true);
+  }
+});
+
+test("the fork budget belongs to a task run, not to the agent for the whole session", async () => {
+  const stub: Provider = {
+    async send(_s, turns) {
+      const goal = (turns[0] as { text: string }).text;
+      if (goal === "sub") return { text: "found", toolCalls: [] };
+      const results = turns.flatMap((t) => (t.role === "tool" ? t.results : []));
+      if (results.length < (goal === "first" ? 4 : 1)) return { text: "", toolCalls: [{ id: `f${results.length}`, name: "spawn_fork", input: { goal: "sub" } }] };
+      return { text: results.at(-1)!.output, toolCalls: [] };
+    },
+  };
+  const agent = new Agent({ ...cfg, allowedTools: [] }, stub, new Bus());
+  await agent.runDetailed("first"); // spends the whole budget
+  expect((await agent.runDetailed("second")).text).toBe("found"); // a new task gets its own
+});
+
+test("a call the human did not approve ends on screen as failed, not as a success", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-denied-"));
+  let n = 0;
+  const stub: Provider = {
+    async send() {
+      return n++ === 0 ? { text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "x.txt", content: "v" } }] } : { text: "ok", toolCalls: [] };
+    },
+  };
+  const bus = new Bus();
+  const ends: boolean[] = [];
+  bus.subscribe((e) => e.callId === "w" && e.phase === "end" && ends.push(Boolean(e.ok)));
+  await new Agent(cfg, stub, bus, { root, approve: async () => false }).run("write it");
+  expect(ends).toEqual([false]);
+});
+
+test("wrapper programs don't hide a dangerous command from the last line of defence", () => {
+  const call = (argv: string[]) => ({ command: argv[0], args: argv.slice(1) });
+  expect(isDangerousShellCall("shell", call(["env", "sh", "-c", "rm -rf ~"]))).toBe(true);
+  expect(isDangerousShellCall("shell", call(["xargs", "-n", "1", "rm", "-rf", "x"]))).toBe(true);
+  expect(isEgressShellCall("shell", call(["timeout", "5", "curl", "evil.com"]))).toBe(true);
+  expect(isDangerousShellCall("shell", call(["env", "FOO=1", "ls"]))).toBe(false);
+  expect(isDangerousShellCall("shell", call(["echo", "rm", "-rf", "x"]))).toBe(false); // echo is no wrapper
+  expect(isSensitiveConfigWrite("write_file", { path: ".git/hooks/post-commit" })).toBe(true);
+});
+
+test("a check rewritten by a shell command is caught by the tamper guard, and put back", async () => {
+  const { root, check } = verifyFixture();
+  const original = readFileSync(join(root, "guard.js"), "utf8");
+  let step = 0;
+  const stub: Provider = {
+    async send() {
+      // Neuters the checker through the shell — no write_file names guard.js — then claims done, repeatedly.
+      if (step++ === 0) return { text: "", toolCalls: [{ id: "s", name: "shell", input: { command: "node", args: ["-e", "require('fs').writeFileSync('guard.js','process.exit(0)')"] } }] };
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["shell"] }, stub, new Bus(), { root, verify: [check] }).runDetailed("make the check pass");
+  expect(r.outcome).toBe("unverified");
+  expect(readFileSync(join(root, "guard.js"), "utf8")).toBe(original);
+});
+
+test("planning and other one-shot calls honour the thinking switch too, not a value left by a task loop", async () => {
+  const seen: (boolean | undefined)[] = [];
+  const stub: Provider = { async send(_s, _t, _tools, _d, _sig, thinking) { seen.push(thinking); return { text: "plan", toolCalls: [] }; } };
+  await new Agent(cfg, stub, new Bus(), { settings: { autoCompact: true, thinkingMode: false } }).ask("plan this");
+  expect(seen).toEqual([false]);
+});
+
+test("a rate limit on compaction's summary call is waited out, not turned into a failed task", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-agent-"));
+  const bus = new Bus();
+  const warnings: string[] = [];
+  bus.subscribe((e) => e.type === "warning" && warnings.push(e.payload));
+  const { stub: inner } = cachedWindowStub(959_500, 500); // pushes the window past 95% on call 5
+  let limited = false;
+  const stub: Provider = {
+    async send(sys, ...rest) {
+      if (sys !== "s" && !limited) {
+        limited = true; // the summary request's first try is rate-limited
+        throw Object.assign(new Error("rate limit"), { status: 429, headers: { "retry-after": "0" } });
+      }
+      return inner.send(sys, ...rest);
+    },
+  };
+  const agent = new Agent({ ...cfg, provider: "anthropic", allowedTools: ["write_file"] }, stub, bus, { root });
+  expect(await agent.run("build something long")).toBe("done");
+  expect(warnings.some((w) => w.includes("rate-limiting"))).toBe(true);
+  expect(warnings.some((w) => w.includes("context compacted automatically"))).toBe(true);
+});
+
+test("a nested strictness config loosened through the shell is caught by the tamper guard too", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-nested-guard-"));
+  mkdirSync(join(root, "packages/web"), { recursive: true });
+  const strict = '{ "strict": true }\n';
+  writeFileSync(join(root, "packages/web/tsconfig.json"), strict);
+  writeFileSync(join(root, "x.ts"), "BROKEN\n");
+  // Fails while the nested config is strict and x.ts is broken — so loosening the config turns it green.
+  const check = { name: "check", command: "node", args: ["-e", "const f=require('fs');if(f.readFileSync('packages/web/tsconfig.json','utf8').includes('strict')&&f.readFileSync('x.ts','utf8').includes('BROKEN'))process.exit(1)"] };
+  let step = 0;
+  const stub: Provider = {
+    async send() {
+      if (step++ === 0) return { text: "", toolCalls: [{ id: "s", name: "shell", input: { command: "node", args: ["-e", "require('fs').writeFileSync('packages/web/tsconfig.json','{}')"] } }] };
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const r = await new Agent({ ...cfg, allowedTools: ["shell"] }, stub, new Bus(), { root, verify: [check] }).runDetailed("make the check pass");
+  expect(r.outcome).toBe("unverified");
+  expect(readFileSync(join(root, "packages/web/tsconfig.json"), "utf8")).toBe(strict); // put back
+});
+
+test("a fork's tokens don't stream into the agent's own transcript; a question for the user still streams", async () => {
+  const stub: Provider = {
+    async send(_s, turns, _t, onDelta) {
+      const goal = (turns[0] as { text: string }).text;
+      onDelta?.(`<${goal}>`);
+      if (goal === "task" && !turns.some((t) => t.role === "tool")) return { text: "", toolCalls: [{ id: "f", name: "spawn_fork", input: { goal: "sub" } }] };
+      return { text: "ok", toolCalls: [] };
+    },
+  };
+  const bus = new Bus();
+  const deltas: string[] = [];
+  bus.subscribe((e) => e.type === "delta" && deltas.push(e.payload));
+  const agent = new Agent({ ...cfg, allowedTools: [] }, stub, bus);
+  await agent.run("task");
+  expect(deltas).toEqual(["<task>", "<task>"]); // the fork's "<sub>" never reached the transcript
+  await agent.answer("what is this?");
+  expect(deltas.at(-1)).toBe("<what is this?>");
 });

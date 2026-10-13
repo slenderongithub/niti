@@ -16,7 +16,7 @@ export interface AgentMessage {
   time: number;
 }
 
-export interface PostResult {
+interface PostResult {
   ok: boolean;
   reason?: string;
   delivered: string[]; // agent ids the message reached

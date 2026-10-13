@@ -261,11 +261,11 @@ test("POST /worktree/merge with a `files` body routes to the selective merge, no
   const { engine, h } = setup();
   let wholeRunCalled = false;
   let filesReceived: string[] | undefined;
-  (engine as any).mergeWorktree = async () => {
-    wholeRunCalled = true;
-    return { ok: false, message: "no active worktree" };
-  };
-  (engine as any).mergeWorktreeFiles = async (files: string[]) => {
+  (engine as any).mergeWorktree = async (files?: string[]) => {
+    if (!files) {
+      wholeRunCalled = true;
+      return { ok: false, message: "no active worktree" };
+    }
     filesReceived = files;
     return { ok: true, message: `merged ${files.length}` };
   };

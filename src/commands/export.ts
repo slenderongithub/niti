@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type { Engine } from "../engine.ts";
 import type { Task } from "../orchestrator/task.ts";
 import type { Turn } from "../providers/provider.ts";
-import { costOf } from "../providers/pricing.ts";
 import { resumeConversation } from "../session.ts";
 import { diffPatch } from "../orchestrator/worktree.ts";
 
@@ -22,11 +21,7 @@ function renderTurn(t: Turn): string {
   if (t.role === "user") return `> **user:** ${t.text}`;
   if (t.role === "assistant") {
     const lines = t.text ? [`> **assistant:** ${t.text}`] : [];
-    for (const c of t.toolCalls) {
-      const { diff, ...rest } = c.input as Record<string, unknown> & { diff?: unknown };
-      lines.push(`> - \`${c.name}\`(${JSON.stringify(rest)})`);
-      if (typeof diff === "string" && diff) lines.push("```diff\n" + diff + "\n```");
-    }
+    for (const c of t.toolCalls) lines.push(`> - \`${c.name}\`(${JSON.stringify(c.input)})`);
     return lines.join("\n");
   }
   return t.results.map((r) => `> - \`${r.name}\` → ${r.output.slice(0, 300).replace(/\n/g, " ")}`).join("\n");
@@ -60,12 +55,9 @@ export async function buildExportReport(engine: Engine): Promise<{ path: string;
   let total = 0;
   let complete = true;
   for (const { agentId, usage } of engine.usage.snapshot()) {
-    const cfg = engine.configs.find((c) => c.id === agentId);
-    if (!cfg) continue;
-    const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens);
-    total += usd;
-    if (!priced) complete = false;
-    lines.push(`- ${agentId}: ${usage.inputTokens}in ${usage.outputTokens}out — $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}`);
+    total += usage.usd;
+    if (usage.unpriced) complete = false;
+    lines.push(`- ${agentId}: ${usage.inputTokens}in ${usage.outputTokens}out — $${usage.usd.toFixed(4)}${usage.unpriced ? " (unpriced)" : ""}`);
   }
   lines.push("", `**Total:** $${total.toFixed(4)}${complete ? "" : "+"}`, "");
 

@@ -587,31 +587,37 @@ function centreOn(wx, wy, k = cam.tk) {
   cam.tcx = wx + (W / 2 - (free.x0 + free.x1) / 2) / k;
   cam.tcy = wy + (H / 2 - (free.y0 + free.y1) / 2) / k;
 }
-function fitTarget() {
+// The box every node (with its radius) sits in.
+function bounds() {
   let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
   for (const n of nodes) { a = Math.min(a, n.x - n.r); b = Math.min(b, n.y - n.r); c = Math.max(c, n.x + n.r); d = Math.max(d, n.y + n.r); }
+  return { a, b, c, d };
+}
+function fitTarget() {
+  const { a, b, c, d } = bounds();
   const vw = Math.max(120, free.x1 - free.x0), vh = Math.max(120, free.y1 - free.y0);
   centreOn((a + c) / 2, (b + d) / 2, Math.min(4, Math.max(0.04, 0.92 * Math.min(vw / (c - a || 1), vh / (d - b || 1)))));
 }
-// The target is recomputed every frame until the layout stops moving — a one-shot target computed
-// while the sim is still hot (which is exactly what "Re-center" does) is stale before you arrive.
-function fit(animate = true) {
-  if (!nodes.length) return;
+// Starts framing the graph on `target`, which is then recomputed every frame until the layout stops
+// moving — a one-shot target computed while the sim is still hot (which is exactly what "Re-center"
+// does) is stale before you arrive. false when there is nothing to frame.
+function frame(target, animate) {
+  if (!nodes.length) return false;
   glide = null;
-  measureFree(); fitTarget(); autoFit = true;
+  measureFree(); target();
   if (!animate) { cam.cx = cam.tcx; cam.cy = cam.tcy; cam.k = cam.tk; }
+  return true;
+}
+function fit(animate = true) {
+  if (frame(fitTarget, animate)) autoFit = true;
 }
 // Same idea as fitTarget, but holds the zoom the user already set — only the centre moves.
 function recenterTarget() {
-  let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
-  for (const n of nodes) { a = Math.min(a, n.x - n.r); b = Math.min(b, n.y - n.r); c = Math.max(c, n.x + n.r); d = Math.max(d, n.y + n.r); }
+  const { a, b, c, d } = bounds();
   centreOn((a + c) / 2, (b + d) / 2, cam.k);
 }
 function recenter(animate = true) {
-  if (!nodes.length) return;
-  glide = null;
-  measureFree(); recenterTarget(); autoCentre = true;
-  if (!animate) { cam.cx = cam.tcx; cam.cy = cam.tcy; cam.k = cam.tk; }
+  if (frame(recenterTarget, animate)) autoCentre = true;
 }
 function pickNode(sx, sy) {
   const w = toWorld(sx, sy); let best = -1, bd = Infinity;
@@ -790,12 +796,6 @@ function buildLegend(items, title) {
     items.slice(0, 14).map((it) => `<span class="k"><i style="background:${esc(it.color)}"></i>${esc(it.label)}</span>`).join("");
 }
 function setConn(text, cls) { const c = q("conn"); c.textContent = text; c.className = `chip conn ${cls}`.trim(); }
-// Quotes too: buildLegend interpolates a colour into a style="…" attribute, where escaping only
-// angle brackets still lets a crafted value close the attribute. Agent ids and task text reach
-// this page from the model, and the page's URL carries the token.
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-}
 
 // A theme switch (this page's own dropdown, the TUI's ctrl+t, or another open tab) re-reads the CSS
 // vars and re-derives every color, then repaints in place — group/status colors were assigned once

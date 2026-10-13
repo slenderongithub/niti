@@ -12,22 +12,25 @@ const dirname = posix.dirname;
 // to files that actually exist in the tree. Good enough to draw, and it never needs the project to
 // compile. Powers GET /graph and the TUI's project graph view.
 
-export interface FileGraph {
+interface FileGraph {
   nodes: { id: string; label: string; group: string }[];
   edges: { from: string; to: string }[];
 }
 
 const SRC_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go"]);
-// Build output and dependencies, plus niti's own sibling product and archive: `niti-app/` is the
-// desktop app (its own product, sharing this tree) and `old-tech/` is the archived v1 TUI. Neither
-// is part of the CLI, so neither belongs in the CLI's dependency graph or in what its agents are
-// told the project contains. Listed by name rather than inferred, because "which sibling
-// directories are their own product" is a fact about this repo that nothing in the tree states —
-// and matched on any path segment, so the names must be ones a user's own project won't use
-// (a generic `desktop` or `app` here would hide that folder in every project niti runs on).
-const IGNORE = new Set([
+// Build output and dependencies, plus niti's own sibling product: `niti-app/` is the desktop app
+// (its own product, sharing this tree), not part of the CLI, so it belongs neither in the CLI's
+// dependency graph nor in what its agents are told the project contains. Listed by name rather
+// than inferred, because "which sibling directories are their own product" is a fact about this
+// repo that nothing in the tree states — and matched on any path segment, so the name must be one
+// a user's own project won't use (a generic `desktop` or `app` here would hide that folder in
+// every project niti runs on).
+// The one list of what is not the project: the graph, the Files panel, the agents' search tools
+// (tools.ts) and the file watcher (watch.ts) all read it, so none of them can disagree about it.
+export const IGNORE = new Set([
   "node_modules", ".git", "dist", "build", ".niti", "vendor", ".next", "out", "target", "coverage",
-  "old-tech", "niti-app",
+  ".nuxt", ".svelte-kit", "__pycache__", ".venv", "venv", ".cache", ".turbo", ".output", ".gradle", ".idea",
+  "niti-app",
 ]);
 
 // True when any segment of a project-relative path sits in IGNORE. The walk applies IGNORE as it
@@ -60,27 +63,12 @@ export function trackedFiles(root: string, includeUntracked = false): string[] |
 
 // Every file in the project a person would browse — the TUI's Files panel and @-mentions. git's
 // list when there is one (tracked + untracked, .gitignore honoured), else a walk; either way held
-// to IGNORE (rule 3 in CLAUDE.md: niti-app/, old-tech/, node_modules… never appear) and bounded.
+// to IGNORE (rule 3 in CLAUDE.md: niti-app/, node_modules… never appear) and bounded.
 export function projectFiles(root: string, max = 5000): { files: string[]; truncated: boolean } {
   let files = trackedFiles(root, true);
   if (!files) {
     files = [];
-    const walkAll = (rel: string) => {
-      if (files!.length > max) return;
-      let entries;
-      try {
-        entries = readdirSync(join(root, rel), { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const e of entries) {
-        if (e.name === ".git" || IGNORE.has(e.name)) continue;
-        const child = rel ? `${rel}/${e.name}` : e.name;
-        if (e.isDirectory()) walkAll(child);
-        else files!.push(child);
-      }
-    };
-    walkAll("");
+    walk(root, "", files, max + 1, () => true, true); // one past max, so truncation shows
   }
   const kept = files.filter((f) => !ignored(f)).sort();
   return { files: kept.slice(0, max), truncated: kept.length > max };
@@ -95,7 +83,7 @@ export const isGraphFile = (f: string): boolean =>
 export function buildFileGraph(root: string, maxFiles = 400, files?: string[]): FileGraph {
   if (!files) {
     files = [];
-    walk(root, "", files, maxFiles);
+    walk(root, "", files, maxFiles, isGraphFile, false);
   } else {
     files = files.filter((f) => !ignored(f)).filter(isGraphFile).slice(0, maxFiles);
   }
@@ -127,8 +115,10 @@ export function buildFileGraph(root: string, maxFiles = 400, files?: string[]): 
   return { nodes, edges };
 }
 
-function walk(root: string, rel: string, out: string[], max: number): void {
-  if (out.length >= max) return;
+// Project files under `rel`, depth first, at most `max`: never into an IGNORE'd name, and
+// past dotfiles too unless `dotfiles`. `keep` decides which files are listed — the graph keeps only
+// isGraphFile's (including a nested go.mod, which findGoModule needs to resolve Go imports).
+function walk(root: string, rel: string, out: string[], max: number, keep: (path: string) => boolean, dotfiles: boolean): void {
   let entries;
   try {
     entries = readdirSync(join(root, rel), { withFileTypes: true });
@@ -137,16 +127,10 @@ function walk(root: string, rel: string, out: string[], max: number): void {
   }
   for (const e of entries) {
     if (out.length >= max) return;
-    if (e.name.startsWith(".") && e.name !== ".") continue;
+    if (IGNORE.has(e.name) || (!dotfiles && e.name.startsWith("."))) continue;
     const child = rel ? `${rel}/${e.name}` : e.name;
-    if (e.isDirectory()) {
-      if (!IGNORE.has(e.name)) walk(root, child, out, max);
-    } else if (e.name === "go.mod" || (SRC_EXT.has(extname(e.name)) && !e.name.endsWith(".d.ts"))) {
-      // go.mod is collected but is not a graph node — findGoModule needs to see it to resolve
-      // a package import to a directory, and a *nested* module (tui/go.mod here) was never in the
-      // walk output at all, so every Go file rendered as an unconnected island.
-      out.push(child);
-    }
+    if (e.isDirectory()) walk(root, child, out, max, keep, dotfiles);
+    else if (keep(child)) out.push(child);
   }
 }
 

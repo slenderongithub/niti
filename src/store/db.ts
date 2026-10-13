@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
-export const DEFAULT_DB = ".niti/niti.db";
+const DEFAULT_DB = ".niti/niti.db";
 
 // Schema for the persistence substrate: sessions → messages → parts, plus per-write checkpoints.
 // A session is a child concept a task *has* (task_id), not a replacement for Task/TaskNode — the
@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS parts (
 );
 CREATE INDEX IF NOT EXISTS parts_message ON parts(message_id, seq);
 
--- One row per file mutation: the content BEFORE the write (NULL = the file didn't exist).
+-- One row per file mutation: the content BEFORE the write (NULL = the file didn't exist), plus
+-- after_hash (added by migrate()) — what the write left, so a rewind can tell a file edited since.
 CREATE TABLE IF NOT EXISTS checkpoints (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -107,18 +108,38 @@ CREATE TABLE IF NOT EXISTS audit_log (
 `;
 
 // Bump when a statement is added to migrate(). A fresh database is stamped with the current value.
-const USER_VERSION = 1;
+const USER_VERSION = 2;
+
+// Everything niti generates under .niti/. agents.yaml is meant to be shared and committed; the rest
+// is per-machine state, and niti.db holds full transcripts, every written file and the audit log.
+const GITIGNORE = "# niti's own state: per machine, and it holds transcripts. agents.yaml is meant to be committed.\nniti.db*\nsession.json\ncore.log*\nlogs/\nreports/\nworktrees/\n*.tmp\n";
 
 // Open (creating if needed) and migrate. ":memory:" is honoured for tests.
 export function openDb(path: string = DEFAULT_DB): Database {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  if (path !== ":memory:") {
+    mkdirSync(dirname(path), { recursive: true });
+    const ignore = join(dirname(path), ".gitignore");
+    if (!existsSync(ignore)) writeFileSync(ignore, GITIGNORE);
+  }
   const db = new Database(path, { create: true });
-  db.exec("PRAGMA journal_mode = WAL;"); // concurrent agents write from one process; WAL keeps reads unblocked
-  db.exec("PRAGMA foreign_keys = ON;");
   // WAL keeps *readers* unblocked, but two writers still collide — and two niti processes on one
   // project (a TUI session plus a scripted run) failed instantly with "database is locked". This
   // is the stdlib answer: wait for the other writer instead of throwing.
   db.exec("PRAGMA busy_timeout = 5000;");
+  // Concurrent agents write from one process; WAL keeps reads unblocked. Switching to it needs a
+  // moment of exclusive access that SQLite does not wait for (busy_timeout doesn't cover it), so two
+  // processes opening a fresh database raced here. WAL is a property of the file — set once, kept —
+  // so that first open is the only window, and a short retry covers it.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      db.exec("PRAGMA journal_mode = WAL;");
+      break;
+    } catch (err) {
+      if (attempt >= 100 || !/locked|busy/i.test(String(err))) throw err;
+      Bun.sleepSync(20);
+    }
+  }
+  db.exec("PRAGMA foreign_keys = ON;");
   migrate(db);
   return db;
 }
@@ -127,7 +148,13 @@ export function openDb(path: string = DEFAULT_DB): Database {
 // therefore the whole product) down: a v0.0.1 database that predates a column used to make every
 // later build unopenable, with "delete .niti/niti.db" — losing all history and every undo
 // checkpoint — as the only recovery. A failed statement is reported and skipped.
+// One IMMEDIATE transaction: two processes opening a fresh database at once (a TUI session and a
+// scripted run) both read user_version 0, and the second ALTER then failed on a duplicate column.
 function migrate(db: Database): void {
+  db.transaction(() => migrateLocked(db)).immediate();
+}
+
+function migrateLocked(db: Database): void {
   const from = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
   for (const stmt of SCHEMA.split(";").map((s) => s.trim()).filter(Boolean)) {
     try {
@@ -136,7 +163,8 @@ function migrate(db: Database): void {
       console.error(`niti: schema step skipped (${err instanceof Error ? err.message : err})`);
     }
   }
-  // Future ALTER TABLEs go here, guarded by `from`:
-  //   if (from < 2) db.exec("ALTER TABLE sessions ADD COLUMN foo TEXT");
+  // ALTER TABLEs go here, guarded by `from` — and the column stays out of SCHEMA, so a fresh database
+  // (from = 0) gets it here too instead of failing on a duplicate.
+  if (from < 2) db.exec("ALTER TABLE checkpoints ADD COLUMN after_hash TEXT");
   if (from !== USER_VERSION) db.exec(`PRAGMA user_version = ${USER_VERSION}`);
 }

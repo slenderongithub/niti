@@ -1,23 +1,18 @@
 import { lstatSync, readdirSync, watch, type FSWatcher } from "node:fs";
 import { join } from "node:path";
 import { normalizePath } from "./permissions.ts";
+import { ignored } from "./graph/filegraph.ts";
 
 // Watch the project for edits made outside niti (a human in their editor, a git checkout, a
 // formatter). Emits paths only — nothing is stuffed into any agent's context automatically, which
 // would quietly inflate every prompt; a human or the next planning pass decides what a change means.
 
-// Directories whose churn is never interesting.
-// ponytail: a fixed list instead of parsing .gitignore, and no debounce — one event per fs
-// notification. Add debouncing/gitignore parsing if watcher noise ever becomes a real problem.
-const IGNORED_SEGMENTS = new Set([".git", "node_modules", ".niti", "dist", "build", ".next", "target", "vendor"]);
+// What is never interesting is the project-wide IGNORE set (filegraph.ts).
+// ponytail: no debounce — one event per fs notification. Add it if watcher noise becomes a real problem.
 
 // How long an agent's own write suppresses the echo it causes. Long enough for the fs notification
 // to arrive, short enough that a human editing the same file right after still registers.
 const SELF_WRITE_TTL_MS = 2_000;
-
-export function isIgnored(relPath: string): boolean {
-  return relPath.split(/[\\/]/).some((segment) => IGNORED_SEGMENTS.has(segment));
-}
 
 export interface ProjectWatcher {
   markSelfWrite(relPath: string): void; // called just before an agent writes, so it doesn't hear its own echo
@@ -27,7 +22,7 @@ export interface ProjectWatcher {
 export function watchProject(root: string, onChange: (relPath: string) => void): ProjectWatcher {
   const selfWrites = new Map<string, number>();
   const report = (rel: string) => {
-    if (!rel || isIgnored(rel)) return;
+    if (!rel || ignored(rel)) return;
     const at = selfWrites.get(rel);
     if (at !== undefined && Date.now() - at < SELF_WRITE_TTL_MS) return; // our own write, echoing back
     onChange(rel);
@@ -73,7 +68,7 @@ const MAX_WATCHED_DIRS = 4000;
 function watchTree(root: string, report: (rel: string) => void, watchers: FSWatcher[]): void {
   const watched = new Set<string>();
   const add = (rel: string, announce: boolean) => {
-    if (watched.has(rel) || watched.size >= MAX_WATCHED_DIRS || (rel && isIgnored(rel))) return;
+    if (watched.has(rel) || watched.size >= MAX_WATCHED_DIRS || (rel && ignored(rel))) return;
     let entries;
     try {
       watchers.push(

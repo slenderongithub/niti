@@ -16,6 +16,8 @@ import { runProject, resumeProject, type RunnerDeps, type RunResult } from "./or
 import type { Exchange } from "./orchestrator/planner.ts";
 
 const HISTORY_MAX = 6; // exchanges the planner sees — enough for follow-ups, bounded so planning stays cheap
+// A merge or discard mid-run would commit half-done work, or delete the folder the agents are writing in.
+const RUNNING = { ok: false, message: "a task is running in the worktree — cancel it first, or wait for it to finish" };
 import { EventHub } from "./server/events.ts";
 import type { Provider } from "./providers/provider.ts";
 import type { McpTools } from "./mcp/mcp.ts";
@@ -23,13 +25,12 @@ import type { LspRegistry } from "./lsp/registry.ts";
 import type { SessionStore } from "./store/session-store.ts";
 import type { AuditLog } from "./store/audit-log.ts";
 import { AUTO_RULES, type PermissionRules } from "./permissions.ts";
-import { costOf } from "./providers/pricing.ts";
 import { watchProject, type ProjectWatcher } from "./watch.ts";
 import { TOOL_GUIDANCE, HASHLINE_GUIDANCE } from "./tools/tools.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
 import { isGitRepo, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
 
-export interface EngineOptions {
+interface EngineOptions {
   configs: AgentConfig[];
   makeProvider: (cfg: AgentConfig) => Provider;
   root?: string;
@@ -54,6 +55,9 @@ export interface EngineOptions {
   repoMap?: boolean;
   // false → shell commands run without the OS sandbox (src/sandbox.ts). On by default.
   sandbox?: boolean;
+  // Saves the roster after a live model switch, so it survives a restart (saveAgents, from the
+  // server/CLI). Absent → switches are live only, which is what a test-built engine wants.
+  persist?: (configs: AgentConfig[]) => void;
 }
 
 // The Engine wires the whole multi-agent runtime: agents (with a live messenger so they can talk to
@@ -87,6 +91,7 @@ export class Engine {
   unapproved = 0;
 
   private makeProvider: (cfg: AgentConfig) => Provider;
+  private persist?: (configs: AgentConfig[]) => void;
   private byId = new Map<string, Agent>();
   // agent id → the systemPrompt as written in agents.yaml, before any suffix was appended.
   private declaredPrompts = new Map<string, string>();
@@ -98,6 +103,7 @@ export class Engine {
 
   constructor(opts: EngineOptions) {
     this.makeProvider = opts.makeProvider;
+    this.persist = opts.persist;
     this.store = opts.store;
     this.audit = opts.audit;
     this.approvals = new ApprovalQueue(opts.audit);
@@ -233,7 +239,7 @@ export class Engine {
     }
 
     // Fan every source into the one hub the TUI/dashboard consume.
-    this.bus.subscribe((e) => this.hub.publish({ kind: "agent_event", event: e, time: e.time }));
+    this.bus.subscribe((e) => this.hub.publish({ kind: "agent_event", event: e, time: e.time }, e.type !== "delta" && e.type !== "tool_output"));
     this.messageBus.subscribe((m) => {
       // Notes get their own table (current state, latest write wins) — bus_messages stays a pure
       // log of every message ever sent, and a note isn't one of those.
@@ -261,10 +267,8 @@ export class Engine {
     return this.busy;
   }
 
-  pendingApprovals(): { id: number; agentId: string; tool: string; input: Record<string, unknown> }[] {
-    const cur = this.approvals.current();
-    const batch = this.approvals.currentBatch() ?? (cur ? [cur] : []);
-    return batch.map((r) => ({ id: r.id, agentId: r.agentId, tool: r.tool, input: r.input }));
+  pendingApprovals(): { id: number; agentId: string; tool: string; input: Record<string, unknown>; dangerous: boolean }[] {
+    return this.approvals.queued().map((r) => ({ id: r.id, agentId: r.agentId, tool: r.tool, input: r.input, dangerous: r.forceAsk }));
   }
 
   // Run a goal end-to-end: plan → schedule → integrate. Emits session start/end and persists tasks.
@@ -304,7 +308,10 @@ export class Engine {
         // Scoped to the agent that owns the task, so a failed-over task never replays another
         // agent's transcript as its own history.
         priorTurns: store
-          ? (taskId) => resumeConversation(store, taskId, this.orch.all.find((t) => t.id === taskId)?.assignedTo)
+          ? (taskId) => {
+              const owner = this.orch.all.find((t) => t.id === taskId)?.assignedTo;
+              return resumeConversation(store, taskId, owner, owner ? this.byId.get(owner)?.config.provider : undefined);
+            }
           : undefined,
       }),
     );
@@ -397,6 +404,7 @@ export class Engine {
   async discardWorktree(): Promise<{ ok: boolean; message: string }> {
     const handle = this.worktreeHandle;
     if (!handle) return { ok: false, message: "no pending worktree" };
+    if (this.busy) return RUNNING;
     try {
       await discardWorktree(this.root, handle);
     } catch (err) {
@@ -423,40 +431,29 @@ export class Engine {
   }
 
   // POST /worktree/merge — explicit user action, never automatic. Cleans up the worktree only on a
-  // successful merge; a conflict leaves it in place so the user can resolve it themselves (via the
-  // branch directly) and retry.
-  async mergeWorktree(): Promise<{ ok: boolean; message: string }> {
-    if (!this.worktreeHandle) return { ok: false, message: "no active worktree" };
-    await commitPending(this.worktreeHandle); // agents write files directly, never commit as they go
-    const result = await mergeBack(this.root, this.worktreeHandle.branch);
+  // successful merge. With `files`, only those are brought in and the rest is thrown away with the
+  // worktree: a reviewer who picked files has decided against the others, and keeping the branch
+  // "in case" just accumulates abandoned ones (same reasoning as discardWorktree).
+  async mergeWorktree(files?: string[]): Promise<{ ok: boolean; message: string }> {
+    const handle = this.worktreeHandle;
+    if (!handle) return { ok: false, message: "no active worktree" };
+    if (this.busy) return RUNNING;
+    await commitPending(handle); // agents write files directly, never commit as they go
+    const result = files ? await mergeFiles(this.root, handle.branch, files) : await mergeBack(this.root, handle.branch);
     if (result.ok) {
-      await removeWorktree(this.root, this.worktreeHandle.path);
+      await removeWorktree(this.root, handle.path);
       this.worktreeHandle = undefined;
       return result;
     }
+    if (files) return result; // a selective checkout leaves no merge in progress to undo
     // A failed merge left the user's repo sitting mid-merge with conflict markers in their files,
     // which they then had to discover and unpick by hand. Put the tree back and tell them the two
     // ways forward.
     await abortMerge(this.root);
     return {
       ok: false,
-      message: `${result.message}\n\nYour working tree was restored. Resolve it on branch ${this.worktreeHandle.branch}, or POST /worktree/discard to throw the run away.`,
+      message: `${result.message}\n\nYour working tree was restored. Resolve it on branch ${handle.branch}, or POST /worktree/discard to throw the run away.`,
     };
-  }
-
-  // POST /worktree/merge with a `files` list — bring in only those files, then throw away the
-  // worktree. A reviewer who has already picked which files they want has implicitly decided
-  // against the rest; leaving the worktree/branch around "in case" just accumulates abandoned
-  // branches (same reasoning as discardWorktree below).
-  async mergeWorktreeFiles(files: string[]): Promise<{ ok: boolean; message: string }> {
-    if (!this.worktreeHandle) return { ok: false, message: "no active worktree" };
-    await commitPending(this.worktreeHandle);
-    const result = await mergeFiles(this.root, this.worktreeHandle.branch, files);
-    if (result.ok) {
-      await removeWorktree(this.root, this.worktreeHandle.path);
-      this.worktreeHandle = undefined;
-    }
-    return result;
   }
 
   // /auto and /manual, and the team picker's setup question. Toggling approval mode for a live
@@ -509,7 +506,8 @@ export class Engine {
         phase: "end",
       });
     }
-    const summary = shown.map((r) => (r.action === "skipped" ? `skipped ${r.rel} (its directory is gone)` : `${r.action} ${r.rel}`)).join("\n  ");
+    const why = { skipped: " (its directory is gone)", kept: " (it changed after that write — left as it is)" } as Record<string, string>;
+    const summary = shown.map((r) => `${r.action} ${r.rel}${why[r.action] ?? ""}`).join("\n  ");
     return results.length === 1 ? `rewound 1 step: ${summary}` : `rewound ${results.length} steps:\n  ${summary}`;
   }
 
@@ -646,10 +644,17 @@ export class Engine {
     try {
       const p = this.makeProvider({ ...agent.config, provider, model, baseURL: url });
       agent.reconfigure(provider, model, p, url);
-      return undefined;
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }
+    // Saved, or a restart quietly put every agent back on its old model. A refused save (an
+    // agents.yaml with a YAML error) leaves the switch live and says so, rather than undoing it.
+    try {
+      this.persist?.([...this.configs]);
+    } catch (err) {
+      this.bus.publish({ agentId, type: "warning", payload: `switched for this session, but not saved: ${err instanceof Error ? err.message : err}`, time: Date.now() });
+    }
+    return undefined;
   }
 
   // A provider's key changed (POST /auth, the TUI's /api): every agent on that provider was built
@@ -704,20 +709,12 @@ export class Engine {
     });
   }
 
-  // Session cost so far, priced per agent from its own provider/model (a mixed team bills at mixed
-  // rates). `costKnown` is false when any agent's model isn't in the price table, so the UI can
-  // show "$0.42+" instead of implying the total is complete.
+  // Session cost so far. Each call is priced when it is recorded, at the model that made it (a mixed
+  // team bills at mixed rates, and a /model switch must not reprice what came before). `costKnown`
+  // is false when any call's model isn't in the price table, so the UI can show "$0.42+".
   private cost(): { cost: number; costKnown: boolean } {
-    let cost = 0;
-    let costKnown = true;
-    for (const { agentId, usage } of this.usage.snapshot()) {
-      const cfg = this.byId.get(agentId)?.config;
-      if (!cfg) continue;
-      const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens);
-      cost += usd;
-      if (!priced) costKnown = false;
-    }
-    return { cost, costKnown };
+    const all = this.usage.snapshot();
+    return { cost: all.reduce((sum, { usage }) => sum + usage.usd, 0), costKnown: all.every(({ usage }) => !usage.unpriced) };
   }
 
   emitLocks(): void {

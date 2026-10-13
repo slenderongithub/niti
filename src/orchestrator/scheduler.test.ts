@@ -527,3 +527,27 @@ test("parseIntegrate: bullets and next-step suggestions, or the plain text when 
   });
   expect(parseIntegrate("Built the cart. All good.")).toEqual({ summary: "Built the cart. All good.", next: [] });
 });
+
+test("a failover moves the task's slot: the agent it moved to is not handed a second task meanwhile", async () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  let bActive = 0;
+  let bMax = 0;
+  // "unverified" retries on another model with no backoff, so the failover happens at once.
+  const a: any = { config: { id: "a", role: "A" }, output: "", async run() { return "unverified"; } };
+  const b: any = {
+    config: { id: "b", role: "B" },
+    output: "b did it",
+    async run() {
+      bMax = Math.max(bMax, ++bActive);
+      await sleep(40);
+      bActive--;
+      return "done";
+    },
+  };
+  const c: any = { config: { id: "c", role: "C" }, output: "c did it", async run() { await sleep(10); return "done"; } };
+  // t2 belongs to b and becomes ready (t0 finishes) while b is still working t1 for a.
+  const tasks = [node({ id: "t1", role: "a", description: "x" }), node({ id: "t0", role: "c", description: "y" }), node({ id: "t2", role: "b", description: "z", dependsOn: ["t0"] })];
+  await schedule(tasks, [a, b, c]);
+  expect(tasks.map((t) => t.status)).toEqual(["done", "done", "done"]);
+  expect(bMax).toBe(1); // b ran its two tasks one after the other, never both at once
+});

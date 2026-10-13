@@ -1,9 +1,9 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { diffHunks, summarizeResult, runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, applyAnchoredEdit, lineTag, editDiff, snippetDiff, splitCommand, normalizeShellInput, canonicalizeShellCall } from "./tools.ts";
+import { diffHunks, summarizeResult, runTool, safePath, shell, toolSpecs, toSandboxCall, applyEdit, applyAnchoredEdit, lineTag, editDiff, snippetDiff, splitCommand, normalizeShellInput, canonicalizeShellCall, scanInWorker } from "./tools.ts";
 
 const root = mkdtempSync(join(tmpdir(), "niti-tools-"));
 const ALL = ["read_file", "write_file", "edit", "shell"];
@@ -193,6 +193,8 @@ test("grep narrows by glob and reports an invalid regex instead of throwing", as
   expect(await runTool({ tool: "grep", pattern: "total", glob: "*.md" }, SEARCH, dir)).toContain("README.md");
   // README.md's prose mentions cart.ts, so assert on the match location, not on the line text.
   expect(await runTool({ tool: "grep", pattern: "total", glob: "*.md" }, SEARCH, dir)).not.toContain("src/cart.ts:");
+  // A bare `*.ts` also matches nested files by basename — the case that failed on Windows (CI runs it there).
+  expect(await runTool({ tool: "grep", pattern: "function total", glob: "*.ts" }, SEARCH, dir)).toContain("src/cart.ts:1:");
   expect(await runTool({ tool: "grep", pattern: "(unclosed" }, SEARCH, dir)).toContain("invalid regular expression");
   expect(await runTool({ tool: "grep", pattern: "nothing-matches-this" }, SEARCH, dir)).toContain("no matches");
 });
@@ -279,6 +281,8 @@ test("an unterminated quote is an immediate, explained error, not a mangled comm
 
 test("args[] still wins over a command string", () => {
   expect(normalizeShellInput({ command: "git", args: ["commit", "-m", "fix bug"] })).toEqual({ command: "git", args: ["commit", "-m", "fix bug"] });
+  // Both given: the line, then the args — keeping only the first word ran `git origin`.
+  expect(normalizeShellInput({ command: "git push --force", args: ["origin"] })).toEqual({ command: "git", args: ["push", "--force", "origin"] });
   expect(toSandboxCall({ id: "1", name: "shell", input: { command: 'git commit -m "fix bug"' } })).toEqual({
     tool: "shell",
     command: "git",
@@ -435,4 +439,40 @@ test("hashline mode swaps only the read_file and edit specs", () => {
   expect(hl[1]!.parameters).toMatchObject({ required: ["path", "newString"] });
   expect(hl[2]).toBe(plain[2]!);
   expect(plain[1]!.parameters).toMatchObject({ required: ["path", "oldString", "newString"] });
+});
+
+test("grep matches off the event loop, and a pattern that backtracks forever is cut off, not left to freeze it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-redos-"));
+  writeFileSync(join(dir, "a.txt"), `${"a".repeat(34)}\nfound me\n`);
+  const files = [{ rel: "a.txt", abs: join(dir, "a.txt") }];
+  expect((await scanInWorker({ pattern: "found", flags: "", files, limit: 10, maxBytes: 1e6 }))?.lines).toEqual(["a.txt:2: found me"]);
+  let ticks = 0;
+  const tick = setInterval(() => ticks++, 10); // the main loop keeps running while the worker grinds
+  const started = Date.now();
+  expect(await scanInWorker({ pattern: "(a*)*b", flags: "", files, limit: 10, maxBytes: 1e6 }, 300)).toBeUndefined();
+  clearInterval(tick);
+  expect(Date.now() - started).toBeLessThan(3_000);
+  expect(ticks).toBeGreaterThan(5);
+});
+
+test("cancelling stops a running shell command at once, not at its timeout", async () => {
+  const ctl = new AbortController();
+  const started = Date.now();
+  setTimeout(() => ctl.abort(), 50);
+  await shell(root, "sleep", ["10"], { signal: ctl.signal });
+  expect(Date.now() - started).toBeLessThan(5_000);
+});
+
+test("search never walks into .niti/ (its worktrees are a second copy of the project) or a sibling product", async () => {
+  const dir = await searchFixture();
+  for (const path of [".niti/worktrees/ab12/src/cart.ts", "niti-app/src/cart.ts", ".niti/logs/run.log"]) {
+    await runTool({ tool: "write_file", path, content: "export function total() {}\n" }, SEARCH, dir);
+  }
+  const hits = await runTool({ tool: "grep", pattern: "function total" }, SEARCH, dir);
+  expect(hits).toContain("src/cart.ts:1:");
+  expect(hits).not.toContain(".niti/");
+  expect(hits).not.toContain("niti-app/");
+  expect(await runTool({ tool: "glob", pattern: "**/cart.ts" }, SEARCH, dir)).toBe("src/cart.ts");
+  // Named directly, niti's own logs are still searchable.
+  expect(await runTool({ tool: "grep", pattern: "function total", path: ".niti/logs" }, SEARCH, dir)).toContain(".niti/logs/run.log:1:");
 });

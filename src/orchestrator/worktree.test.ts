@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isGitRepo, snapshotBranch, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree } from "./worktree.ts";
+import { runChecks } from "../agent/verify.ts";
 
 function initRepo(): string {
   const root = mkdtempSync(join(tmpdir(), "niti-worktree-"));
@@ -163,4 +164,25 @@ test("launched from a subfolder: agents work in the matching folder, the exclude
   expect(merged.ok).toBe(true);
   expect(existsSync(join(sub, "new.ts"))).toBe(true);
   await removeWorktree(sub, handle.path);
+});
+
+test("mergeFiles refuses to overwrite a file the user has uncommitted edits in", async () => {
+  const repo = initRepo();
+  const handle = await createWorktree(repo, "t9");
+  writeFileSync(join(handle.path, "README.md"), "the agent's version\n");
+  await commitPending(handle);
+  writeFileSync(join(repo, "README.md"), "my unsaved work\n");
+  const result = await mergeFiles(repo, handle.branch, ["README.md"]);
+  expect(result.ok).toBe(false);
+  expect(readFileSync(join(repo, "README.md"), "utf8")).toBe("my unsaved work\n");
+});
+
+test("a worktree lives inside the project, so its checks find the project's own node_modules", async () => {
+  const repo = initRepo();
+  mkdirSync(join(repo, "node_modules", ".bin"), { recursive: true });
+  writeFileSync(join(repo, "node_modules", ".bin", "fakecheck"), "#!/bin/sh\necho ok\n", { mode: 0o755 });
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "x", scripts: { typecheck: "fakecheck" } }));
+  const handle = await createWorktree(repo, "t10");
+  const r = await runChecks(handle.workDir, [{ name: "npm run typecheck", command: "npm", args: ["run", "typecheck"] }]);
+  expect(r.ok).toBe(true); // node_modules is never checked out; the lookup walks up into the project
 });

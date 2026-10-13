@@ -21,13 +21,7 @@ export class GeminiProvider implements Provider {
     });
   }
 
-  private thinking = true;
-
-  setThinking(on: boolean): void {
-    this.thinking = on;
-  }
-
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply> {
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true): Promise<ProviderReply> {
     // Gemini roles are "user"/"model"; tool results are functionResponse parts paired by name.
     const contents = turns.map((t) => {
       if (t.role === "user") return { role: "user", parts: [{ text: t.text }] };
@@ -58,7 +52,7 @@ export class GeminiProvider implements Provider {
       config: {
         systemInstruction: sysPrompt,
         ...(signal ? { abortSignal: signal } : {}),
-        ...thinkingConfig(this.thinking ? this.reasoning : undefined, this.model),
+        ...thinkingConfig(thinking ? this.reasoning : undefined, this.model),
         ...(this.maxOutput ? { maxOutputTokens: this.maxOutput } : {}),
         ...(tools.length
           ? {
@@ -81,7 +75,7 @@ export class GeminiProvider implements Provider {
     const toolCalls: ToolCall[] = [];
     const rawParts: Record<string, unknown>[] = []; // native parts, verbatim — carries thoughtSignature
     let usage: Usage | undefined;
-    let n = 0;
+    let truncated = false;
     // Gemini caches long prompt prefixes implicitly — no request parameter, nothing to opt into —
     // but it only *reports* the hit in cachedContentTokenCount, which nothing here was reading. The
     // effect was cosmetic but consistently wrong in one direction: /cost and /usage billed every
@@ -104,8 +98,9 @@ export class GeminiProvider implements Provider {
         cacheReadTokens: meta.cachedContentTokenCount ?? undefined,
       };
     };
-    // ponytail: Gemini gives no call id → synthesize name+index. Parallel calls to the SAME tool
-    // can't be disambiguated on the response side; rare in practice.
+    // ponytail: Gemini gives no call id → synthesize one, unique across the conversation (a per-reply
+    // index repeated every turn, and results, UI blocks and observation masking pair on ids).
+    // Parallel calls to the SAME tool can't be disambiguated on the response side; rare in practice.
     const consume = (parts: readonly Record<string, unknown>[]) => {
       for (const p of parts) {
         rawParts.push(p);
@@ -116,7 +111,7 @@ export class GeminiProvider implements Provider {
         const fc = p.functionCall as { name?: string; args?: unknown } | undefined;
         if (fc) {
           toolCalls.push({
-            id: `${fc.name}-${n++}`,
+            id: `${fc.name}-${crypto.randomUUID().slice(0, 8)}`,
             name: fc.name ?? "",
             input: (fc.args ?? {}) as Record<string, unknown>,
           });
@@ -129,13 +124,15 @@ export class GeminiProvider implements Provider {
       for await (const chunk of stream) {
         consume((chunk.candidates?.[0]?.content?.parts ?? []) as Record<string, unknown>[]);
         grabUsage(chunk.usageMetadata);
+        if (chunk.candidates?.[0]?.finishReason === "MAX_TOKENS") truncated = true;
       }
     } else {
       const res = await this.client.models.generateContent(params);
       consume((res.candidates?.[0]?.content?.parts ?? []) as Record<string, unknown>[]);
       grabUsage(res.usageMetadata);
+      truncated = res.candidates?.[0]?.finishReason === "MAX_TOKENS";
     }
-    return { text, toolCalls, raw: rawParts, usage };
+    return { text, toolCalls, raw: rawParts, usage, truncated };
   }
 
   // A fixed embedding model, independent of `this.model` (the chat model this instance was built

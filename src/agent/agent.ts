@@ -1,4 +1,4 @@
-import type { Provider, Turn, ToolResult, ToolSpec, ToolCall, Usage, Reasoning, ProviderReply, OnDelta } from "../providers/provider.ts";
+import type { Provider, Turn, ToolResult, ToolSpec, ToolCall, Usage, Reasoning, ProviderReply, OnDelta, RateLimit } from "../providers/provider.ts";
 import { summarizeError } from "../providers/provider.ts";
 import type { Bus } from "../events/bus.ts";
 import type { Approve } from "../approval.ts";
@@ -17,13 +17,19 @@ import { isSecretPath, shellTouchesSecret } from "../secrets.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { contextWindow } from "../providers/catalog.ts";
+import { costOf } from "../providers/pricing.ts";
 import { StallGuard, stallNudge, recurringNudge } from "./stall.ts";
 import { condenseForModel, shellCommandLine } from "../tools/condense.ts";
 import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
 import { createHash } from "node:crypto";
 import { defaultSettings, type RuntimeSettings } from "../settings.ts";
-import { runChecks, checkSurface, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
+import { runChecks, checkSurface, enforcerFiles, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
+
+// Told to the model when its reply hit the output-token limit, in place of running anything in it.
+const CUT_OFF =
+  "[niti: your last reply hit the output-token limit and was cut off, so none of its tool calls ran. " +
+  "Continue in smaller steps — for a large file, write part of it and add the rest with edit.]";
 
 // Bounds the tool loop so a misbehaving model can't spin forever (maxTurns: in agents.yaml raises
 // it). 12 was chosen when the only tools were read/write/edit/shell and the prompt told agents not
@@ -40,9 +46,10 @@ const MAX_RESPOND_TURNS = 6; // shorter cap when answering a peer's question (se
 // Mirrors MAX_ASK_DEPTH's role for A→B→A chains: a fork may fork, but not indefinitely. Lower,
 // because each level is a full MAX_TURNS loop rather than a single answer.
 export const MAX_FORK_DEPTH = 2;
-// Breadth, per Agent instance. Depth alone bounds nothing useful: the product of the two is what
-// a runaway costs.
-const MAX_FORKS_PER_AGENT = 4;
+// Breadth, per task run — shared by that run and every fork under it. Depth alone bounds nothing
+// useful: the product of the two is what a runaway costs. (Per Agent instance, as it once was, a
+// session's first four forks used the budget up for every later task until /clear.)
+const MAX_FORKS_PER_RUN = 4;
 // How many times a failing verification may be handed back. Two is enough for a typo or a missed
 // import — the overwhelming majority of what a check catches. Beyond that the model is usually
 // re-asserting the same fix, and the honest outcome is a failing task a human can see, not a loop.
@@ -78,11 +85,29 @@ const has = (args: string[], ...flags: string[]) =>
 // runs — so it matches on the command plus its flag set, not on a substring of the joined string.
 // The old five regexes missed `rm -fr`, `rm -r -f`, `rm --recursive --force`, `git push -f`, and
 // anything routed through `sh -c`, all of which a model may well prefer to the spelling listed.
+// Programs whose job is to run another program — `env sh -c …`, `xargs rm -rf`, `timeout 60 bash -c …`.
+const WRAPPERS = new Set(["env", "xargs", "nice", "nohup", "timeout", "stdbuf", "time", "command", "exec", "sudo", "doas", "watch", "flock", "caffeinate", "unbuffer"]);
+
+interface Invocation {
+  command: string;
+  base: string;
+  argv: string[];
+}
+
+// The call itself and, behind a wrapper, every argument position after it as a possible command:
+// a wrapper's own flags and operands (`-n 1`, `60`, `FOO=1`) come first and vary by wrapper, so
+// rather than parse each one, every later position is judged as if the program started there.
+function invocations(input: Record<string, unknown>): Invocation[] {
+  const tokens = [String(input.command ?? ""), ...(Array.isArray(input.args) ? input.args.map(String) : [])];
+  const at = (k: number): Invocation => ({ command: tokens[k]!, base: tokens[k]!.split("/").pop() ?? tokens[k]!, argv: tokens.slice(k + 1) });
+  return WRAPPERS.has(at(0).base) ? tokens.map((_, k) => at(k)) : [at(0)];
+}
+
 export function isDangerousShellCall(name: string, input: Record<string, unknown>): boolean {
-  if (name !== "shell") return false;
-  const argv = Array.isArray(input.args) ? input.args.map(String) : [];
-  const command = String(input.command ?? "");
-  const base = command.split("/").pop() ?? command;
+  return name === "shell" && invocations(input).some(isDangerous);
+}
+
+function isDangerous({ command, base, argv }: Invocation): boolean {
   const full = `${command} ${argv.join(" ")}`;
   if (DANGEROUS_PATTERNS.some((p) => p.test(full))) return true;
 
@@ -150,16 +175,15 @@ function candidateHost(token: string): string | undefined {
 // extra prompt, not a security failure.
 export function isEgressShellCall(name: string, input: Record<string, unknown>): boolean {
   if (name !== "shell") return false;
-  const argv = Array.isArray(input.args) ? input.args.map(String) : [];
-  const command = String(input.command ?? "");
-  const base = command.split("/").pop() ?? command;
-  if (!NETWORK_TOOLS.has(base)) return false;
-  for (const token of argv) {
-    if (token.startsWith("-")) continue; // a flag, not a target
-    const host = candidateHost(token);
-    if (host && host.includes(".") && !LOCAL_HOSTS.has(host)) return true;
-  }
-  return false;
+  return invocations(input).some(
+    ({ base, argv }) =>
+      NETWORK_TOOLS.has(base) &&
+      argv.some((token) => {
+        if (token.startsWith("-")) return false; // a flag, not a target
+        const host = candidateHost(token);
+        return Boolean(host && host.includes(".") && !LOCAL_HOSTS.has(host));
+      }),
+  );
 }
 
 // A self-modifying permissions/MCP-server config file is rare and high-consequence enough to
@@ -170,14 +194,15 @@ const PATH_TOOLS = new Set(["read_file", "write_file", "edit", "list_dir", "grep
 
 // A credential file — by a file tool's path, or anywhere in a shell call's arguments. Always asks:
 // reading one puts the secret into the model's context, and from there into a provider's logs.
-export function touchesSecret(name: string, input: Record<string, unknown>, root = process.cwd()): boolean {
-  if (name === "shell") return shellTouchesSecret(String(input.command ?? ""), Array.isArray(input.args) ? input.args.map(String) : [], root);
+function touchesSecret(name: string, input: Record<string, unknown>, root = process.cwd()): boolean {
+  if (name === "shell") return invocations(input).some(({ command, argv }) => shellTouchesSecret(command, argv, root));
   return PATH_TOOLS.has(name) && typeof input.path === "string" && isSecretPath(input.path, root);
 }
 
+// .git/ too: a hook or a config key (core.fsmonitor, core.hooksPath) is code git later runs unprompted.
 export function isSensitiveConfigWrite(name: string, input: Record<string, unknown>, root = process.cwd()): boolean {
   if (name !== "write_file" && name !== "edit") return false;
-  return normalizePath(projectRelative(String(input.path ?? ""), root)).startsWith(".niti/"); // "/" on every OS
+  return /^\.(niti|git)\//.test(normalizePath(projectRelative(String(input.path ?? ""), root))); // "/" on every OS
 }
 
 // How long to wait before retrying a model call that failed with a rate limit (429) or an overloaded
@@ -237,7 +262,7 @@ export type RunOutcome = "done" | "failed" | "exhausted" | "unverified";
 // One run's own result. Read this instead of the `output`/`error` getters when correctness depends
 // on it belonging to *this* call — those getters expose shared state that a concurrent loop on the
 // same Agent overwrites.
-export interface RunResult {
+interface RunResult {
   outcome: RunOutcome;
   text: string;
   error: string;
@@ -290,7 +315,7 @@ export interface AgentConfig {
   editFormat?: "hashline";
 }
 
-export interface AgentDeps {
+interface AgentDeps {
   root?: string;
   approve?: Approve; // present → gated tools ask before running (interactive mode)
   mcp?: McpTools; // present → its namespaced tools are available alongside the sandbox
@@ -315,7 +340,7 @@ export interface AgentDeps {
   abortSignal?: () => AbortSignal | undefined;
 }
 
-export interface RunOptions {
+interface RunOptions {
   askDepth?: number; // inherited when a run is triggered from a peer's ask chain
   taskId?: string; // links this run's session row to the DAG task it belongs to
   priorTurns?: Turn[]; // seeded conversation history (resume) — already persisted, not re-mirrored
@@ -323,7 +348,7 @@ export interface RunOptions {
 
 // What one turn of a loop needs to know about where it sits: how deep in an ask chain, how deep in
 // a fork chain, and which session row its turns and checkpoints belong to.
-export interface LoopCtx {
+interface LoopCtx {
   askDepth: number;
   forkDepth: number;
   sessionId?: string;
@@ -341,6 +366,9 @@ export interface LoopCtx {
   // A repeat of an unchanged read is answered with a pointer instead of the same text again.
   // Cleared on compaction, because the earlier copy is what compaction removes.
   reads?: Map<string, string>;
+  todos?: TodoItem[]; // this loop's working checklist (the `todo` tool)
+  todosLost?: boolean; // set when compaction summarized the todo call away, cleared once re-stated
+  forks?: { used: number }; // spawn_fork breadth, shared with the forks under this run
 }
 
 export class Agent {
@@ -363,31 +391,24 @@ export class Agent {
   private verify: Check[];
   // Rebuilt when the root moves (worktree mode repoints it mid-session) — resolving a package
   // script to the file it runs is root-relative, so a stale surface would protect the wrong tree.
-  private surfaceCache?: { root: string; fn: (path: string) => CheckRole | undefined };
-  private lastText = "";
-  private forkCount = 0; // breadth budget for spawn_fork, see MAX_FORKS_PER_AGENT
-  private lastError = "";
+  private surfaceCache?: { root: string; fn: (path: string) => CheckRole | undefined; enforcers: string[] };
   // A counter, not a boolean: run() and respond() can be concurrently in-flight on the same Agent
   // (ask_agent lets a peer answer while its own task is still running) — a boolean would let one
   // finishing clear "busy" while the other is still active.
   private inFlightCount = 0;
   private lastNotesVersion = -1; // cursor into the shared notes board, so injectNotes only fires on change
 
-  // /clear: back to the state of a freshly built agent. Conversation turns are per-run locals, so
-  // only these few survive between runs.
+  // /clear: back to the state of a freshly built agent. Everything else a loop needs lives in its own
+  // LoopCtx — a field here is shared by every loop running on this agent at once (its task, a review,
+  // a peer's question), and each would reset or overwrite the others'.
   resetSession(): void {
-    this.lastText = "";
-    this.lastError = "";
-    this.forkCount = 0;
     this.lastNotesVersion = -1;
   }
-  private todos: TodoItem[] = []; // this run's working checklist (the `todo` tool)
-  private todosLost = false; // set when compaction summarized the todo call away, cleared once re-stated
   // Cached and only rebuilt when something that could change the result actually has — a
   // byte-identical tools array call to call is what lets a provider's prompt-caching breakpoint
   // (see anthropic.ts) actually hit, since caching matches on the serialized request bytes.
   // `allowed`/this.lsp/this.mcp are fixed for the life of an Agent; forkDepth/askDepth are fixed
-  // for the life of one run() call; only forkCount and the peer roster can change turn to turn.
+  // for the life of one run() call; only the peer roster can change turn to turn.
   private toolsCache?: { key: string; specs: ToolSpec[] };
 
   constructor(
@@ -415,17 +436,6 @@ export class Agent {
     this.abortSignal = deps.abortSignal;
   }
 
-  // Final assistant text of the most recent run/respond — the scheduler uses it for hand-offs.
-  get output(): string {
-    return this.lastText;
-  }
-
-  // Last error from run() — empty until a run() actually throws. The scheduler reads this to give
-  // the replanning lead a concrete reason for a task's failure/exhaustion, not just a status code.
-  get error(): string {
-    return this.lastError;
-  }
-
   // True while run()/respond() has a model call in flight. reconfigure() checks this — swapping
   // providers mid-loop would send a turn history built for one provider (e.g. Anthropic's opaque
   // `raw` thinking blocks) to a different provider's send(), which can reject or misinterpret it.
@@ -439,12 +449,13 @@ export class Agent {
     return (await this.runDetailed(task, opts)).outcome;
   }
 
-  // Same loop, but the final text and error come back with the outcome instead of being read off
-  // `this.lastText` afterwards. That read was a real race: one Agent instance can be running two
-  // loops at once (an agent that owns a task and also reviews someone else's), and whichever
-  // finished last won — silently turning a reviewer's "changes_requested" into an approval.
+  // Same loop, but the final text and error come back with the outcome. They are this call's own: one
+  // Agent instance can be running two loops at once (an agent that owns a task and also reviews
+  // someone else's), so reading them off shared fields let whichever finished last win — silently
+  // turning a reviewer's "changes_requested" into an approval.
   async runDetailed(task: string, opts: RunOptions = {}): Promise<RunResult> {
     let finalText = "";
+    let error = "";
     const id = this.config.id;
     const askDepth = opts.askDepth ?? 0;
     const allowed = expandTools(this.config.allowedTools ?? []);
@@ -458,7 +469,8 @@ export class Agent {
       model: this.config.model,
       taskId: opts.taskId,
     });
-    const ctx: LoopCtx = { askDepth, forkDepth: 0, sessionId, task };
+    // A checklist is scoped to the task that wrote it, and the fork budget to the task that spends it.
+    const ctx: LoopCtx = { askDepth, forkDepth: 0, sessionId, task, todos: [], forks: { used: 0 } };
     this.push(turns, { role: "user", text: task }, sessionId);
     const onDelta = (text: string) =>
       this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() });
@@ -467,38 +479,32 @@ export class Agent {
     let quotaWarned = false;
     let verifyRounds = 0;
     const stall = new StallGuard();
-    // Cleared per run: lastText is shared state, so a run that produces no text at all used to
-    // report the *previous* run's output — which the scheduler then stored as this task's result.
-    this.lastText = "";
-    // Per run: a checklist is scoped to the task that wrote it, and carrying the previous task's
-    // steps into the next one is worse than having none.
-    this.todos = [];
-    this.todosLost = false;
     this.inFlightCount++;
     try {
       for (let i = 0; i < this.maxTurns; i++) {
         // Between turns, never mid-call: a tool that has already started finishes, so nothing is
         // left half-applied, but no *new* model call is made after the user said stop.
         if (i > 0 && this.shouldStop?.()) {
-          this.lastError = "cancelled";
+          error = "cancelled";
           if (sessionId) this.store?.setStatus(sessionId, "failed");
           this.bus.publish({ agentId: id, type: "warning", payload: "cancelled — stopping after this turn", time: Date.now() });
-          return { outcome: "failed", text: finalText, error: this.lastError };
+          return { outcome: "failed", text: finalText, error };
         }
         this.injectInbox(turns, sessionId);
         this.injectNotes(turns, sessionId);
-        this.restateTodos(turns, sessionId);
+        this.restateTodos(turns, ctx);
         this.maskOldObservations(turns, ctx);
         const tools = this.buildTools(allowed, ctx);
-        this.provider.setThinking?.(this.settings.thinkingMode);
         const reply = await this.send(turns, tools, onDelta);
         if (reply.text) {
-          finalText = reply.text; // per-call, unlike lastText, which every concurrent loop shares
-          this.lastText = reply.text;
+          finalText = reply.text;
           this.bus.publish({ agentId: id, type: "message", payload: reply.text, time: Date.now() });
         }
-        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
-        if (reply.rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, reply.rateLimit);
+        this.record(reply.usage, reply.rateLimit);
+        if (reply.truncated) {
+          this.cutOff(turns, reply, sessionId);
+          continue;
+        }
 
         // Pre-emptive heads-up: fire once when the conversation nears the context window.
         if (!warned && reply.usage && overContextThreshold(this.contextFill(reply.usage), context)) {
@@ -513,35 +519,16 @@ export class Agent {
           quotaWarned = true;
           this.bus.publish({ agentId: id, type: "warning", payload: `${this.config.provider} rate limit low — ${rr} requests remaining`, time: Date.now() });
         }
-        // Past 95%, summarize older turns instead of letting the next call overflow the window —
-        // but only if there *is* a next call. With no tool calls this turn ends the loop, so
-        // compacting here paid for a whole extra billed summarization whose result nothing read.
-        let compacted = false;
-        if (reply.toolCalls.length > 0 && reply.usage && shouldAutoCompact(this.settings.autoCompact, this.contextFill(reply.usage), context, COMPACT_RATIO)) {
-          const before = turns.length;
-          turns.splice(
-            0,
-            turns.length,
-            ...(await compactTurns(turns, this.provider, undefined, (u) =>
-              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, undefined, u.reasoningTokens),
-            )),
-          );
-          if (turns.length < before) {
-            compacted = true;
-            this.todosLost = true;
-            ctx.reads?.clear();
-            this.bus.publish({ agentId: id, type: "warning", payload: `context compacted automatically (${before} → ${turns.length} turns)`, time: Date.now() });
-          }
-        }
+        const compacted = await this.compact(turns, ctx, reply, context, "context compacted automatically");
         if (reply.toolCalls.length === 0) {
           // No tools *and* no text is not a completion — it's a Gemini safety block, an OpenAI
           // content filter, or an empty choices array. Every one of those used to present as a
           // finished task, so the orchestrator released dependents on an empty output.
           if (!reply.text) {
-            this.lastError = "the model returned neither text nor a tool call (safety filter, truncation, or an empty response)";
+            error = "the model returned neither text nor a tool call (safety filter, truncation, or an empty response)";
             if (sessionId) this.store?.setStatus(sessionId, "failed");
-            this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
-            return { outcome: "failed", text: finalText, error: this.lastError };
+            this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+            return { outcome: "failed", text: finalText, error };
           }
           this.push(turns, { role: "assistant", text: reply.text, toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
           // A message that arrived during this turn — a teammate's hand-off, or the user's nudge
@@ -556,7 +543,7 @@ export class Agent {
           // of latency for a foregone conclusion.
           if (ctx.wrote && this.verify.length > 0) {
             this.bus.publish({ agentId: id, type: "thought", payload: `verifying: ${this.verify.map((c) => c.name).join(", ")}`, time: Date.now() });
-            const v = await runChecks(this.root, this.verify);
+            const v = await runChecks(this.root, this.verify, this.sandbox);
             // A green result that arrived only because the checks themselves were edited is not
             // evidence of anything. Measured by reverting them and asking again, not inferred —
             // see tamperedChecks(). Only worth asking when the checks currently pass.
@@ -591,12 +578,12 @@ export class Agent {
               // does not build — the exact failure this whole pass exists to prevent, arriving one
               // level up instead.
               if (gamed.length > 0) await this.restoreChecks(ctx, gamed);
-              this.lastError = gamed.length > 0
+              error = gamed.length > 0
                 ? `the checks pass only because the checks themselves were changed (${gamed.join(", ")}) — the work is unverified, and those files have been restored`
                 : `the project's checks still fail after ${verifyRounds} fix attempt(s):\n${v.report}`;
               if (sessionId) this.store?.setStatus(sessionId, "failed");
-              this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
-              return { outcome: "unverified", text: finalText, error: this.lastError };
+              this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+              return { outcome: "unverified", text: finalText, error };
             }
             this.bus.publish({ agentId: id, type: "thought", payload: "verification passed", time: Date.now() });
           }
@@ -610,14 +597,14 @@ export class Agent {
         // attaching the approval-time diff) — persisting first would silently drop that from history.
         this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
         this.push(turns, { role: "tool", results: withBudgetNote(results, i, this.maxTurns) }, sessionId);
-        const verdict = stall.observe(reply.toolCalls, results);
+        const verdict = stall.observe(reply.toolCalls, results, (c) => this.changesFiles(c));
         if (verdict === "stop") {
-          this.lastError = stall.kind === "recurring"
+          error = stall.kind === "recurring"
             ? `stalled: the same failure returned after ${stall.recurCount} separate fixes — ${stall.detail}`
             : `stalled: ${stall.rounds} rounds of reads and failing commands with no file change, even after being told to act`;
           if (sessionId) this.store?.setStatus(sessionId, "exhausted");
-          this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
-          return { outcome: "exhausted", text: finalText, error: this.lastError };
+          this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+          return { outcome: "exhausted", text: finalText, error };
         }
         if (verdict === "nudge") {
           const recurring = stall.kind === "recurring";
@@ -628,23 +615,23 @@ export class Agent {
       // Falling out of the maxTurns loop means the agent never finished. Reporting "done" here
       // marked the task complete, released its dependents, and fed the review gate whatever text
       // happened to be lying around — the failure was invisible to everything downstream.
-      this.lastError = `turn cap reached (${this.maxTurns}) without a final answer`;
+      error = `turn cap reached (${this.maxTurns}) without a final answer`;
       if (sessionId) this.store?.setStatus(sessionId, "exhausted");
-      this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
-      return { outcome: "exhausted", text: finalText, error: this.lastError };
+      this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+      return { outcome: "exhausted", text: finalText, error };
     } catch (err) {
       if (this.abortSignal?.()?.aborted) {
         // The user interrupted: say so plainly, not as a provider failure with a stack of details.
-        this.lastError = "interrupted";
+        error = "interrupted";
         if (sessionId) this.store?.setStatus(sessionId, "failed");
         this.bus.publish({ agentId: id, type: "warning", payload: "interrupted", time: Date.now() });
-        return { outcome: "failed", text: finalText, error: this.lastError };
+        return { outcome: "failed", text: finalText, error };
       }
       const outcome: RunOutcome = isExhaustion(err) ? "exhausted" : "failed";
-      this.lastError = summarizeError(err);
+      error = summarizeError(err);
       if (sessionId) this.store?.setStatus(sessionId, outcome);
-      this.bus.publish({ agentId: id, type: "error", payload: this.lastError, time: Date.now() });
-      return { outcome, text: finalText, error: this.lastError };
+      this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+      return { outcome, text: finalText, error };
     } finally {
       this.inFlightCount--;
     }
@@ -657,12 +644,14 @@ export class Agent {
   // or an overloaded provider is waited out right here, for about a minute (a free-tier quota window),
   // instead of failing the call: a 429 used to restart a whole task from scratch, and ended a
   // question, a plan or a debate outright. Interrupting still stops the wait at once.
-  private async send(turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta): Promise<ProviderReply> {
+  // `system` is overridden only by compaction, whose summarizer has its own prompt.
+  private async send(turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, system = this.config.systemPrompt): Promise<ProviderReply> {
     for (let attempt = 0; ; attempt++) {
       const signal = this.abortSignal?.();
       if (signal?.aborted) throw new Error("interrupted");
       try {
-        const call = this.provider.send(this.config.systemPrompt, turns, tools, onDelta, signal);
+        // thinkingMode is read live, per call — POST /settings flips it mid-run.
+        const call = this.provider.send(system, turns, tools, onDelta, signal, this.settings.thinkingMode);
         if (!signal) return await call;
         return await Promise.race([
           call,
@@ -699,25 +688,23 @@ export class Agent {
     // Depth was capped; breadth was not. A 12-turn loop could emit spawn_fork on every turn, and
     // so could each child — on the order of 12×12 sub-loops of up to 12 provider calls each, from
     // one task, on the user's key, with nothing in the UI aggregating it.
-    if (this.forkCount >= MAX_FORKS_PER_AGENT) return "fork budget exhausted — do this work yourself.";
-    this.forkCount++;
+    const forks = (ctx.forks ??= { used: 0 });
+    if (forks.used >= MAX_FORKS_PER_RUN) return "fork budget exhausted — do this work yourself.";
+    forks.used++;
     this.bus.publish({ agentId: this.config.id, type: "thought", payload: `fork: ${goal.slice(0, 80)}`, time: Date.now() });
-    return this.subLoop(goal, {
-      kind: "fork",
-      maxTurns: this.maxTurns,
-      askDepth: ctx.askDepth,
-      forkDepth: ctx.forkDepth + 1,
-      parentSessionId: ctx.sessionId,
-    });
+    return this.subLoop(goal, { kind: "fork", maxTurns: this.maxTurns, askDepth: ctx.askDepth, forkDepth: ctx.forkDepth + 1, parent: ctx });
   }
 
-  // The shared body behind respond() and fork(): the same loop run() uses, but it returns text
-  // instead of an outcome and never writes this.lastText — a peer's ask (or a fork) can be in
-  // flight while this agent's own run() is going, and the scheduler reads run()'s output via
-  // `output`. inFlightCount is a counter precisely so these can overlap.
+  // The shared body behind answer(), respond() and fork(): the same loop run() uses, but it returns
+  // text instead of an outcome. A peer's ask (or a fork) can be in flight while this agent's own
+  // run() is going — inFlightCount is a counter precisely so these can overlap.
+  //
+  // A fork is part of its parent's run: it shares the run's fork budget and check baselines, and a
+  // file it writes counts as the parent's write. Otherwise handing an edit to a fork skipped the
+  // verification pass, and the tamper guard never saw a check the fork changed.
   private async subLoop(
     prompt: string,
-    o: { kind: SessionKind; maxTurns: number; askDepth: number; forkDepth: number; parentSessionId?: string; readOnly?: boolean },
+    o: { kind: SessionKind; maxTurns: number; askDepth: number; forkDepth: number; parentSessionId?: string; readOnly?: boolean; parent?: LoopCtx },
   ): Promise<string> {
     const id = this.config.id;
     const all = expandTools(this.config.allowedTools ?? []);
@@ -728,12 +715,23 @@ export class Agent {
       kind: o.kind,
       provider: this.config.provider,
       model: this.config.model,
-      parentSessionId: o.parentSessionId,
+      parentSessionId: o.parent?.sessionId ?? o.parentSessionId,
     });
-    const ctx: LoopCtx = { askDepth: o.askDepth, forkDepth: o.forkDepth, sessionId };
+    const ctx: LoopCtx = {
+      askDepth: o.askDepth,
+      forkDepth: o.forkDepth,
+      sessionId,
+      todos: [],
+      forks: o.parent?.forks,
+      checkBaseline: o.parent ? (o.parent.checkBaseline ??= new Map()) : undefined,
+    };
     const context = contextWindow(this.config.provider, this.config.model);
     this.push(turns, { role: "user", text: prompt }, sessionId);
-    const onDelta = (text: string) => this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() });
+    // Only a question the user asked streams live (answer(): read-only, and nothing else of this
+    // agent's is running). A fork or a reply to a teammate runs beside the agent's own task, under the
+    // same agent id, so its tokens interleaved with the task's into one garbled reply on screen; its
+    // result still arrives whole — as the fork's tool result, or the answer the teammate receives.
+    const onDelta = o.readOnly ? (text: string) => this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() }) : undefined;
     this.inFlightCount++;
     try {
       let text = "";
@@ -741,30 +739,18 @@ export class Agent {
         if (i > 0 && this.shouldStop?.()) break; // same contract as run(): stop between turns
         this.injectInbox(turns, sessionId);
         this.injectNotes(turns, sessionId);
+        this.restateTodos(turns, ctx);
         this.maskOldObservations(turns, ctx);
-        this.provider.setThinking?.(this.settings.thinkingMode);
         const reply = await this.send(turns, this.buildTools(allowed, ctx), onDelta);
         if (reply.text) text = reply.text;
-        if (reply.usage) this.usageTracker?.record(id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
-        // run() warns at 85% and compacts at 95%; this loop had neither, so a fork doing real work
-        // (a 12-turn loop with full file contents in its tool results) hit a hard provider error on
-        // overflow instead of shrinking — and the parent only saw "fork failed".
-        let compacted = false;
-        if (reply.toolCalls.length > 0 && reply.usage && shouldAutoCompact(this.settings.autoCompact, this.contextFill(reply.usage), context, COMPACT_RATIO)) {
-          const before = turns.length;
-          turns.splice(
-            0,
-            turns.length,
-            ...(await compactTurns(turns, this.provider, undefined, (u) =>
-              this.usageTracker?.record(id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, undefined, u.reasoningTokens),
-            )),
-          );
-          if (turns.length < before) {
-            compacted = true;
-            ctx.reads?.clear();
-            this.bus.publish({ agentId: id, type: "warning", payload: `${o.kind} context compacted (${before} → ${turns.length} turns)`, time: Date.now() });
-          }
+        this.record(reply.usage, reply.rateLimit);
+        if (reply.truncated) {
+          this.cutOff(turns, reply, sessionId);
+          continue;
         }
+        // run() compacts at 95%; this loop once did not, so a fork doing real work (full file
+        // contents in its tool results) hit a hard provider error on overflow instead of shrinking.
+        const compacted = await this.compact(turns, ctx, reply, context, `${o.kind} context compacted`);
         if (reply.toolCalls.length === 0) {
           if (reply.text) this.push(turns, { role: "assistant", text: reply.text, toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
           // Same rule as run(): an agent can be "running" purely because it is answering a peer,
@@ -785,6 +771,7 @@ export class Agent {
       return `${o.kind === "fork" ? "fork failed" : "error answering"}: ${summarizeError(err)}`;
     } finally {
       this.inFlightCount--;
+      if (o.parent && ctx.wrote) o.parent.wrote = true;
     }
   }
 
@@ -800,13 +787,46 @@ export class Agent {
     } finally {
       this.inFlightCount--;
     }
-    // Every other model call in this file records its usage; this one did not, so the lead's
-    // planning, replanning, integrate and /debate turns were spent off the books — /usage, /cost,
-    // the TUI sidebar and the dashboard all under-reported the run by the orchestrator's whole
-    // share, which on a mixed team is usually the most expensive model on it.
-    if (reply.usage) this.usageTracker?.record(this.config.id, reply.usage.inputTokens, reply.usage.outputTokens, reply.usage.cacheReadTokens, reply.usage.cacheWriteTokens, this.contextFill(reply.usage), reply.usage.reasoningTokens);
-    if (reply.rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, reply.rateLimit);
+    // Recorded like every other call: the lead's planning, replanning, integrate and /debate turns
+    // are usually the most expensive model on the team, and once went entirely off the books.
+    this.record(reply.usage, reply.rateLimit);
     return reply.text;
+  }
+
+  // Every model call's usage goes through here, priced at the model that made it — a session total
+  // priced afterwards at each agent's *current* model repriced every earlier call after a /model.
+  // `fill: false` for a call whose prompt is not this conversation (compaction's summary request).
+  private record(u: Usage | undefined, rateLimit?: RateLimit, fill = true): void {
+    if (u) {
+      const cost = costOf(this.config.provider, this.config.model, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens);
+      this.usageTracker?.record(this.config.id, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens, fill ? this.contextFill(u) : undefined, u.reasoningTokens, cost);
+    }
+    if (rateLimit) this.usageTracker?.recordRateLimit(this.config.provider, rateLimit);
+  }
+
+  // Past 95%, summarize older turns instead of letting the next call overflow the window — but only
+  // if there *is* a next call: with no tool calls this turn ends the loop, and compacting then paid
+  // for a whole extra billed summarization whose result nothing read. The summary call goes through
+  // send(), so a rate limit is waited out and /cancel interrupts it like any other call.
+  private async compact(turns: Turn[], ctx: LoopCtx, reply: ProviderReply, context: number, label: string): Promise<boolean> {
+    if (reply.toolCalls.length === 0 || !reply.usage || !shouldAutoCompact(this.settings.autoCompact, this.contextFill(reply.usage), context, COMPACT_RATIO)) return false;
+    const before = turns.length;
+    const summarizer: Provider = { send: (system, t, tools) => this.send(t, tools, undefined, system) };
+    turns.splice(0, turns.length, ...(await compactTurns(turns, summarizer, undefined, (u) => this.record(u, undefined, false))));
+    if (turns.length >= before) return false;
+    ctx.todosLost = true;
+    ctx.reads?.clear();
+    this.bus.publish({ agentId: this.config.id, type: "warning", payload: `${label} (${before} → ${turns.length} turns)`, time: Date.now() });
+    return true;
+  }
+
+  // A reply cut off at the output-token limit is not an answer, and its tool calls may be missing
+  // arguments — a write_file whose content stops mid-file. Nothing in it runs; the model is told why.
+  // Kept without `raw`, whose provider blocks would include the half-written tool call.
+  private cutOff(turns: Turn[], reply: ProviderReply, sessionId?: string): void {
+    this.push(turns, { role: "assistant", text: reply.text || "(cut off)", toolCalls: [] }, sessionId, reply.usage);
+    this.push(turns, { role: "user", text: CUT_OFF }, sessionId);
+    this.bus.publish({ agentId: this.config.id, type: "warning", payload: "reply hit the output-token limit — nothing in it ran; asking for smaller steps", time: Date.now() });
   }
 
   // Repoint this agent's sandbox root (worktree isolation) — a plain field, same shape as
@@ -904,10 +924,10 @@ export class Agent {
   // One case remains where the list is genuinely gone: compaction summarizes the older turns, and
   // the last todo call with them. The prefix is being rewritten then anyway, so the current list is
   // appended once, at the tail, and never touched again.
-  private restateTodos(turns: Turn[], sessionId?: string): void {
-    if (!this.todosLost || this.todos.length === 0) return;
-    this.todosLost = false;
-    this.push(turns, { role: "user", text: `${TODO_MARKER}\n\n${renderTodos(this.todos)}` }, sessionId);
+  private restateTodos(turns: Turn[], ctx: LoopCtx): void {
+    if (!ctx.todosLost || !ctx.todos?.length) return;
+    ctx.todosLost = false;
+    this.push(turns, { role: "user", text: `${TODO_MARKER}\n\n${renderTodos(ctx.todos)}` }, ctx.sessionId);
   }
 
   // Tool specs offered to the model: sandbox tools + MCP tools + (when a messenger is wired and
@@ -1102,11 +1122,15 @@ export class Agent {
     return out;
   }
 
-  private get isCheckFile(): (path: string) => CheckRole | undefined {
+  private get surface(): NonNullable<Agent["surfaceCache"]> {
     if (this.surfaceCache?.root !== this.root) {
-      this.surfaceCache = { root: this.root, fn: checkSurface(this.verify, this.root) };
+      this.surfaceCache = { root: this.root, fn: checkSurface(this.verify, this.root), enforcers: enforcerFiles(this.verify, this.root) };
     }
-    return this.surfaceCache.fn;
+    return this.surfaceCache;
+  }
+
+  private get isCheckFile(): (path: string) => CheckRole | undefined {
+    return this.surface.fn;
   }
 
   // Did this green result actually depend on the agent editing the checks?
@@ -1156,7 +1180,7 @@ export class Agent {
         held.push(abs);
         await writeFile(abs, c.baseline);
       }
-      const again = await runChecks(this.root, this.verify);
+      const again = await runChecks(this.root, this.verify, this.sandbox);
       if (again.ok) return { enforcer: [], test: [] }; // the verdict did not depend on the edits
     } finally {
       for (const c of candidates) {
@@ -1259,9 +1283,9 @@ export class Agent {
     // Harness-internal state, not a sandboxed action: it touches no file and runs no command, so
     // it resolves above the permission gate exactly as the messaging tools do.
     if (call.name === "todo") {
-      this.todos = parseTodos(call.input.items);
-      this.bus.publish({ agentId: id, type: "todo", payload: renderTodos(this.todos), time: Date.now(), todos: this.todos.map((t) => ({ text: t.text, status: t.status })) });
-      return todoAck(this.todos);
+      const todos = (ctx.todos = parseTodos(call.input.items));
+      this.bus.publish({ agentId: id, type: "todo", payload: renderTodos(todos), time: Date.now(), todos: todos.map((t) => ({ text: t.text, status: t.status })) });
+      return todoAck(todos);
     }
     if (MESSAGING_TOOLS.has(call.name) && this.messenger) {
       return this.execMessaging(call, ctx);
@@ -1344,14 +1368,24 @@ export class Agent {
       if (!ok) {
         // "denied by user" was a lie in headless mode, where nobody is asked — the engine's
         // non-interactive approver publishes the actionable reason just before this.
-        this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: not approved`, time: Date.now() });
+        this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: not approved`, time: Date.now(), ...this.endOf(call, started, false) });
         return "not approved";
       }
     }
     this.audit?.append({ agentId: id, kind: "tool_call", detail: { tool: call.name, input: call.input } });
+    // A shell command off the read-only list, or an MCP tool, can change files without naming them —
+    // `sed -i` once finished a task with no verification pass, and rewrote a check unseen by the
+    // tamper guard. So such a call marks the run as having written, and the check's own files are
+    // snapshotted first (once per run) for the guard to judge against.
+    const mayWrite = this.changesFiles(call);
+    if (mayWrite && this.verify.length > 0) {
+      ctx.checkBaseline ??= new Map();
+      for (const rel of this.surface.enforcers) if (!ctx.checkBaseline.has(rel)) ctx.checkBaseline.set(rel, await this.readForCheckpoint(rel));
+    }
     // Hoisted out of the else-branch below so the file_edit event published after this whole
     // if/else chain (see the bus.publish call further down) can attach it as a real `path` field.
     let writeRel: string | undefined;
+    let after: string | undefined; // what a file write left, read once under the lock
     try {
       let output: string;
       if (isMcp) {
@@ -1390,13 +1424,17 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, hashline: this.config.editFormat === "hashline" }); // only ever past a human's yes
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, hashline: this.config.editFormat === "hashline", signal: this.abortSignal?.() }); // allowOutside: only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo
           // then reported "deleted <path>" for a file it had not touched, and a real undo had to
           // be typed past the phantoms.
-          if (checkpointing && sessionId) this.store?.checkpoint(sessionId, lockPath!, atWrite ?? null); // already absolute
+          // `after` lets a later /rewind see that the file has been edited since, and leave it be.
+          if (checkpointing) {
+            after = await this.readForCheckpoint(writeRel!, outside);
+            if (sessionId) this.store?.checkpoint(sessionId, lockPath!, atWrite ?? null, after ?? null); // already absolute
+          }
         } finally {
           if (lockPath && this.locks) this.locks.release(lockPath, id);
         }
@@ -1407,16 +1445,13 @@ export class Agent {
       const kind = WRITE_TOOLS.has(call.name) ? "file_edit" : "tool_call";
       // Only reached when the write actually landed (runTool throws on a failed one), so a run
       // whose every edit missed is not sent off to a build that cannot have changed.
-      if (writeRel !== undefined) {
-        ctx.wrote = true;
-        // `before` is this file's content as of the first time this run touched it; recording it
-        // only once is what makes a later revert recognisable as a revert.
-        if (this.isCheckFile(writeRel) !== undefined) {
-          ctx.checkBaseline ??= new Map();
-          if (!ctx.checkBaseline.has(writeRel)) ctx.checkBaseline.set(writeRel, before);
-        }
+      if (mayWrite) ctx.wrote = true;
+      // `before` is this file's content as of the first time this run touched it; recording it
+      // only once is what makes a later revert recognisable as a revert.
+      if (writeRel !== undefined && this.isCheckFile(writeRel) !== undefined) {
+        ctx.checkBaseline ??= new Map();
+        if (!ctx.checkBaseline.has(writeRel)) ctx.checkBaseline.set(writeRel, before);
       }
-      const after = writeRel !== undefined ? await this.readForCheckpoint(writeRel, outside) : undefined;
       const result = summarizeResult(call.name, output);
       const shellFailed = result.exitCode !== undefined && result.exitCode !== 0;
       this.bus.publish({
@@ -1435,6 +1470,14 @@ export class Agent {
       this.bus.publish({ agentId: id, type: "error", payload: `${call.name}: ${output}`, time: Date.now(), ...this.endOf(call, started, false), outcome: String(err).slice(0, 160) });
       return output;
     }
+  }
+
+  // Whether a call can change files: a file write, an MCP tool (whose effects are unknown), or a shell
+  // command off the read-only list. One rule for verification, the tamper guard's snapshot and the
+  // stall detector, so they can't disagree about whether an agent did anything.
+  private changesFiles(call: ToolCall): boolean {
+    if (WRITE_TOOLS.has(call.name) || (this.mcp?.has(call.name) ?? false)) return true;
+    return call.name === "shell" && resolvePermission([SAFE_SHELL_RULES], call.name, call.input, this.root) !== "allow";
   }
 
   // Current file contents, or undefined when the file doesn't exist yet / the path is invalid —

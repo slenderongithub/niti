@@ -73,36 +73,16 @@ test("scope 'path' narrows the grant to the request's parent directory (Bun.Glob
   expect(await p2).toBe(false);
 });
 
-test("batch: currentBatch appears at 3+ queued and clears on approveAll", async () => {
+test("queued() is the whole queue, always, and marks what must be confirmed one by one", async () => {
   const q = new ApprovalQueue();
   const p1 = q.request("a", "write_file", { path: "a.ts" });
-  const p2 = q.request("a", "write_file", { path: "b.ts" });
-  expect(q.currentBatch()).toBeUndefined(); // only 2 so far
-
-  const p3 = q.request("b", "shell", { command: "npm test" });
-  expect(q.currentBatch()?.length).toBe(3);
-
-  q.approveAll();
-  expect(await p1).toBe(true);
+  const p2 = q.request("b", "shell", { command: "rm", args: ["-rf", "x"] }, true); // dangerous: force-asked
+  expect(q.queued().map((r) => [r.tool, r.forceAsk])).toEqual([["write_file", false], ["shell", true]]); // two, not just the front
+  q.answer(true, undefined, undefined, q.queued()[1]!.id); // answered by id, out of order
   expect(await p2).toBe(true);
-  expect(await p3).toBe(true);
-  expect(q.currentBatch()).toBeUndefined();
-  expect(q.current()).toBeUndefined();
-});
-
-test("batch: approveAgent resolves only that agent's requests, leaving the rest queued", async () => {
-  const q = new ApprovalQueue();
-  const p1 = q.request("a", "write_file", { path: "a.ts" });
-  const p2 = q.request("b", "write_file", { path: "b.ts" });
-  const p3 = q.request("a", "shell", { command: "npm test" });
-  expect(q.currentBatch()?.length).toBe(3);
-
-  q.approveAgent("a");
-  expect(await p1).toBe(true);
-  expect(await p3).toBe(true);
-  expect(q.current()?.agentId).toBe("b"); // b's request is still pending
+  expect(q.queued().map((r) => r.tool)).toEqual(["write_file"]);
   q.answer(false);
-  expect(await p2).toBe(false);
+  expect(await p1).toBe(false);
 });
 
 test("batch: denyAll resolves every queued request false", async () => {
@@ -147,7 +127,7 @@ test("flood guard is per-agent — one agent's flood does not refuse another age
   q.denyAll();
 });
 
-test("resolved requests (answer, drain, approveAgent) each append to the audit log when one is wired", async () => {
+test("resolved requests (answer, denyAll) each append to the audit log when one is wired", async () => {
   const audit = new AuditLog(openDb(":memory:"));
   const q = new ApprovalQueue(audit);
 
@@ -157,11 +137,11 @@ test("resolved requests (answer, drain, approveAgent) each append to the audit l
 
   const p2 = q.request("b", "write_file", { path: "x.ts" });
   const p3 = q.request("c", "shell", { command: "rm x" });
-  q.approveAll(); // exercises the private drain() path
+  q.denyAll(); // the /cancel path
   await Promise.all([p2, p3]);
 
   const p4 = q.request("a", "shell", { command: "npm test" });
-  q.approveAgent("a"); // exercises the approveAgent path
+  q.answer(true, undefined, undefined, q.queued()[0]!.id); // answered by id
   await p4;
 
   const entries = audit.list().filter((e) => e.kind === "approval");

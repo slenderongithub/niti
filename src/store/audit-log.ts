@@ -5,15 +5,15 @@ import { createHash } from "node:crypto";
 // row's (stdlib sha256, no new dependency), so editing, deleting, or reordering a row breaks the
 // chain from that point forward — `verify()` detects it. This is SQLite on local disk, not a
 // write-once medium: the goal is making tampering evident for forensics, not preventing it outright.
-export type AuditKind = "tool_call" | "approval";
+type AuditKind = "tool_call" | "approval";
 
-export interface AuditEntry {
+interface AuditEntry {
   agentId?: string;
   kind: AuditKind;
   detail: unknown; // JSON-serializable
 }
 
-export interface AuditRow extends AuditEntry {
+interface AuditRow extends AuditEntry {
   id: number;
   time: number;
   prevHash: string;
@@ -34,15 +34,20 @@ export class AuditLog {
     return row?.hash ?? GENESIS_HASH;
   }
 
+  // IMMEDIATE takes the write lock before reading the last hash: two processes on one project (a TUI
+  // session and a scripted run) otherwise both chained onto the same row, and `audit verify` then
+  // reported tampering that never happened.
   append(entry: AuditEntry): void {
-    const time = Date.now();
-    const prevHash = this.lastHash();
-    const hash = createHash("sha256")
-      .update(prevHash + payloadFor(time, entry.agentId, entry.kind, entry.detail))
-      .digest("hex");
-    this.db
-      .query("INSERT INTO audit_log (created_at, agent_id, kind, detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(time, entry.agentId ?? null, entry.kind, JSON.stringify(entry.detail), prevHash, hash);
+    this.db.transaction(() => {
+      const time = Date.now();
+      const prevHash = this.lastHash();
+      const hash = createHash("sha256")
+        .update(prevHash + payloadFor(time, entry.agentId, entry.kind, entry.detail))
+        .digest("hex");
+      this.db
+        .query("INSERT INTO audit_log (created_at, agent_id, kind, detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(time, entry.agentId ?? null, entry.kind, JSON.stringify(entry.detail), prevHash, hash);
+    }).immediate();
   }
 
   list(): AuditRow[] {

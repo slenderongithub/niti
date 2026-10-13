@@ -1,13 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, RateLimit, Reasoning } from "./provider.ts";
-import { parseRateLimit, cacheBreakpoints } from "./provider.ts";
+import { rateLimitFetch, cacheBreakpoints } from "./provider.ts";
 
 const EPHEMERAL: Anthropic.CacheControlEphemeral = { type: "ephemeral" };
 
 // Marks the LAST content block of a message as a cache breakpoint. Anthropic caches everything up
 // to and including a marked block. Thinking/redacted-thinking blocks can't carry cache_control at
 // all — when a replayed assistant turn (Turn.raw) ends in one, this just skips that message.
-export function withCacheControl(m: Anthropic.MessageParam): Anthropic.MessageParam {
+function withCacheControl(m: Anthropic.MessageParam): Anthropic.MessageParam {
   if (typeof m.content === "string") {
     return { ...m, content: [{ type: "text", text: m.content, cache_control: EPHEMERAL }] };
   }
@@ -54,7 +54,6 @@ export class AnthropicProvider implements Provider {
   // proprietary and a strict shim 400s on it, and a fixed 16k max_tokens exceeds the output cap of
   // plenty of non-Anthropic models.
   private readonly native: boolean;
-  private thinking = true; // the user's thinking-mode switch (RuntimeSettings.thinkingMode)
 
   constructor(
     private model: string,
@@ -64,35 +63,26 @@ export class AnthropicProvider implements Provider {
     private reasoning?: Reasoning,
   ) {
     this.native = !baseURL;
-    const trackedFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
-      const res = await fetch(url, init);
-      this.lastRateLimit = parseRateLimit(res.headers, "anthropic");
-      return res;
-    };
     this.client = new Anthropic({
       ...(apiKey ? { apiKey } : {}),
       ...(baseURL ? { baseURL } : {}),
-      fetch: trackedFetch,
+      fetch: rateLimitFetch("anthropic", (rl) => (this.lastRateLimit = rl)),
     });
-  }
-
-  setThinking(on: boolean): void {
-    this.thinking = on;
   }
 
   // Thinking + effort, only where the model takes them (see LEGACY_MODEL). Thinking off drops the
   // thinking block and asks for the lowest effort; on Opus 5+ that's the documented way to spend
   // less on reasoning, since those models think adaptively whether or not the param is sent.
-  private reasoningParams(): Pick<Anthropic.MessageCreateParamsNonStreaming, "thinking" | "output_config"> {
+  private reasoningParams(thinking: boolean): Pick<Anthropic.MessageCreateParamsNonStreaming, "thinking" | "output_config"> {
     if (!this.native || LEGACY_MODEL.test(this.model)) return {};
-    const effort = EFFORT[this.thinking ? (this.reasoning ?? "auto") : "off"];
+    const effort = EFFORT[thinking ? (this.reasoning ?? "auto") : "off"];
     return {
-      ...(this.thinking && this.reasoning !== "off" ? { thinking: { type: "adaptive" as const } } : {}),
+      ...(thinking && this.reasoning !== "off" ? { thinking: { type: "adaptive" as const } } : {}),
       ...(effort ? { output_config: { effort } } : {}),
     };
   }
 
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply> {
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true): Promise<ProviderReply> {
     let messages: Anthropic.MessageParam[] = turns.map((t) => {
       if (t.role === "user") return { role: "user", content: t.text };
       if (t.role === "assistant") {
@@ -126,7 +116,7 @@ export class AnthropicProvider implements Provider {
       model: this.model,
       max_tokens: this.maxOutput,
       // safe: assistant turns replay native blocks (Turn.raw) — but only Anthropic defines these
-      ...this.reasoningParams(),
+      ...this.reasoningParams(thinking),
       // Rendered before `messages` in Anthropic's cache lookup order (tools → system → messages),
       // so this one breakpoint also covers the tools block below it, as long as `tools` is
       // byte-identical call to call — see agent.ts's buildTools() memoization.
@@ -165,6 +155,7 @@ export class AnthropicProvider implements Provider {
           }
         : undefined,
       rateLimit: this.lastRateLimit,
+      truncated: msg.stop_reason === "max_tokens",
     };
   }
 }

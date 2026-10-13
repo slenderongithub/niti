@@ -14,7 +14,7 @@
 // four items; reconciling a patch against a list it half-remembers is the failure mode this exists
 // to prevent.
 
-export type TodoStatus = "pending" | "doing" | "done";
+type TodoStatus = "pending" | "doing" | "done";
 
 export interface TodoItem {
   text: string;

@@ -97,12 +97,23 @@ export function parseRateLimit(headers: Headers, kind: "anthropic" | "openai"): 
   };
 }
 
+// A fetch that hands each response's rate-limit headers to `seen` — at the transport layer, so it
+// works for streamed calls too.
+export function rateLimitFetch(kind: "anthropic" | "openai", seen: (rl: RateLimit) => void) {
+  return async (url: RequestInfo | URL, init?: RequestInit) => {
+    const res = await fetch(url, init);
+    seen(parseRateLimit(res.headers, kind));
+    return res;
+  };
+}
+
 export interface ProviderReply {
   text: string;
   toolCalls: ToolCall[];
   raw?: unknown; // native assistant content for verbatim replay (see Turn.raw)
   usage?: Usage; // for the pre-emptive context-depth warning
   rateLimit?: RateLimit; // account quota remaining (from response headers)
+  truncated?: boolean; // the reply stopped at the output-token limit — text and tool calls may be partial
 }
 
 export type OnDelta = (text: string) => void;
@@ -111,14 +122,14 @@ export interface Provider {
   // When onDelta is given, the provider streams text chunks to it and still returns the full reply.
   // `signal` aborts the request in flight (the user pressed esc): the SDKs cancel the HTTP call, so
   // an interrupt stops the stream — and the billing — instead of waiting for the reply to finish.
-  send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply>;
+  // `thinking`: the user's thinking-mode switch, per call. false → omit every reasoning/thinking
+  // parameter, even one configured on the agent. (It was a setter on the provider once, which only
+  // the task loops called — planning, debate and compaction ran on whatever value was left over.)
+  send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking?: boolean): Promise<ProviderReply>;
   // Optional: not every provider has an embeddings API (Anthropic doesn't at all). Callers that
   // want semantic search (see niti IDE's codebase index) must check for this before calling it,
   // and fall back to a non-semantic strategy when it's absent — never assume every provider has it.
   embed?(texts: string[]): Promise<number[][]>;
-  // Optional: the user's thinking-mode switch. false → omit every reasoning/thinking parameter from
-  // requests, even one configured on the agent. Providers with no such parameter simply lack it.
-  setThinking?(on: boolean): void;
 }
 
 // How hard a model should think before answering. Portable across providers because the thing
@@ -130,7 +141,7 @@ export interface Provider {
 // than something a default inflicts on every provider in the catalog.
 export type Reasoning = "off" | "low" | "medium" | "high" | "auto";
 
-export const REASONING_LEVELS: Reasoning[] = ["off", "low", "medium", "high", "auto"];
+const REASONING_LEVELS: Reasoning[] = ["off", "low", "medium", "high", "auto"];
 
 export function parseReasoning(v: unknown): Reasoning | undefined {
   return typeof v === "string" && (REASONING_LEVELS as string[]).includes(v) ? (v as Reasoning) : undefined;

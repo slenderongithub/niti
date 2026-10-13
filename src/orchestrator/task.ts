@@ -5,9 +5,7 @@ export interface Task {
   description: string;
   assignedTo?: string;
   status: TaskStatus;
-  attempts?: number; // bumped on each failover requeue
-  lastFailedBy?: string; // agent id that most recently failed this task (avoid immediate self-reclaim)
-  availableAt?: number; // epoch ms — claimTask ignores this task until then (backoff after failover)
+  attempts?: number; // bumped on each retry or failover (scheduler.ts)
   replans?: number; // bumped each time the lead is asked to replan this task after it exhausts retries
   // --- DAG fields (set by the planner; absent for a flat single-task fallback) ---
   role?: string; // agent id that should own this task

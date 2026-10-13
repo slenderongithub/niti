@@ -197,3 +197,14 @@ test("through the agent: edits that never change the error are nudged, then end 
   expect(nudge).toContain("X is not defined");
   expect(sends).toBe(2 * RECUR_STOP); // write, check, ×5 — nowhere near the 30-turn cap
 });
+
+test("with the agent's own write rule, a fix made through the shell counts as a change", () => {
+  const sed = { id: "s", name: "shell", input: { command: "sed", args: ["-i", "s/a/b/", "x.ts"] } };
+  const read = { id: "r", name: "read_file", input: { path: "x.ts" } };
+  const writes = (c: { name: string }) => c.name === "shell";
+  const g = new StallGuard();
+  g.observe([sed], [{ id: "s", name: "shell", output: "exit 0\n" }], writes); // the write that arms the guard
+  let verdict = "ok";
+  for (let i = 0; i < NUDGE_AFTER; i++) verdict = g.observe([read], [{ id: "r", name: "read_file", output: `contents ${i}` }], writes);
+  expect(verdict).toBe("nudge"); // armed by the shell write; with file-write tools only, it never would be
+});

@@ -4,10 +4,19 @@ import { parse } from "yaml";
 
 // Claude-Code-style skills: each .niti/skills/<name>/SKILL.md has YAML frontmatter (name, description).
 // We surface the descriptions in the system prompt; the agent reads the full file (via read_file) on demand.
-export interface Skill {
+interface Skill {
   name: string;
   description: string;
   path: string;
+}
+
+// A skill's (or a custom command's — see commands/registry.ts) YAML frontmatter and the text after it.
+// Either line ending: a file saved on Windows has \r\n, and a \n-only match read it as having no
+// frontmatter at all — no name, no description, and a command whose prompt began with the YAML.
+// parse() throws on malformed YAML; callers skip that one file.
+export function frontmatter(raw: string): { fm: Record<string, unknown>; body: string } {
+  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  return { fm: (m ? (parse(m[1]!) ?? {}) : {}) as Record<string, unknown>, body: (m ? raw.slice(m[0].length) : raw).trim() };
 }
 
 export function loadSkills(dir = ".niti/skills"): Skill[] {
@@ -21,9 +30,7 @@ export function loadSkills(dir = ".niti/skills"): Skill[] {
     // that skill, not the whole engine. parse() throws on malformed YAML and this runs during
     // startup, so it used to surface as a bare YAMLParseError with no filename.
     try {
-      const raw = readFileSync(path, "utf8");
-      const m = raw.match(/^---\n([\s\S]*?)\n---/);
-      const fm = (m ? (parse(m[1]!) ?? {}) : {}) as Record<string, unknown>;
+      const { fm } = frontmatter(readFileSync(path, "utf8"));
       skills.push({
         name: typeof fm.name === "string" ? fm.name : entry.name,
         description: typeof fm.description === "string" ? fm.description : "",

@@ -6,12 +6,8 @@ import type { Turn } from "../providers/provider.ts";
 import type { TaskNode } from "./task.ts";
 import type { OrchestrationEvent } from "./scheduler.ts";
 import { makePlan, type Exchange, type RoleInfo } from "./planner.ts";
-import { schedule } from "./scheduler.ts";
+import { schedule, planEvent } from "./scheduler.ts";
 
-
-const MAX_ATTEMPTS = 3; // failover retries before a task is marked failed
-
-// Flat-queue worker loop: claim → execute → complete, until all work is finished. Runs concurrently.
 
 export interface RunnerDeps {
   messageBus?: MessageBus; // wire hand-off/agent-to-agent messages into the event stream
@@ -41,6 +37,13 @@ export function takeApprovedPlan(orch: Orchestrator, goal: string): TaskNode[] |
   return orch.nodes(); // the live array — see Orchestrator.nodes()
 }
 
+// The orchestrator: the agent marked lead, else the first on the roster.
+function leadOf(agents: Agent[]): Agent {
+  const lead = agents.find((a) => a.config.lead) ?? agents[0];
+  if (!lead) throw new Error("no agents configured");
+  return lead;
+}
+
 // Primary core loop: the orchestrator plans a DAG → tasks are scheduled in dependency order,
 // independent tasks run concurrently, outputs flow to dependents/hand-offs, then the orchestrator
 // integrates the results. A failed planner degrades gracefully to a single whole-goal task.
@@ -51,8 +54,7 @@ export async function runProject(
   bus: Bus,
   deps: RunnerDeps = {},
 ): Promise<RunResult> {
-  const lead = agents.find((a) => a.config.lead) ?? agents[0];
-  if (!lead) throw new Error("no agents configured");
+  const lead = leadOf(agents);
   const roles: RoleInfo[] = agents.map((a) => ({ id: a.config.id, role: a.config.role, description: a.config.systemPrompt.slice(0, 140) }));
 
   // BUILD on a plan the user just read in PLAN mode: run that DAG. Planning again would bill a
@@ -85,12 +87,7 @@ export async function runProject(
     // DAG — no re-planning, no second bill.
     if (deps.planOnly) {
       orch.plannedGoal = prompt;
-      deps.onOrchestration?.({
-        type: "plan",
-        goal: prompt,
-        tasks: tasks.map((t) => ({ id: t.id, description: t.description, role: t.role, dependsOn: t.dependsOn })),
-        time: Date.now(),
-      });
+      deps.onOrchestration?.(planEvent(prompt, tasks));
       bus.publish({ agentId: lead.config.id, type: "thought", payload: `plan ready (${tasks.length} tasks) — switch to BUILD and send the same goal to run it (or /resume)`, time: Date.now() });
       return { kind: "work" };
     }
@@ -109,8 +106,7 @@ export async function runProject(
 // already exists) and each agent seeded with that task's stored conversation via deps.priorTurns.
 // Mutates the loaded Task objects in place so the orchestrator/UI keep seeing live status.
 export async function resumeProject(agents: Agent[], orch: Orchestrator, bus: Bus, deps: RunnerDeps = {}): Promise<void> {
-  const lead = agents.find((a) => a.config.lead) ?? agents[0];
-  if (!lead) throw new Error("no agents configured");
+  const lead = leadOf(agents);
   const unfinished = orch.all.filter((t) => t.status !== "done");
   if (!unfinished.length) {
     bus.publish({ agentId: lead.config.id, type: "thought", payload: "nothing to resume — all tasks are done", time: Date.now() });
@@ -132,5 +128,3 @@ export async function resumeProject(agents: Agent[], orch: Orchestrator, bus: Bu
     bus.publish({ agentId: lead.config.id, type: "error", payload: `resume failed: ${err instanceof Error ? err.message : err}`, time: Date.now() });
   }
 }
-
-// Exposed for testing the flat concurrency/claim path without a planning call.

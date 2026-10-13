@@ -3,7 +3,7 @@ import { GENERATED_CATALOG, GENERATED_CONTEXT, GENERATED_MODELS } from "./catalo
 // Provider catalog — the single source of provider metadata (client, baseURL, env var, models).
 // Anthropic and Google use native clients; everything else speaks the OpenAI chat API via baseURL,
 // which is how opencode/models.dev cover dozens of providers with one client.
-export type ClientKind = "anthropic" | "gemini" | "openai" | "copilot";
+type ClientKind = "anthropic" | "gemini" | "openai" | "copilot";
 
 export type Category = "byok" | "local" | "login";
 

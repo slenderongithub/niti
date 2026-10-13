@@ -11,9 +11,9 @@ import { childEnv } from "../tools/tools.ts";
 const REQUEST_TIMEOUT_MS = 10_000; // a hung server must not wedge an agent's tool loop
 const DIAGNOSTICS_WAIT_MS = 3_000; // diagnostics arrive as a push, not a reply — wait, then answer with what we have
 
-export type Severity = "error" | "warning" | "info" | "hint";
+type Severity = "error" | "warning" | "info" | "hint";
 
-export interface Diagnostic {
+interface Diagnostic {
   line: number; // 1-based, as humans and compilers count
   column: number;
   severity: Severity;
@@ -74,6 +74,7 @@ export class LspClient {
   private versions = new Map<string, number>();
   private starting?: Promise<void>;
   private dead?: Error;
+  private stopped = false; // stop() was called: unlike a crash, that is final
 
   constructor(
     private command: string,
@@ -86,20 +87,27 @@ export class LspClient {
   }
 
   // Idempotent and concurrency-safe: two agents asking for diagnostics at once share one handshake.
+  // A crash is not permanent — a failed handshake, or a server that died mid-session — so the next
+  // caller respawns it. (Only a handshake failure used to reset; a server that crashed after starting
+  // replayed the same stale error for the rest of the session.)
   start(): Promise<void> {
-    if (this.dead) return Promise.reject(this.dead);
-    // Self-clearing memo. `??=` cached the *rejection* too, so one slow or crashed handshake
-    // disabled this language server for the rest of the session — every later call replayed the
-    // same stale failure and the server was never given another chance.
-    if (!this.starting) {
-      this.starting = this.spawnAndInitialize().catch((err) => {
-        this.starting = undefined;
-        this.dead = undefined; // a crash is not permanent; the next caller respawns
-        this.proc = undefined;
-        throw err;
-      });
-    }
+    if (this.stopped) return Promise.reject(this.dead ?? new Error("stopped"));
+    if (this.dead) this.reset();
+    this.starting ??= this.spawnAndInitialize().catch((err) => {
+      this.reset();
+      throw err;
+    });
     return this.starting;
+  }
+
+  // Back to never-started. Document versions go too: a fresh server has opened nothing, and a
+  // didChange for a document it never saw is dropped — no diagnostics, ever.
+  private reset(): void {
+    this.proc?.kill();
+    this.starting = this.dead = this.proc = undefined;
+    this.buffer = Buffer.alloc(0);
+    this.versions.clear();
+    this.diagnosticsByUri.clear();
   }
 
   private async spawnAndInitialize(): Promise<void> {
@@ -113,8 +121,10 @@ export class LspClient {
     this.proc = proc;
     // A missing binary (ENOENT) surfaces here, not as a throw from spawn — same posture as an
     // optional MCP server: a clear error string, never a crashed agent.
-    proc.on("error", (err) => this.die(new Error(`${this.command}: ${err.message}`)));
-    proc.on("exit", (code) => this.die(new Error(`${this.command} exited (code ${code})`)));
+    // Only for this process: a previous one exiting late must not kill its replacement.
+    proc.on("error", (err) => proc === this.proc && this.die(new Error(`${this.command}: ${err.message}`)));
+    proc.on("exit", (code) => proc === this.proc && this.die(new Error(`${this.command} exited (code ${code})`)));
+    proc.stdin.on("error", () => {}); // EPIPE from a server that just died: the exit handler reports it
     proc.stdout.on("data", (chunk: Buffer) => this.onData(chunk));
     proc.stderr.on("data", () => {}); // language servers log chattily on stderr; not our business
 
@@ -146,6 +156,7 @@ export class LspClient {
   }
 
   stop(): void {
+    this.stopped = true;
     this.die(new Error("stopped"));
     this.proc?.kill();
   }

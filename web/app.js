@@ -254,13 +254,6 @@ function renderUsage() {
     `<div class="utotal urow"><span>total</span><span>${(totals.inputTokens + totals.outputTokens).toLocaleString()} tok · ${totals.calls} calls</span></div>`;
 }
 
-// Escapes quotes as well as angle brackets: several of the call sites below interpolate into an
-// attribute (class="…"), where &lt;/&gt; alone would not stop an injected value from closing the
-// attribute and adding its own. This page's URL carries the god-token, so an injected script here
-// reads it out of location.search.
-function esc(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-}
 
 const authedFetch = (path, body) =>
   fetch(`${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`, {

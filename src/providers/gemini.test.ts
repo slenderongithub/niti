@@ -38,3 +38,14 @@ test("thinking tokens are counted as output — candidatesTokenCount leaves them
   const out = await p.send("S", [{ role: "user", text: "hi" }], []);
   expect(out.usage).toEqual({ inputTokens: 100, outputTokens: 260, reasoningTokens: 250, cacheReadTokens: 60 });
 });
+
+test("tool-call ids are unique across replies, and a reply cut off at the output limit says so", async () => {
+  const p = new GeminiProvider("gemini-flash-latest", "k");
+  (p as unknown as { client: unknown }).client = {
+    models: { generateContent: async () => ({ candidates: [{ content: { parts: [{ functionCall: { name: "read_file", args: {} } }] }, finishReason: "MAX_TOKENS" }] }) },
+  };
+  const a = await p.send("S", [{ role: "user", text: "hi" }], []);
+  const b = await p.send("S", [{ role: "user", text: "hi" }], []);
+  expect(a.toolCalls[0]!.id).not.toBe(b.toolCalls[0]!.id); // results, UI blocks and masking pair on ids
+  expect(a.truncated).toBe(true);
+});

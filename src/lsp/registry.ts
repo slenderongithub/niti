@@ -55,7 +55,7 @@ export class LspRegistry {
       name: s.name,
       command: s.command,
       extensions: s.extensions,
-      running: this.clients.has(s.name),
+      running: this.clients.get(s.name)?.running ?? false, // spawned and still alive, not merely asked for
     }));
   }
 

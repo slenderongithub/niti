@@ -6,7 +6,7 @@ import { safePath } from "./tools.ts";
 // questions about code, they never change it.
 export const LSP_TOOLS = new Set(["diagnostics", "hover"]);
 
-export const LSP_SPECS: ToolSpec[] = [
+const LSP_SPECS: ToolSpec[] = [
   {
     name: "diagnostics",
     description: "Type errors, warnings and lints for a file, from the project's language server. Use it to check your own edits compile before moving on.",

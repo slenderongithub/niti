@@ -16,11 +16,19 @@ export function isSecretPath(p: string, root = process.cwd()): boolean {
 }
 
 // A shell call naming a secret file anywhere in its arguments (`cat .env`, `cp ~/.ssh/id_rsa x`,
-// `--env-file=.env`). The safe-command allowlist auto-approves `cat *`, so without this a secret
-// was one unprompted `cat` away.
+// `--env-file=.env`, `git show HEAD:.env`). The safe-command allowlist auto-approves `cat *`, so
+// without this a secret was one unprompted `cat` away.
+//
+// Or one that reads files it never names: a recursive grep, or rg with its hidden/ignored-file
+// filters off (by default rg skips .env and whatever .gitignore lists). Those print matching lines
+// of every credential file in the tree; the native `grep` tool skips them, so these ask instead.
 export function shellTouchesSecret(command: string, args: string[], root = process.cwd()): boolean {
+  const base = basename(command);
+  if (base === "grep" && args.some((a) => /^(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive|--dereference-recursive|--directories=recurse)$/.test(a))) return true;
+  if (base === "rg" && args.some((a) => /^(-[a-zA-Z]*[u.][a-zA-Z]*|--hidden|--no-ignore.*)$/.test(a))) return true;
   return [command, ...args].some((a) => {
-    const v = a.startsWith("-") && a.includes("=") ? a.slice(a.indexOf("=") + 1) : a;
+    let v = a.startsWith("-") && a.includes("=") ? a.slice(a.indexOf("=") + 1) : a;
+    if (base === "git") v = v.slice(v.indexOf(":") + 1); // <rev>:<path>
     return !v.startsWith("-") && v !== "" && isSecretPath(v.replace(/^~(?=\/)/, process.env.HOME ?? "~"), root);
   });
 }

@@ -9,6 +9,16 @@ import { parsePermissions, type PermissionRules } from "../permissions.ts";
 import { CATALOG, providerKeys } from "../providers/catalog.ts";
 import { parseReasoning } from "../providers/provider.ts";
 import { truncateMiddle } from "../agent/context.ts";
+import { leavesProject } from "../tools/tools.ts";
+import { resolveBaseURL } from "../auth/auth-store.ts";
+import { checkTrust, grantTrust } from "../trust/trust-store.ts";
+
+const CONFIG = ".niti/agents.yaml";
+
+// The parsed file, `{}` when there is none (or it is empty). Also what directory trust hashes.
+export function readConfig(path = CONFIG): Record<string, unknown> {
+  return existsSync(path) ? ((parse(readFileSync(path, "utf8")) ?? {}) as Record<string, unknown>) : {};
+}
 
 // True when `dir` is the home directory, however either side is spelled: cwd is always a real path,
 // but $HOME may be a symlink (or differ in case/trailing slash), and a plain string compare missed it.
@@ -24,7 +34,7 @@ export function isHomeDir(dir: string, home = homedir()): boolean {
 }
 
 // Loads and validates .niti/agents.yaml. User-authored → validate required fields with clear errors.
-export function loadAgents(path = ".niti/agents.yaml"): AgentConfig[] {
+export function loadAgents(path = CONFIG): AgentConfig[] {
   // Explicit, so "missing" is distinguishable from "invalid" upstream. readFileSync's own ENOENT
   // message names the path, but every validation error below names it too — and the CLI used to
   // treat both as "no agents configured", telling users to re-run init and overwrite the config
@@ -68,9 +78,9 @@ export interface NitiOptions {
   sandbox?: boolean; // false → run shell commands without the OS sandbox (src/sandbox.ts); default on
 }
 
-export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
+export function loadOptions(path = CONFIG): NitiOptions {
   if (!existsSync(path)) return {};
-  const raw = (parse(readFileSync(path, "utf8")) ?? {}) as Record<string, unknown>;
+  const raw = readConfig(path);
   const num = (v: unknown): number | undefined => (typeof v === "number" && v > 0 ? v : undefined);
   return {
     theme: typeof raw.theme === "string" ? raw.theme : undefined,
@@ -99,7 +109,7 @@ export function loadOptions(path = ".niti/agents.yaml"): NitiOptions {
 // written, and half a prompt beats a core that won't boot.
 // With `discover`, the first of INSTRUCTION_FILES that exists in the project root is included too,
 // so a plain AGENTS.md needs no `instructions:` entry — unless the user already listed it.
-export const INSTRUCTION_FILES = [".niti.md", "AGENTS.md", "agents.md"];
+const INSTRUCTION_FILES = [".niti.md", "AGENTS.md", "agents.md"];
 
 // The Config tab's preference flags and their defaults — one table so the core, /session and
 // /settings can't disagree about which keys exist.
@@ -121,7 +131,13 @@ export function loadInstructions(files: string[] = [], root = process.cwd(), dis
   if (auto && files.some((f) => f.replace(/^\.\//, "").toLowerCase() === auto!.toLowerCase())) auto = undefined; // listed, so chosen
   if (auto) files = [auto, ...files];
   for (const f of files) {
-    const p = f.startsWith("/") ? f : join(root, f);
+    // Held to the project like every file tool: a cloned repo's `instructions: [~/.aws/credentials]`
+    // would otherwise send that file to the provider in every system prompt.
+    if (leavesProject(root, f)) {
+      console.error(`niti: skipping instructions file '${f}' — it is outside the project`);
+      continue;
+    }
+    const p = resolvePath(root, f);
     if (!existsSync(p)) continue;
     let body = readFileSync(p, "utf8").trim();
     // The auto-discovered file is resent at the head of every call to every agent, and nobody chose
@@ -135,10 +151,8 @@ export function loadInstructions(files: string[] = [], root = process.cwd(), dis
 
 // Project-wide tool policy under a top-level `permissions:` block — the layer consulted when an
 // agent's own `permissions:` has nothing to say about a call.
-export function loadPermissions(path = ".niti/agents.yaml"): PermissionRules | undefined {
-  if (!existsSync(path)) return undefined;
-  const raw = parse(readFileSync(path, "utf8")) as { permissions?: unknown };
-  return parsePermissions(raw?.permissions, path);
+export function loadPermissions(path = CONFIG): PermissionRules | undefined {
+  return parsePermissions(readConfig(path).permissions, path);
 }
 
 // Language servers declared under a top-level `lsp:` block — one entry per language:
@@ -146,10 +160,9 @@ export function loadPermissions(path = ".niti/agents.yaml"): PermissionRules | u
 //     typescript: { command: typescript-language-server, args: [--stdio], extensions: [.ts, .tsx] }
 // Servers are user-installed; a malformed entry is skipped rather than blocking startup, exactly
 // like mcpServers above.
-export function loadLspServers(path = ".niti/agents.yaml"): LspServerConfig[] {
-  if (!existsSync(path)) return [];
-  const raw = parse(readFileSync(path, "utf8")) as { lsp?: unknown };
-  if (typeof raw?.lsp !== "object" || raw.lsp == null || Array.isArray(raw.lsp)) return [];
+export function loadLspServers(path = CONFIG): LspServerConfig[] {
+  const raw = readConfig(path);
+  if (typeof raw.lsp !== "object" || raw.lsp == null || Array.isArray(raw.lsp)) return [];
   return Object.entries(raw.lsp as Record<string, unknown>).flatMap(([name, value]) => {
     const s = (value ?? {}) as Record<string, unknown>;
     const extensions = Array.isArray(s.extensions) ? s.extensions.filter((e): e is string => typeof e === "string") : [];
@@ -159,10 +172,9 @@ export function loadLspServers(path = ".niti/agents.yaml"): LspServerConfig[] {
 }
 
 // MCP servers declared under `mcpServers:` in the same file. Skips malformed entries.
-export function loadMcpServers(path = ".niti/agents.yaml"): McpServerConfig[] {
-  if (!existsSync(path)) return [];
-  const raw = parse(readFileSync(path, "utf8")) as { mcpServers?: unknown } | null;
-  if (!Array.isArray(raw?.mcpServers)) return []; // raw is null for an empty file
+export function loadMcpServers(path = CONFIG): McpServerConfig[] {
+  const raw = readConfig(path);
+  if (!Array.isArray(raw.mcpServers)) return [];
   return raw.mcpServers.flatMap((s: unknown) => {
     const r = (s ?? {}) as Record<string, unknown>;
     if (typeof r.name !== "string" || typeof r.command !== "string") return [];
@@ -180,10 +192,15 @@ function editConfig(path: string, apply: (doc: Document) => void): void {
   if (doc.errors.length) {
     throw new Error(`${path} is not valid YAML (${doc.errors[0]!.message}) — fix it by hand; niti will not overwrite it`);
   }
+  // niti's own write is not the outside change directory trust exists to catch: a project trusted
+  // before it is still trusted after — but only if it was trusted against exactly what is on disk.
+  const root = dirname(dirname(resolvePath(path)));
+  const trusted = checkTrust(root, doc.toJS() ?? {}) === "trusted";
   apply(doc);
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, doc.toString());
   renameSync(tmp, path);
+  if (trusted) grantTrust(root, doc.toJS() ?? {});
 }
 
 // Persist role assignments back to .niti/agents.yaml (written by the team picker and the live
@@ -192,7 +209,7 @@ function editConfig(path: string, apply: (doc: Document) => void): void {
 // Only the `agents:` key is replaced: the picker runs on every launch, and rewriting the file from
 // scratch would silently delete the permissions/lsp/mcpServers blocks and every option next to
 // them — config the user hand-wrote and never asked to have touched.
-export function saveAgents(agents: AgentConfig[], path = ".niti/agents.yaml"): void {
+export function saveAgents(agents: AgentConfig[], path = CONFIG): void {
   // The read path validated carefully and the write path validated nothing — yet the write path is
   // the one facing untrusted input (POST /agents). One guard here covers all three writers: the
   // HTTP route, the init wizard, and the TUI team picker.
@@ -223,7 +240,7 @@ export function saveAgents(agents: AgentConfig[], path = ".niti/agents.yaml"): v
 // Persist the active theme name back to .niti/agents.yaml (written by the TUI's theme carousel so
 // the choice survives a restart and the web dashboard can read it back via loadOptions()). Same
 // read-merge-write shape as saveAgents — only the `theme` key is touched.
-export function setTheme(theme: string, path = ".niti/agents.yaml"): void {
+export function setTheme(theme: string, path = CONFIG): void {
   // parse→stringify round-trips *data*, discarding every comment in the file. This runs on every
   // keypress of the theme carousel, so a user who documented their roster lost all of it the first
   // time they cycled a colour scheme. The Document API edits in place and keeps the rest verbatim.
@@ -233,7 +250,7 @@ export function setTheme(theme: string, path = ".niti/agents.yaml"): void {
 // Persist the approval mode back to .niti/agents.yaml (written by the team picker's setup question
 // and by /auto | /manual) so the choice survives a restart. Same read-merge-write shape as
 // setTheme — only the `auto` key is touched, every comment and hand-written block around it stays.
-export function setOption(key: string, value: boolean, path = ".niti/agents.yaml"): void {
+export function setOption(key: string, value: boolean, path = CONFIG): void {
   editConfig(path, (doc) => doc.set(key, value));
 }
 
@@ -258,8 +275,11 @@ function validate(a: unknown, i: number, path: string): AgentConfig {
     throw new Error(`${path} agent[${i}]: unknown provider '${provider}' (known: ${providerKeys().join(", ")})`);
   }
   const baseURL = typeof rec.baseURL === "string" ? rec.baseURL : undefined;
-  if (provider === "custom" && !baseURL) {
-    throw new Error(`${path} agent[${i}]: provider 'custom' requires a 'baseURL'`);
+  // The endpoint may live on the agent (the desktop app puts it there) or in the credential saved
+  // for `custom` (`niti-core auth login custom`, and the TUI's team picker) — the provider factory
+  // reads either. Requiring it on the agent made every TUI-built custom agent unsaveable.
+  if (provider === "custom" && !baseURL && !resolveBaseURL("custom")) {
+    throw new Error(`${path} agent[${i}]: provider 'custom' needs a 'baseURL' — on the agent, or saved with: niti-core auth login custom`);
   }
   return {
     id: str("id"),

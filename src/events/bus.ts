@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 
-export type EventType =
+type EventType =
   | "thought"
   | "tool_call"
   | "file_edit"

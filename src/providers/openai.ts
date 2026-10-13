@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, RateLimit, Reasoning } from "./provider.ts";
-import { parseRateLimit, cacheBreakpoints } from "./provider.ts";
+import { rateLimitFetch, cacheBreakpoints } from "./provider.ts";
 
 function parseArgs(s: string | undefined): Record<string, unknown> {
   if (!s) return {};
@@ -57,7 +57,7 @@ function mergeDetails(into: Record<string, unknown>[], fragments: unknown): void
 // this: it merges consecutive user messages into the tool-result turn already.
 const HARNESS_NOTE = "\n\n[niti — note from the harness, not part of the tool output]\n";
 
-export interface OpenAIOptions {
+interface OpenAIOptions {
   vendor?: string; // catalog key ("openai", "openrouter", "deepseek", …) — picks the per-vendor dialect
   cacheKey?: string; // OpenAI prompt_cache_key: requests sharing it are routed to the same prefix cache
   maxOutput?: number;
@@ -81,26 +81,15 @@ export class OpenAIProvider implements Provider {
     private opts: OpenAIOptions = {},
   ) {
     this.supportsUsageOption = !/localhost|127\.0\.0\.1|\[::1\]/.test(baseURL ?? "");
-    const trackedFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
-      const res = await fetch(url, init);
-      this.lastRateLimit = parseRateLimit(res.headers, "openai");
-      return res;
-    };
     this.client = new OpenAI({
       ...(apiKey ? { apiKey } : {}),
       ...(baseURL ? { baseURL } : {}),
       ...(headers ? { defaultHeaders: headers } : {}),
-      fetch: trackedFetch,
+      fetch: rateLimitFetch("openai", (rl) => (this.lastRateLimit = rl)),
     });
   }
 
-  private thinking = true;
-
-  setThinking(on: boolean): void {
-    this.thinking = on;
-  }
-
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply> {
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true): Promise<ProviderReply> {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: "system", content: sysPrompt },
     ];
@@ -149,7 +138,7 @@ export class OpenAIProvider implements Provider {
     const params = {
       model: this.model,
       messages: sent,
-      ...reasoningEffort(this.thinking ? this.reasoning : undefined, vendor, this.model),
+      ...reasoningEffort(thinking ? this.reasoning : undefined, vendor, this.model),
       ...(vendor === "openai" && cacheKey ? { prompt_cache_key: cacheKey } : {}),
       ...(maxOutput ? (vendor === "openai" ? { max_completion_tokens: maxOutput } : { max_tokens: maxOutput }) : {}),
       // OpenRouter reports cached and reasoning tokens (and the real cost) only when asked.
@@ -171,7 +160,8 @@ export class OpenAIProvider implements Provider {
         tc.type === "function" ? [{ id: tc.id, name: tc.function.name, input: parseArgs(tc.function.arguments) }] : [],
       );
       const raw = captureReasoning(tag, msg?.reasoning_content ?? msg?.reasoning ?? "", Array.isArray(msg?.reasoning_details) ? msg.reasoning_details : []);
-      return { text: msg?.content ?? "", toolCalls, usage: mapUsage(res.usage), rateLimit: this.lastRateLimit, ...(raw ? { raw } : {}) };
+      const truncated = res.choices[0]?.finish_reason === "length";
+      return { text: msg?.content ?? "", toolCalls, usage: mapUsage(res.usage), rateLimit: this.lastRateLimit, truncated, ...(raw ? { raw } : {}) };
     }
 
     // Streaming: accumulate text (emitted live) and tool-call fragments (arrive by index).
@@ -188,9 +178,11 @@ export class OpenAIProvider implements Provider {
     let reasoning = "";
     const details: Record<string, unknown>[] = [];
     let usage: ReturnType<typeof mapUsage>;
+    let truncated = false;
     const acc: Record<number, { id?: string; name?: string; args: string }> = {};
     for await (const chunk of stream) {
       if (chunk.usage) usage = mapUsage(chunk.usage);
+      if (chunk.choices[0]?.finish_reason === "length") truncated = true;
       const d = chunk.choices[0]?.delta as (OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta & ReasoningFields) | undefined;
       reasoning += d?.reasoning_content ?? d?.reasoning ?? "";
       if (d?.reasoning_details) mergeDetails(details, d.reasoning_details);
@@ -207,9 +199,11 @@ export class OpenAIProvider implements Provider {
     }
     const toolCalls: ToolCall[] = Object.values(acc)
       .filter((a) => a.name)
-      .map((a) => ({ id: a.id ?? a.name!, name: a.name!, input: parseArgs(a.args) }));
+      // A runtime that sends no id: one unique per call, never the bare name — ids are what results,
+      // the UI's live blocks and observation masking pair on, across the whole conversation.
+      .map((a) => ({ id: a.id ?? `${a.name}-${crypto.randomUUID().slice(0, 8)}`, name: a.name!, input: parseArgs(a.args) }));
     const raw = captureReasoning(tag, reasoning, details);
-    return { text, toolCalls, usage, rateLimit: this.lastRateLimit, ...(raw ? { raw } : {}) };
+    return { text, toolCalls, usage, rateLimit: this.lastRateLimit, truncated, ...(raw ? { raw } : {}) };
   }
 }
 
@@ -234,7 +228,7 @@ function markOpenAI<M>(m: M): M {
   return m;
 }
 
-export function mapUsage(
+function mapUsage(
   u:
     | {
         prompt_tokens?: number;

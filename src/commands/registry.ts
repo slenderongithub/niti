@@ -1,12 +1,10 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { parse } from "yaml";
 import type { Engine } from "../engine.ts";
 import { splitModelId } from "../providers/catalog.ts";
-import { costOf } from "../providers/pricing.ts";
 import { saveTasks } from "../session.ts";
 import { setAuto } from "../config/config.ts";
-import { loadSkills } from "../skills/skills.ts";
+import { loadSkills, frontmatter } from "../skills/skills.ts";
 import { isGitRepo, snapshotBranch } from "../orchestrator/worktree.ts";
 import { buildExportReport } from "./export.ts";
 
@@ -14,13 +12,13 @@ import { buildExportReport } from "./export.ts";
 // web dashboard needs an identical second implementation of every one of them. Clients fetch the
 // list (for autocomplete/help) and POST a name to run it.
 
-export interface CommandResult {
+interface CommandResult {
   ok: boolean;
   message: string;
   view?: string; // a pure client-side view switch ("panes" | "graph" | "usage")
 }
 
-export interface Command {
+interface Command {
   name: string; // without the leading slash
   description: string;
   run: (engine: Engine, args: string) => Promise<CommandResult>;
@@ -56,10 +54,10 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: "cancel",
-    description: "Stop launching new work; in-flight tasks finish",
+    description: "Stop the run: no new work, model calls and shell commands in flight are interrupted",
     async run(engine) {
       engine.cancel();
-      return { ok: true, message: "cancelling — in-flight tasks will finish" };
+      return { ok: true, message: "cancelling — in-flight model calls and shell commands are being stopped" };
     },
   },
   {
@@ -112,7 +110,8 @@ export const BUILTIN_COMMANDS: Command[] = [
       return {
         ok: true,
         message: engine.configs
-          .map((c) => `${c.lead ? "★" : " "} ${c.id.padEnd(16)} ${c.provider}/${c.model}  [${(c.allowedTools ?? ["(all)"]).join(",")}]`)
+          // No allowedTools is no tools at all (expandTools in tools.ts), not "all" of them.
+          .map((c) => `${c.lead ? "★" : " "} ${c.id.padEnd(16)} ${c.provider}/${c.model}  [${c.allowedTools?.length ? c.allowedTools.join(",") : "(none)"}]`)
           .join("\n"),
       };
     },
@@ -186,27 +185,17 @@ export const BUILTIN_COMMANDS: Command[] = [
       const lines: string[] = [];
       let total = 0;
       let complete = true;
+      // Priced per call when it was recorded (see Agent.record), so an agent since removed from the
+      // roster, or switched to another model, still reports what it actually spent.
       for (const { agentId, usage } of engine.usage.snapshot()) {
-        const cfg = engine.configs.find((c) => c.id === agentId);
-        // `continue` here silently dropped real spend: an agent that ran and was then removed from
-        // the roster (or whose id changed via the picker) still has usage recorded against it, and
-        // skipping it under-reported the session total with no indication anything was missing.
-        if (!cfg) {
-          const tokens = usage.inputTokens + usage.outputTokens;
-          if (tokens === 0) continue;
-          complete = false;
-          lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  (no longer on the team — unpriced)`);
-          continue;
-        }
-        const { usd, priced } = costOf(cfg.provider, cfg.model, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens);
-        total += usd;
-        if (!priced) complete = false;
+        total += usage.usd;
+        if (usage.unpriced) complete = false;
         // A savings mechanism nobody can see delivers no visible value — show it whenever a
         // provider has actually reported any cache activity for this agent.
         const cache = usage.cacheReadTokens || usage.cacheWriteTokens ? ` (cache ${usage.cacheReadTokens}in ${usage.cacheWriteTokens}wr)` : "";
         // Thinking is billed as output; showing its share explains an output count far above the text.
         const thinking = usage.reasoningTokens ? ` (thinking ${usage.reasoningTokens})` : "";
-        lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  $${usd.toFixed(4)}${priced ? "" : " (unpriced)"}${cache}${thinking}`);
+        lines.push(`${agentId.padEnd(16)} ${usage.inputTokens}in ${usage.outputTokens}out  $${usage.usd.toFixed(4)}${usage.unpriced ? " (unpriced)" : ""}${cache}${thinking}`);
       }
       if (!lines.length) return { ok: true, message: "nothing spent yet" };
       return { ok: true, message: [...lines, `TOTAL $${total.toFixed(4)}${complete ? "" : "+"}`].join("\n") };
@@ -317,10 +306,7 @@ export function loadCommands(dir = ".niti/commands"): Command[] {
     // frontmatter threw out of the constructor and took down the whole core with a bare YAML error
     // naming no file. A bad command file costs you that command, not the session.
     try {
-      const raw = readFileSync(join(dir, entry.name), "utf8");
-      const m = raw.match(/^---\n([\s\S]*?)\n---\n?/);
-      const fm = (m ? (parse(m[1]!) ?? {}) : {}) as Record<string, unknown>;
-      const body = (m ? raw.slice(m[0].length) : raw).trim();
+      const { fm, body } = frontmatter(readFileSync(join(dir, entry.name), "utf8"));
       const name = typeof fm.name === "string" ? fm.name : entry.name.replace(/\.md$/, "");
       commands.push({
         name,

@@ -19,7 +19,7 @@ export type OrchestrationEvent =
   | { type: "integrate"; summary: string; next?: string[]; time: number }
   | { type: "complete"; completed: number; total: number; cancelled?: boolean; time: number };
 
-export interface SchedulerDeps {
+interface SchedulerDeps {
   bus?: Bus;
   messageBus?: MessageBus;
   onOrchestration?: (e: OrchestrationEvent) => void;
@@ -27,6 +27,12 @@ export interface SchedulerDeps {
   goal?: string; // surfaced on the "plan" event for the dashboard
   shouldStop?: () => boolean; // graceful cancel — stop launching new tasks; in-flight ones finish
   priorTurns?: (taskId: string) => Turn[]; // resume: stored conversation to seed a task's first attempt with
+}
+
+// The "plan" event every client redraws the DAG from — for a fresh plan, a reviewed one, and after a
+// replan injects tasks.
+export function planEvent(goal: string, tasks: TaskNode[]): OrchestrationEvent {
+  return { type: "plan", goal, tasks: tasks.map((t) => ({ id: t.id, description: t.description, role: t.role, dependsOn: t.dependsOn })), time: Date.now() };
 }
 
 const DEP_CONTEXT_MAX = 4000; // per-prerequisite ceiling on inherited output (see depContext)
@@ -96,16 +102,11 @@ async function attemptReplan(
   deps.onOrchestration?.({ type: "replan", taskId: t.id, role: t.role, action: plan.action, reason: plan.reason, time: Date.now() });
   bus?.publish({ agentId: lead.config.id, type: "thought", payload: `replan ${t.id}: ${plan.action}${plan.reason ? ` — ${plan.reason}` : ""}`, time: Date.now() });
 
-  if (plan.action === "retry") {
-    t.description = plan.description ?? t.description;
-    t.attempts = 0;
-    t.status = "pending";
-    t.assignedTo = undefined;
-    return true;
-  }
-  if (plan.action === "redirect") {
-    if (!plan.role || !agentsById.has(plan.role)) return false; // unknown target — decline, don't silently default
-    t.role = plan.role;
+  if (plan.action === "retry" || plan.action === "redirect") {
+    if (plan.action === "redirect") {
+      if (!plan.role || !agentsById.has(plan.role)) return false; // unknown target — decline, don't silently default
+      t.role = plan.role;
+    }
     t.description = plan.description ?? t.description;
     t.attempts = 0;
     t.status = "pending";
@@ -132,12 +133,7 @@ async function attemptReplan(
     }
     // Re-emit the plan so both clients redraw the DAG with the new nodes. The TUI's existing
     // `case "plan"` handles it as-is; without this the board silently omitted the injected work.
-    deps.onOrchestration?.({
-      type: "plan",
-      goal,
-      tasks: tasks.map((t) => ({ id: t.id, description: t.description, role: t.role, dependsOn: t.dependsOn })),
-      time: Date.now(),
-    });
+    deps.onOrchestration?.(planEvent(goal, tasks));
   }
   return false; // "inject" and "accept" both leave the original task failed
 }
@@ -206,8 +202,11 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
   // Read live, not captured once: a replan's "inject" action can grow `tasks` mid-run, and progress
   // totals should reflect that.
   const settled = () => tasks.filter((t) => t.status === "done" || t.status === "failed").length;
+  // Called once a task's status is final; ok is read off it.
+  const taskDone = (t: TaskNode): void =>
+    emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: t.status === "done", completed: settled(), total: tasks.length, time: Date.now() });
 
-  emit?.({ type: "plan", goal, tasks: tasks.map((t) => ({ id: t.id, description: t.description, role: t.role, dependsOn: t.dependsOn })), time: Date.now() });
+  emit?.(planEvent(goal, tasks));
   messageBus?.resetCaps();
   // Coordination is intentionally open within a run — the planner can't anticipate every question
   // an agent will need mid-task (e.g. "what's the API shape?"), so any registered teammate may
@@ -217,7 +216,25 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
   const depsDone = (t: TaskNode) => t.dependsOn.every((d) => (byId.get(d)?.status ?? "done") === "done");
   const depFailed = (t: TaskNode) => t.dependsOn.some((d) => byId.get(d)?.status === "failed");
 
+  // Agents holding a task slot (one task per agent at a time), and the tasks in flight. Two separate
+  // sets because a failover moves the slot to another agent mid-task: keyed together, the slot
+  // stayed with the agent that had failed, and the one actually working could be handed a second task.
+  const busy = new Set<string>();
+  const inflight = new Set<Promise<void>>();
+
   const runTask = async (t: TaskNode): Promise<void> => {
+    let holder = t.role; // whose slot this task occupies — moves with a failover
+    try {
+      await runTaskIn(t, (id) => {
+        busy.delete(holder);
+        busy.add((holder = id));
+      });
+    } finally {
+      busy.delete(holder);
+    }
+  };
+
+  const runTaskIn = async (t: TaskNode, moveTo: (agentId: string) => void): Promise<void> => {
     // Per-task, as MAX_PER_PAIR's own comment always claimed. It was reset once for the whole
     // plan, so a 6-task run shared one 10-message budget across every ask_agent, handoff and
     // review — and once spent, later handoffs were dropped.
@@ -226,7 +243,7 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     if (!runner) {
       t.status = "failed";
       bus?.publish({ agentId: t.role, type: "error", payload: `no agent '${t.role}' for ${t.id}`, time: Date.now() });
-      emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total: tasks.length, time: Date.now() });
+      taskDone(t);
       return;
     }
     t.status = "in_progress";
@@ -265,17 +282,19 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
       // doesn't stall the run — but this loop re-ran the *same* exhausted agent three times while
       // publishing "failover", so an idle Gemini agent was never tried and the UI said otherwise.
       const alt = agents.find(
-        (a) => a.config.id !== runner!.config.id && !running.has(a.config.id) && !a.config.lead && !a.nearLimit?.(),
+        (a) => a.config.id !== runner!.config.id && !busy.has(a.config.id) && !a.config.lead && !a.nearLimit?.(),
       );
       if (alt) {
+        const from = runner.config.id;
         runner = alt;
+        moveTo(alt.config.id);
         t.role = alt.config.id;
         t.assignedTo = alt.config.id;
         bus?.publish({
           agentId: alt.config.id,
           type: "failover",
           payload: unverified
-            ? `${t.id} failed its checks under ${runner!.config.id} — retrying on ${alt.config.id} (attempt ${t.attempts}/${MAX_ATTEMPTS})`
+            ? `${t.id} failed its checks under ${from} — retrying on ${alt.config.id} (attempt ${t.attempts}/${MAX_ATTEMPTS})`
             : `${t.id} failed over to ${alt.config.id} (attempt ${t.attempts}/${MAX_ATTEMPTS})`,
           time: Date.now(),
         });
@@ -317,7 +336,7 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     }
     // A recovered task isn't finished — no task_done event, and it stays out of the handoff block below.
     if (t.status === "done" || t.status === "failed") {
-      emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: t.status === "done", completed: settled(), total: tasks.length, time: Date.now() });
+      taskDone(t);
     }
 
     if (t.status === "done" && t.handoffTo?.length && messageBus) {
@@ -334,7 +353,6 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     }
   };
 
-  const running = new Map<string, Promise<void>>(); // agentId → in-flight task
   for (;;) {
     const stop = deps.shouldStop?.() ?? false;
 
@@ -343,7 +361,7 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
       if (t.status === "pending" && depFailed(t)) {
         t.status = "failed";
         bus?.publish({ agentId: t.role, type: "error", payload: `${t.id} skipped — a prerequisite failed`, time: Date.now() });
-        emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total: tasks.length, time: Date.now() });
+        taskDone(t);
       }
     }
 
@@ -351,28 +369,26 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
     // launching new work but let in-flight tasks finish.
     if (!stop)
       for (const t of tasks) {
-        if (t.status !== "pending" || !depsDone(t) || running.has(t.role)) continue;
+        if (t.status !== "pending" || !depsDone(t) || busy.has(t.role)) continue;
         emit?.({ type: "task_ready", taskId: t.id, role: t.role, time: Date.now() });
-        // Captured up front: a "redirect" replan can change t.role while this task is in flight, and
-        // the slot must be freed under the role it was claimed under, not whatever role it ends on.
-        const startRole = t.role;
-        const p = runTask(t).finally(() => running.delete(startRole));
-        running.set(startRole, p);
+        busy.add(t.role);
+        const p: Promise<void> = runTask(t).finally(() => inflight.delete(p));
+        inflight.add(p);
       }
 
-    if (running.size === 0) {
+    if (inflight.size === 0) {
       // Nothing running and nothing startable. If pending tasks remain they're unreachable — fail
       // them. But NOT on cancel: the user stopping a run has not made those tasks fail, and marking
       // them failed is what made a cancelled run report every remaining task as an error.
       if (!(deps.shouldStop?.() ?? false)) {
         for (const t of tasks.filter((t) => t.status === "pending")) {
           t.status = "failed";
-          emit?.({ type: "task_done", taskId: t.id, role: t.role, ok: false, completed: settled(), total: tasks.length, time: Date.now() });
+          taskDone(t);
         }
       }
       break;
     }
-    await Promise.race(running.values());
+    await Promise.race(inflight);
   }
 
   // Integrate: the orchestrator reviews the outputs and compiles a summary. Skipped on cancel —

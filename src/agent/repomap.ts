@@ -25,7 +25,7 @@ const ITERATIONS = 12; // converges well before this on graphs of a few hundred 
 // files tells it nothing it will not see immediately.
 const MIN_FILES = 12;
 
-export interface RepoMapOptions {
+interface RepoMapOptions {
   maxFiles?: number; // how many ranked files to show
   maxChars?: number; // hard ceiling on the rendered map
   path?: string; // only show files under this project-relative directory (the repo_map tool's zoom)

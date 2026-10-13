@@ -9,8 +9,9 @@ test("UsageTracker accumulates per-agent and totals", () => {
   u.record("b", 200, 40);
 
   const snap = Object.fromEntries(u.snapshot().map((s) => [s.agentId, s.usage]));
-  expect(snap.a).toEqual({ inputTokens: 150, outputTokens: 30, calls: 2, lastInput: 50, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
-  expect(snap.b).toEqual({ inputTokens: 200, outputTokens: 40, calls: 1, lastInput: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 });
+  // No cost given: unpriced, so a total built from it is shown as a lower bound.
+  expect(snap.a).toEqual({ inputTokens: 150, outputTokens: 30, calls: 2, lastInput: 50, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, usd: 0, unpriced: true });
+  expect(snap.b).toEqual({ inputTokens: 200, outputTokens: 40, calls: 1, lastInput: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, usd: 0, unpriced: true });
   expect(u.totals()).toEqual({ inputTokens: 350, outputTokens: 70, calls: 3, cacheReadTokens: 0, cacheWriteTokens: 0 });
 });
 
@@ -50,4 +51,11 @@ test("lastInput is the whole prompt when the caller supplies it, so a cached win
   expect(t.snapshot()[0]!.usage.lastInput).toBe(960_000);
   t.record("a", 700, 10); // no context given: falls back to the input count, as before
   expect(t.snapshot()[0]!.usage.lastInput).toBe(700);
+});
+
+test("UsageTracker keeps each call's own price, so a later model switch can't reprice it", () => {
+  const u = new UsageTracker();
+  u.record("a", 100, 20, 0, 0, undefined, 0, { usd: 0.5, priced: true }); // the expensive model
+  u.record("a", 100, 20, 0, 0, undefined, 0, { usd: 0.01, priced: true }); // after /model, a cheap one
+  expect(u.snapshot()[0]!.usage).toMatchObject({ usd: 0.51, unpriced: false });
 });

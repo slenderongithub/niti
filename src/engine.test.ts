@@ -351,14 +351,10 @@ test("a makeProvider failure (e.g. missing key) doesn't crash Engine's construct
     },
     interactive: false,
   });
-  const errors: string[] = [];
-  engine.bus.subscribe((e) => {
-    if (e.type === "error") errors.push(e.payload);
-  });
-
-  // The broken agent is still there — just fails clearly, per-agent, the moment it's asked to act.
-  await engine.submit("do something");
-  expect(errors.some((e) => e.includes("no API key for 'google'"))).toBe(true);
+  // The broken agent is still there — just fails clearly the moment it's asked to act. Planning is
+  // its first call, and a provider that can't answer at all throws out of submit() (the CLI and the
+  // server both report that), rather than being handed the whole goal as a task to fail again.
+  await expect(engine.submit("do something")).rejects.toThrow("no API key for 'google'");
 });
 
 test("/auto and /manual flip approval mode live, without restarting the team", async () => {
@@ -560,4 +556,49 @@ test("a message typed while the lead is still planning reaches the agent that do
   releasePlan();
   await run;
   expect(workerSaw).toContain("use orange");
+});
+
+test("merging or discarding the worktree is refused while a run is still working in it", async () => {
+  const repo = mkdtempSync(join(tmpdir(), "niti-engine-busy-"));
+  for (const args of [["init", "-q"], ["config", "user.email", "t@e.com"], ["config", "user.name", "T"]]) execFileSync("git", args, { cwd: repo });
+  writeFileSync(join(repo, "README.md"), "hi\n");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repo });
+  let release!: () => void;
+  const hold = new Promise<void>((r) => (release = r));
+  const provider: Provider = {
+    async send(_s, turns) {
+      const last = [...turns].reverse().find((t) => t.role === "user");
+      if (last && "text" in last && last.text.includes("orchestrator of a team")) return { text: '[{"description":"work","role":"a"}]', toolCalls: [] };
+      await hold; // the task is mid-run
+      return { text: "done", toolCalls: [] };
+    },
+  };
+  const single: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "x", role: "A", systemPrompt: "s", lead: true, allowedTools: [] }];
+  const engine = new Engine({ configs: single, makeProvider: () => provider, interactive: false, root: repo, worktree: true });
+  const run = engine.submit("go");
+  while (!engine.worktreeHandle) await new Promise((r) => setTimeout(r, 5));
+  expect((await engine.discardWorktree()).ok).toBe(false);
+  expect((await engine.mergeWorktree()).ok).toBe(false);
+  expect(existsSync(engine.worktreeHandle.path)).toBe(true); // still there for the agent working in it
+  release();
+  await run;
+  expect((await engine.discardWorktree()).ok).toBe(true); // and allowed once the run is over
+});
+
+test("a live model switch is saved, so a restart doesn't put the agent back on its old model", () => {
+  const saved: AgentConfig[][] = [];
+  const stub: Provider = { async send() { return { text: "", toolCalls: [] }; } };
+  const team: AgentConfig[] = [{ id: "a", provider: "anthropic", model: "old", role: "A", systemPrompt: "s", lead: true, allowedTools: [] }];
+  const engine = new Engine({ configs: team, makeProvider: () => stub, persist: (c) => saved.push(c) });
+  expect(engine.switchModel("a", "anthropic", "new")).toBeUndefined();
+  expect(saved.at(-1)?.[0]).toMatchObject({ id: "a", model: "new", systemPrompt: "s" }); // the declared prompt, not the augmented one
+
+  // A save that fails keeps the switch live and says so.
+  const warnings: string[] = [];
+  const failing = new Engine({ configs: team, makeProvider: () => stub, persist: () => { throw new Error("agents.yaml is not valid YAML"); } });
+  failing.bus.subscribe((e) => e.type === "warning" && warnings.push(e.payload));
+  expect(failing.switchModel("a", "anthropic", "newer")).toBeUndefined();
+  expect(failing.configs[0]!.model).toBe("newer");
+  expect(warnings.some((w) => w.includes("not saved"))).toBe(true);
 });

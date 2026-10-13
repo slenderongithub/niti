@@ -6,7 +6,7 @@ import { summarizeError } from "../providers/provider.ts";
 // flat fan-out: tasks carry dependencies (dependsOn) and hand-offs (handoffTo) so work is sequenced
 // (e.g. UI design before the frontend that consumes it) and outputs flow to the right downstream role.
 
-export interface Plan {
+interface Plan {
   goal: string;
   tasks: TaskNode[];
   // Not every message is work. The planner routes it: a greeting or chat gets `reply` (said back
@@ -170,7 +170,7 @@ function boardBlock(unfinished: string[]): string {
 // on parallelisable tasks and lost 39-70% on sequential ones (Google, "Towards a Science of Scaling
 // Agent Systems", 2025), and a single agent beat a fixed pipeline on bug fixing and multi-file
 // coding (ECER 2026). See docs/research/2026-10-merged.md.
-export function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, history: Exchange[] = [], unfinished: string[] = []): string {
+function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, history: Exchange[] = [], unfinished: string[] = []): string {
   const roster = roles
     .map((r) => `  - id "${r.id}" — role: ${r.role}${r.description ? ` (${r.description})` : ""}`)
     .join("\n");
@@ -201,14 +201,20 @@ export function plannerPrompt(goal: string, roles: RoleInfo[], correction?: stri
 }
 
 // Ask the orchestrator agent for a plan, validating + normalizing. Retries on invalid JSON, then
-// falls back to a single task (the whole goal on the lead) — a bad planner never crashes the run.
+// falls back to a single task (the whole goal on the lead) — a bad plan never crashes the run. A
+// provider that cannot answer at all (a bad key, no network, an interrupt) is not a bad plan: it
+// throws out of here, rather than handing the whole goal to the same failing model as a task.
 export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo[], history: Exchange[] = [], unfinished: string[] = []): Promise<Plan> {
   let correction: string | undefined;
+  let answered = false;
+  let lastError: unknown;
   for (let attempt = 0; attempt < MAX_PLAN_ATTEMPTS; attempt++) {
     let raw: string;
     try {
       raw = await lead.ask(plannerPrompt(goal, roles, correction, history, unfinished));
+      answered = true;
     } catch (err) {
+      lastError = err;
       correction = summarizeError(err);
       continue;
     }
@@ -228,6 +234,7 @@ export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo
     }
     return normalizePlan(goal, rawTasks, roles);
   }
+  if (!answered) throw lastError;
   // Fallback: one task, whole goal, on the lead.
   const role = lead.config.id;
   return {
@@ -243,7 +250,7 @@ const RawRemediation = z.object({
   tasks: z.array(RawTask).optional(), // inject: freestanding remediation tasks, same shape as a plan
   reason: z.string().optional(),
 });
-export type RemediationPlan = z.infer<typeof RawRemediation>;
+type RemediationPlan = z.infer<typeof RawRemediation>;
 
 const MAX_REPLAN_PLANNER_ATTEMPTS = 2; // a recovery call, not a full plan — cheaper retry budget than makePlan's
 

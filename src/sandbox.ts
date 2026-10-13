@@ -52,6 +52,13 @@ function gitWritable(root: string): string[] {
 
 const sbString = (p: string) => `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
+// What git runs on its own: hooks, and config keys like core.fsmonitor / core.hooksPath / core.pager.
+// git itself is run *outside* the sandbox — by niti (worktree commits, the file graph) and by the
+// user — so a sandboxed command that could write these could plant code that later runs unconfined.
+function gitExecutable(root: string): string[] {
+  return [...gitWritable(root).flatMap((d) => [join(d, "hooks"), join(d, "config")]), join(HOME, ".config", "git")];
+}
+
 export function seatbeltProfile(root: string): string {
   const r = real(root);
   // dirname(tmpdir) is the per-user /var/folders/… dir: T/ is temp, C/ is the cache dir clang/swift use.
@@ -61,8 +68,8 @@ export function seatbeltProfile(root: string): string {
     "(allow default)",
     "(deny file-write*)",
     `(allow file-write* ${writable.map((p) => `(subpath ${sbString(p)})`).join(" ")} (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/(fd/[0-9]+|ttys[0-9]+|dtracehelper)$"))`,
-    // Later rules win: carve niti's own config and the credential stores back out of what is writable.
-    `(deny file-write* (subpath ${sbString(join(r, ".niti"))}) ${SECRET_DIRS.map((d) => `(subpath ${sbString(real(d))})`).join(" ")})`,
+    // Later rules win: carve niti's own config, git's executable config and the credential stores back out of what is writable.
+    `(deny file-write* (subpath ${sbString(join(r, ".niti"))}) ${[...gitExecutable(root), ...SECRET_DIRS].map((d) => `(subpath ${sbString(real(d))})`).join(" ")})`,
     `(deny file-read* ${SECRET_DIRS.map((d) => `(subpath ${sbString(real(d))})`).join(" ")} ${SECRET_FILES.map((f) => `(literal ${sbString(real(f))})`).join(" ")})`,
   ].join("\n");
 }
@@ -70,7 +77,7 @@ export function seatbeltProfile(root: string): string {
 function bwrapArgs(root: string): string[] {
   const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--die-with-parent"];
   for (const d of [root, ...gitWritable(root), ...CACHE_DIRS]) if (existsSync(d)) args.push("--bind", d, d);
-  if (existsSync(join(root, ".niti"))) args.push("--ro-bind", join(root, ".niti"), join(root, ".niti"));
+  for (const d of [join(root, ".niti"), ...gitExecutable(root)]) if (existsSync(d)) args.push("--ro-bind", d, d);
   for (const d of SECRET_DIRS) if (existsSync(d)) args.push("--tmpfs", d);
   for (const f of SECRET_FILES) if (existsSync(f)) args.push("--ro-bind", "/dev/null", f);
   return [...args, "--chdir", root];
@@ -87,7 +94,7 @@ function bwrapAvailable(): boolean {
   return bwrapWorks;
 }
 
-export type SandboxKind = "seatbelt" | "bubblewrap" | "none";
+type SandboxKind = "seatbelt" | "bubblewrap" | "none";
 
 export function sandboxKind(): SandboxKind {
   if (process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec")) return "seatbelt";

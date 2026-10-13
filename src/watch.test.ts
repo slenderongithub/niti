@@ -2,7 +2,8 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { watchProject, isIgnored } from "./watch.ts";
+import { watchProject } from "./watch.ts";
+import { ignored } from "./graph/filegraph.ts";
 
 // fs.watch delivers asynchronously and coalesces; poll for the expectation instead of sleeping
 // a fixed amount and hoping.
@@ -116,12 +117,12 @@ test("an agent's new file does not report its folder as changed either", async (
   w.close();
 }, LIVE);
 
-test("isIgnored matches on any path segment", () => {
-  expect(isIgnored(".git/HEAD")).toBe(true);
-  expect(isIgnored("src/node_modules/x/index.js")).toBe(true);
-  expect(isIgnored(".niti/niti.db")).toBe(true);
-  expect(isIgnored("src/agent/agent.ts")).toBe(false);
-  expect(isIgnored("gitignore.md")).toBe(false); // segment match, not substring
+test("the watcher's ignore check matches on any path segment", () => {
+  expect(ignored(".git/HEAD")).toBe(true);
+  expect(ignored("src/node_modules/x/index.js")).toBe(true);
+  expect(ignored(".niti/niti.db")).toBe(true);
+  expect(ignored("src/agent/agent.ts")).toBe(false);
+  expect(ignored("gitignore.md")).toBe(false); // segment match, not substring
 });
 
 test("close() stops further reports", async () => {

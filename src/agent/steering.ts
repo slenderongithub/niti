@@ -16,7 +16,7 @@
 // about what a model "probably" needs. Deliberately short: a long addendum competes with the
 // project's own instructions for the model's attention, which is the problem, not the fix.
 
-export type Family = "gemini" | "openai" | "anthropic" | "other";
+type Family = "gemini" | "openai" | "anthropic" | "other";
 
 // Keyed off the model id rather than the provider, because the catalog routes many providers
 // through one client: OpenRouter, Groq and a custom endpoint all arrive as provider "openai" while

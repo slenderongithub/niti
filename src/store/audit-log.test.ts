@@ -1,4 +1,7 @@
 import { test, expect } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openDb } from "./db.ts";
 import { AuditLog } from "./audit-log.ts";
 
@@ -39,4 +42,16 @@ test("verify() detects a tampered row — editing detail after the fact breaks t
 
 test("an empty log verifies as intact", () => {
   expect(log().verify()).toBe(true);
+});
+
+test("three processes appending at once keep one intact chain", async () => {
+  const db = join(mkdtempSync(join(tmpdir(), "niti-audit-race-")), "niti.db");
+  const store = new URL("../store/", import.meta.url).pathname;
+  const writer = `const { openDb } = await import("${store}db.ts"); const { AuditLog } = await import("${store}audit-log.ts");
+    const log = new AuditLog(openDb(process.argv[1])); for (let i = 0; i < 2000; i++) log.append({ kind: "tool_call", detail: { i } });`;
+  const procs = [0, 1, 2].map(() => Bun.spawn(["bun", "-e", writer, db], { stdout: "ignore", stderr: "inherit" }));
+  expect(await Promise.all(procs.map((p) => p.exited))).toEqual([0, 0, 0]);
+  const log = new AuditLog(openDb(db));
+  expect(log.list()).toHaveLength(6000);
+  expect(log.verify()).toBe(true); // without the write lock both processes chained onto the same row
 });

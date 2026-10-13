@@ -32,14 +32,18 @@ export function loadTasks(path = DEFAULT): Task[] {
 
 // What an agent is seeded with when a task is resumed, so it continues rather than starting over.
 //
-// Two bounds, both learned the hard way. (1) Only the resuming agent's own sessions: a task that
+// Three bounds, all learned the hard way. (1) Only the resuming agent's own sessions: a task that
 // failed over between agents has sessions from each, and replaying all of them fed one model
 // another model's first-person transcript as if it were its own. (2) Only the most recent one:
 // every prior attempt concatenated meant a task retried four times resumed with four full
 // transcripts, which is how a resume overflows the context window before it has done anything.
+// (3) Provider-native `raw` blocks (Anthropic thinking, Gemini thought signatures) only replay to
+// the provider that made them: an agent switched to another provider since gets the plain turns.
 // ponytail: last-session-only, not a token budget — upgrade if resumes need deeper history.
-export function resumeConversation(store: SessionStore, taskId: string, agentId?: string): Turn[] {
+export function resumeConversation(store: SessionStore, taskId: string, agentId?: string, provider?: string): Turn[] {
   const sessions = store.listSessions({ taskId }).filter((s) => !agentId || s.agentId === agentId);
   const latest = sessions.at(-1);
-  return latest ? store.loadTurns(latest.id) : [];
+  if (!latest) return [];
+  const turns = store.loadTurns(latest.id);
+  return !provider || latest.provider === provider ? turns : turns.map((t) => (t.role === "assistant" ? { ...t, raw: undefined } : t));
 }

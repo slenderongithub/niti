@@ -165,16 +165,14 @@ test("OpenRouter serving Claude gets cache_control breakpoints; other OpenRouter
   expect(seenLlama.params.messages[0].content).toBe("SYS");
 });
 
-test("setThinking(false) drops reasoning_effort from the request; true restores it", async () => {
+test("thinking=false drops reasoning_effort from the request; true restores it", async () => {
   const p = new OpenAIProvider("o3", "k", undefined, undefined, "high");
   const seen = withStub(p, reply({ content: "ok" }));
   await p.send("S", [{ role: "user", text: "hi" }], []);
   expect(seen.params.reasoning_effort).toBe("high");
-  p.setThinking(false);
-  await p.send("S", [{ role: "user", text: "hi" }], []);
+  await p.send("S", [{ role: "user", text: "hi" }], [], undefined, undefined, false);
   expect("reasoning_effort" in seen.params).toBe(false);
-  p.setThinking(true);
-  await p.send("S", [{ role: "user", text: "hi" }], []);
+  await p.send("S", [{ role: "user", text: "hi" }], [], undefined, undefined, true);
   expect(seen.params.reasoning_effort).toBe("high");
 });
 
@@ -252,4 +250,10 @@ test("streamed reasoning (OpenRouter `reasoning` + fragmented reasoning_details)
 test("'off' asks later GPT-5.x and GPT-6 for 'low', which every reasoning model accepts", () => {
   expect(reasoningEffort("off", "openai", "gpt-5.6-terra")).toEqual({ reasoning_effort: "low" });
   expect(reasoningEffort("off", "openai", "gpt-6.1-sol")).toEqual({ reasoning_effort: "low" });
+});
+
+test("a reply stopped at the length limit is flagged truncated", async () => {
+  const p = new OpenAIProvider("gpt-4o", "k");
+  withStub(p, { choices: [{ message: { content: "half" }, finish_reason: "length" }] });
+  expect((await p.send("S", [{ role: "user", text: "hi" }], [])).truncated).toBe(true);
 });

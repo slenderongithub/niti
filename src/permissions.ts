@@ -9,11 +9,11 @@
 // first layer with a matching pattern decides. Unmatched everywhere → "ask".
 import { posix, relative, isAbsolute, sep } from "node:path";
 
-export type Decision = "allow" | "ask" | "deny";
-export type ToolRules = Record<string, Decision>; // pattern → decision
+type Decision = "allow" | "ask" | "deny";
+type ToolRules = Record<string, Decision>; // pattern → decision
 export type PermissionRules = Record<string, ToolRules>; // tool name (or "*") → patterns
 
-export const DECISIONS: Decision[] = ["allow", "ask", "deny"];
+const DECISIONS: Decision[] = ["allow", "ask", "deny"];
 
 // Same effect as the pre-config behaviour: reads are free, everything else (write_file, shell, MCP
 // tools, …) prompts. An agent with no `permissions:` block therefore behaves exactly as before.

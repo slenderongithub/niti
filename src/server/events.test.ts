@@ -10,3 +10,15 @@ test("missedSince reports events that fell out of the replay buffer, and only th
   expect(hub.missedSince(0)).toBe(0); // a fresh client asked for "whatever is buffered"
   expect(hub.missedSince(2100)).toBe(0);
 });
+
+test("live-only events reach subscribers but never crowd the replay buffer, or count as missed", () => {
+  const hub = new EventHub();
+  const seen: number[] = [];
+  hub.subscribe((e) => seen.push(e.seq));
+  hub.publish({ kind: "theme", theme: "plan" });
+  for (let i = 0; i < 5000; i++) hub.publish({ kind: "theme", theme: "token" }, false); // a long streamed reply
+  hub.publish({ kind: "theme", theme: "done" });
+  expect(seen).toHaveLength(5002); // live clients got all of it
+  expect(hub.replay(0).map((e) => (e as { theme: string }).theme)).toEqual(["plan", "done"]); // the run survives
+  expect(hub.missedSince(1)).toBe(0); // the gap is live-only events, not lost history
+});

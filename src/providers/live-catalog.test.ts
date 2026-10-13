@@ -119,3 +119,19 @@ test("Ollama / LM Studio list what is installed; a server that isn't up returns 
   expect(await localModels("ollama", (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch)).toBeUndefined();
   expect(await localModels("anthropic", up)).toBeUndefined(); // not a local runtime
 });
+
+test("a local runtime's model list comes from the endpoint saved with auth login, not only the default", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  process.env.NITI_AUTH_FILE = join(mkdtempSync(join(tmpdir(), "niti-local-")), "auth.json");
+  writeFileSync(process.env.NITI_AUTH_FILE, JSON.stringify({ credentials: [{ provider: "ollama", type: "local", baseURL: "http://gpu-box:11434/v1" }] }));
+  const asked: string[] = [];
+  const up = (async (url: string) => (asked.push(url), new Response(JSON.stringify({ data: [{ id: "qwen3:32b" }] })))) as unknown as typeof fetch;
+  try {
+    expect(await localModels("ollama", up)).toEqual(["qwen3:32b"]);
+    expect(asked).toEqual(["http://gpu-box:11434/v1/models"]);
+  } finally {
+    delete process.env.NITI_AUTH_FILE;
+  }
+});

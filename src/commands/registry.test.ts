@@ -298,3 +298,9 @@ test("/clear is a full reset: ids, usage, notes, undo stack, stored sessions and
   // What survives in the replay buffer is the reset marker and the zeroed usage that follows it.
   expect(e.hub.replay(0).map((ev) => ev.kind)).toEqual(["session_reset", "usage"]);
 });
+
+test("/agents says an agent with no allowedTools has none, not all", async () => {
+  const stub: Provider = { async send() { return { text: "", toolCalls: [] }; } };
+  const e = new Engine({ configs: [{ id: "solo", provider: "anthropic", model: "m", role: "R", systemPrompt: "s", lead: true }], makeProvider: () => stub });
+  expect((await new CommandRegistry([...BUILTIN_COMMANDS]).run(e, "agents")).message).toContain("[(none)]");
+});

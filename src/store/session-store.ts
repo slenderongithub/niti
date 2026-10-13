@@ -1,25 +1,28 @@
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { Turn, ToolCall, ToolResult, Usage } from "../providers/provider.ts";
 import type { AgentMessage } from "../messaging/message-bus.ts";
 
 export type SessionKind = "task" | "fork" | "ask" | "respond";
-export type SessionStatus = "active" | "done" | "failed" | "exhausted";
-export type PartType = "text" | "tool_call" | "tool_result" | "raw" | "file_ref";
+type SessionStatus = "active" | "done" | "failed" | "exhausted";
+type PartType = "text" | "tool_call" | "tool_result" | "raw" | "file_ref";
 
-export interface Part {
+interface Part {
   type: PartType;
   content: unknown; // stored as JSON
 }
 
-export interface RewindStep {
+interface RewindStep {
   path: string; // absolute
-  action: "restored" | "deleted" | "skipped"; // skipped: the file's directory no longer exists
+  // skipped: the file's directory no longer exists. kept: the file changed after this write (the
+  // user, or a later write that is already gone), so restoring would silently throw that away.
+  action: "restored" | "deleted" | "skipped" | "kept";
   agentId?: string; // whose write this reverted, when the session is known
 }
 
-export interface SessionInput {
+interface SessionInput {
   agentId: string;
   kind: SessionKind;
   provider: string;
@@ -28,7 +31,7 @@ export interface SessionInput {
   parentSessionId?: string;
 }
 
-export interface SessionRow {
+interface SessionRow {
   id: string;
   agentId: string;
   taskId?: string;
@@ -293,8 +296,11 @@ export class SessionStore {
   // LIFO and shallow by design (/rewind's default is 1), so older rows are dead weight that grew
   // the database by *total bytes ever written* — a long session rewriting a large file repeatedly
   // was the pathological case. Raise the constant if deeper history is ever wanted.
-  checkpoint(sessionId: string, path: string, content: string | null): void {
-    this.db.query("INSERT INTO checkpoints (session_id, path, content, created_at) VALUES (?, ?, ?, ?)").run(sessionId, path, content, Date.now());
+  // `after`: what the write left on disk — omitted, a rewind restores unconditionally.
+  checkpoint(sessionId: string, path: string, content: string | null, after?: string | null): void {
+    this.db
+      .query("INSERT INTO checkpoints (session_id, path, content, after_hash, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(sessionId, path, content, after === undefined ? null : sha(after), Date.now());
     this.db
       .query("DELETE FROM checkpoints WHERE id <= (SELECT MAX(id) - ? FROM checkpoints)")
       .run(CHECKPOINT_KEEP);
@@ -317,15 +323,17 @@ export class SessionStore {
     }
     const row = this.db
       .query(
-        `SELECT c.id, c.path, c.content, s.agent_id AS agent_id FROM checkpoints c
+        `SELECT c.id, c.path, c.content, c.after_hash, s.agent_id AS agent_id FROM checkpoints c
          LEFT JOIN sessions s ON s.id = c.session_id WHERE ${where.join(" AND ")} ORDER BY c.id DESC LIMIT 1`,
       )
-      .get(...args) as { id: number; path: string; content: string | null; agent_id: string | null } | null;
+      .get(...args) as { id: number; path: string; content: string | null; after_hash: string | null; agent_id: string | null } | null;
     if (!row) return undefined;
     const agentId = row.agent_id ?? undefined;
     let action: RewindStep["action"];
     if (!existsSync(dirname(row.path))) {
       action = "skipped";
+    } else if (row.after_hash !== null && (existsSync(row.path) ? sha(readFileSync(row.path, "utf8")) : null) !== row.after_hash) {
+      action = "kept";
     } else if (row.content === null) {
       rmSync(row.path, { force: true });
       action = "deleted";
@@ -376,3 +384,5 @@ export class SessionStore {
     })();
   }
 }
+
+const sha = (text: string | null): string | null => (text === null ? null : createHash("sha256").update(text).digest("hex"));

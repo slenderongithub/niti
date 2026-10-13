@@ -37,7 +37,10 @@ export const NUDGE_AFTER = 8;
 export const STOP_AFTER = 6;
 
 export type StallVerdict = "ok" | "nudge" | "stop";
-export type StallKind = "idle" | "recurring";
+type StallKind = "idle" | "recurring";
+
+// A call that went through: not a tool error, and for a shell command, exit 0.
+const succeeded = (r: ToolResult | undefined): boolean => !!r && !r.output.startsWith("error:") && !/^exit (?!0\b)/.test(r.output);
 
 const spins = (call: ToolCall, r: ToolResult): boolean =>
   READ_ONLY_TOOLS.has(call.name) || r.output.startsWith("error:") || (call.name === "shell" && /^exit (?!0\b)/.test(r.output));
@@ -56,16 +59,18 @@ export class StallGuard {
   detail = ""; // the recurring error, when kind is "recurring"
 
   // One round: the calls the model made and what came back, in the same order.
-  observe(calls: ToolCall[], results: ToolResult[]): StallVerdict {
-    const recur = this.observeRecurrence(calls, results);
-    const idle = this.observeIdle(calls, results); // always: it owns the reset on progress
+  // `writes`: whether a call can change files — the agent's own rule (Agent.changesFiles), so a fix
+  // made with `sed -i` counts as one. The default, file-write tools only, is for callers without one.
+  observe(calls: ToolCall[], results: ToolResult[], writes: (c: ToolCall) => boolean = (c) => WRITE_TOOLS.has(c.name)): StallVerdict {
+    const recur = this.observeRecurrence(calls, results, writes);
+    const idle = this.observeIdle(calls, results, writes); // always: it owns the reset on progress
     if (recur !== "ok") return recur;
     if (idle !== "ok") this.kind = "idle";
     return idle;
   }
 
-  private observeRecurrence(calls: ToolCall[], results: ToolResult[]): StallVerdict {
-    if (calls.some((c, i) => WRITE_TOOLS.has(c.name) && !results[i]?.output.startsWith("error:"))) this.epoch++;
+  private observeRecurrence(calls: ToolCall[], results: ToolResult[], writes: (c: ToolCall) => boolean): StallVerdict {
+    if (calls.some((c, i) => writes(c) && succeeded(results[i]))) this.epoch++;
     let verdict: StallVerdict = "ok";
     calls.forEach((c, i) => {
       const out = results[i]?.output ?? "";
@@ -92,8 +97,8 @@ export class StallGuard {
   }
   recurCount = 0;
 
-  private observeIdle(calls: ToolCall[], results: ToolResult[]): StallVerdict {
-    const wrote = calls.some((c, i) => WRITE_TOOLS.has(c.name) && !results[i]?.output.startsWith("error:"));
+  private observeIdle(calls: ToolCall[], results: ToolResult[], writes: (c: ToolCall) => boolean): StallVerdict {
+    const wrote = calls.some((c, i) => writes(c) && succeeded(results[i]));
     const stagnant = !wrote && calls.length > 0 && calls.every((c, i) => results[i] !== undefined && spins(c, results[i]!));
     if (wrote) this.armed = true;
     if (!stagnant) {

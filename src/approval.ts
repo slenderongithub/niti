@@ -1,28 +1,27 @@
-// Bridges concurrent agents (which pause awaiting a decision) and the single TUI prompt.
-// Requests queue up; the TUI answers them one at a time (or as a batch — see currentBatch).
+// Bridges concurrent agents (which pause awaiting a decision) and the clients that answer them.
+// Requests queue up; every client sees the whole queue (queued()) and answers them by id.
 // Approving with scope "agent" grants that (agentId, tool) pair for the rest of the session;
 // scope "path" additionally narrows the grant to the request's parent directory. A dangerous
 // call marks itself forceAsk, which always queues regardless of any standing grant.
 import { normalizePath } from "./permissions.ts";
 import type { AuditLog } from "./store/audit-log.ts";
 
-export interface ApprovalRequest {
+interface ApprovalRequest {
   id: number; // stable per request, so a client can answer the one it showed, not whatever is now first
   agentId: string;
   tool: string;
   input: Record<string, unknown>;
   resolve: (ok: boolean) => void;
-  queuedAt: number;
+  // Dangerous, outside the project, or a credential: always asked, never waved through by a grant —
+  // and so never part of a client's "allow all" either.
+  forceAsk: boolean;
 }
 
-export interface PermissionScope {
+interface PermissionScope {
   agentId: string; // "*" = any agent
   tool: string; // "*" = any tool
   pathPattern?: string; // glob (Bun.Glob) — only checked when the request's input has a string `path`
 }
-
-const BATCH_MIN = 3; // fewer than this, show them one at a time
-const BATCH_WINDOW_MS = 5000; // ...but only batch if they arrived close together
 
 // Flood guard: an agent that piles up more than this many still-unanswered requests gets refused
 // outright rather than queued, the same "reject past a cap" shape as message-bus.ts's MAX_PER_PAIR
@@ -66,7 +65,7 @@ export class ApprovalQueue {
       return Promise.resolve(false);
     }
     return new Promise((resolve) => {
-      this.pending.push({ id: this.nextId++, agentId, tool, input, resolve, queuedAt: Date.now() });
+      this.pending.push({ id: this.nextId++, agentId, tool, input, resolve, forceAsk });
       this.notify();
     });
   }
@@ -75,11 +74,11 @@ export class ApprovalQueue {
     return this.pending[0];
   }
 
-  // Present as one batch dialog once 3+ requests are queued within a 5s window; otherwise the
-  // TUI falls back to current() and handles them one at a time.
-  currentBatch(): readonly ApprovalRequest[] | undefined {
-    if (this.pending.length < BATCH_MIN) return undefined;
-    return Date.now() - this.pending[0]!.queuedAt <= BATCH_WINDOW_MS ? this.pending : undefined;
+  // The whole queue, oldest first. It used to be the whole queue only when 3+ requests had arrived
+  // within 5 seconds and just the front otherwise — so a client listing them showed one while ten
+  // waited, and the list shrank on a timer with no event to say so.
+  queued(): readonly ApprovalRequest[] {
+    return this.pending;
   }
 
   // `edited` overrides fields of the queued request's input (e.g. a diff-view in-place edit) —
@@ -106,33 +105,13 @@ export class ApprovalQueue {
     return true;
   }
 
-  // Batch actions — resolve a whole slice of the queue at once, so N side-by-side approvals
-  // don't cost N round trips through the TUI.
-  approveAll(): void {
-    this.drain(() => true);
-  }
-
+  // /cancel: everything waiting is refused at once — the human just said stop.
   denyAll(): void {
-    this.drain(() => false);
-  }
-
-  approveAgent(agentId: string): void {
-    const matched = this.pending.filter((r) => r.agentId === agentId);
-    this.pending = this.pending.filter((r) => r.agentId !== agentId);
-    for (const r of matched) {
-      this.logDecision(r, true); // one-time batch approval, not a standing "agent" scope grant
-      r.resolve(true);
-    }
-    this.notify();
-  }
-
-  private drain(outcome: (r: ApprovalRequest) => boolean): void {
     const batch = this.pending;
     this.pending = [];
     for (const r of batch) {
-      const ok = outcome(r);
-      this.logDecision(r, ok);
-      r.resolve(ok);
+      this.logDecision(r, false);
+      r.resolve(false);
     }
     this.notify();
   }

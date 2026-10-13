@@ -11,7 +11,7 @@ export type ServerEventBody =
   | { kind: "agent_message"; message: AgentMessage }
   | { kind: "orchestration"; event: OrchestrationEvent }
   | { kind: "usage"; agents: { agentId: string; usage: AgentUsage }[]; totals: { inputTokens: number; outputTokens: number; calls: number }; rateLimits: RateLimitSnapshot[]; cost: number; costKnown: boolean }
-  | { kind: "approval_request"; requests: { id: number; agentId: string; tool: string; input: Record<string, unknown> }[] }
+  | { kind: "approval_request"; requests: { id: number; agentId: string; tool: string; input: Record<string, unknown>; dangerous: boolean }[] }
   | { kind: "lock"; holders: { path: string; holder: string }[] }
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
   | { kind: "theme"; theme: string }
@@ -45,13 +45,20 @@ const BUFFER_MAX = 2000; // ring buffer for replay — enough for a session, bou
 export class EventHub {
   private seq = 0;
   private buffer: ServerEvent[] = [];
+  private evicted = 0; // seq of the newest buffered event pushed out by the cap
   private subs = new Set<(e: ServerEvent) => void>();
 
-  publish(body: ServerEventBody & { time?: number }): ServerEvent {
+  // `replay: false` for what is only worth seeing live — streamed tokens, a running command's latest
+  // lines. Buffered, a single long reply was a thousand events that pushed the plan and every tool
+  // call out of the buffer, and a reconnecting client got a gap instead of the run; the final
+  // `message` event already carries the whole text.
+  publish(body: ServerEventBody & { time?: number }, replay = true): ServerEvent {
     const { time, ...rest } = body;
     const e = { ...rest, seq: ++this.seq, time: time ?? Date.now() } as ServerEvent;
-    this.buffer.push(e);
-    if (this.buffer.length > BUFFER_MAX) this.buffer.shift();
+    if (replay) {
+      this.buffer.push(e);
+      if (this.buffer.length > BUFFER_MAX) this.evicted = this.buffer.shift()!.seq;
+    }
     for (const fn of this.subs) fn(e);
     return e;
   }
@@ -67,10 +74,10 @@ export class EventHub {
     return this.buffer.filter((e) => e.seq > fromSeq);
   }
 
-  // How many events after `fromSeq` fell out of the buffer before a client came back for them.
+  // How many events after `fromSeq` fell out of the buffer before a client came back for them — by
+  // what was evicted, not by the gap before the oldest buffered seq, which live-only events also leave.
   missedSince(fromSeq: number): number {
-    const oldest = this.buffer[0]?.seq;
-    return fromSeq > 0 && oldest !== undefined && oldest > fromSeq + 1 ? oldest - fromSeq - 1 : 0;
+    return fromSeq > 0 && this.evicted > fromSeq ? this.evicted - fromSeq : 0;
   }
 
   lastSeq(): number {

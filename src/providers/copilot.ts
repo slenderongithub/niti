@@ -17,7 +17,7 @@ const COPILOT_HEADERS: Record<string, string> = {
 
 const JSON_HEADERS = { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "niti" };
 
-export interface DeviceCode {
+interface DeviceCode {
   device_code: string;
   user_code: string;
   verification_uri: string;
@@ -36,7 +36,7 @@ export async function startDeviceFlow(): Promise<DeviceCode> {
 }
 
 // Pure state machine for a poll response — the auth-critical branch, kept testable.
-export type PollOutcome = { done: string } | { pending: true } | { slowDown: true } | { error: string };
+type PollOutcome = { done: string } | { pending: true } | { slowDown: true } | { error: string };
 export function interpretPollResponse(data: Record<string, unknown>): PollOutcome {
   if (typeof data.access_token === "string") return { done: data.access_token };
   if (data.error === "authorization_pending") return { pending: true };
@@ -80,7 +80,7 @@ export async function pollForToken(deviceCode: string, interval: number): Promis
 }
 
 // Exchange the GitHub OAuth token for a short-lived Copilot API token.
-export async function fetchCopilotToken(githubToken: string): Promise<{ token: string; expiresAt: number }> {
+async function fetchCopilotToken(githubToken: string): Promise<{ token: string; expiresAt: number }> {
   const res = await fetch(COPILOT_TOKEN_URL, {
     headers: { Authorization: `token ${githubToken}`, "User-Agent": "niti", Accept: "application/json" },
   });
@@ -94,29 +94,21 @@ export class CopilotProvider implements Provider {
   private inner?: OpenAIProvider;
   private expiresAt = 0;
 
-  private thinking = true;
-
   constructor(
     private model: string,
     private githubToken: string,
     private reasoning?: Reasoning,
   ) {}
 
-  setThinking(on: boolean): void {
-    this.thinking = on;
-    this.inner?.setThinking(on);
-  }
-
   private async client(): Promise<OpenAIProvider> {
     if (this.inner && Date.now() < this.expiresAt - 60_000) return this.inner;
     const { token, expiresAt } = await fetchCopilotToken(this.githubToken);
     this.expiresAt = expiresAt || Date.now() + 25 * 60_000;
     this.inner = new OpenAIProvider(this.model, token, "https://api.githubcopilot.com", COPILOT_HEADERS, this.reasoning, { vendor: "github-copilot" });
-    this.inner.setThinking(this.thinking); // the token refresh must not reset the user's switch
     return this.inner;
   }
 
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal): Promise<ProviderReply> {
-    return (await this.client()).send(sysPrompt, turns, tools, onDelta, signal);
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true): Promise<ProviderReply> {
+    return (await this.client()).send(sysPrompt, turns, tools, onDelta, signal, thinking);
   }
 }

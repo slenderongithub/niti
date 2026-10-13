@@ -89,7 +89,7 @@ const KEEP_LOGS = 20;
 // Keeps the untouched output where read_file and grep can reach it (inside the project root), in a
 // directory that ignores itself so it never shows up in the user's git status. Returns the path to
 // mention, or undefined if it couldn't be written — the condensed text is still correct without it.
-export function saveRawLog(root: string, output: string): string | undefined {
+function saveRawLog(root: string, output: string): string | undefined {
   try {
     const dir = join(root, LOG_DIR);
     mkdirSync(dir, { recursive: true });

@@ -1,14 +1,15 @@
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { lstatSync, realpathSync } from "node:fs";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
 import type { ToolSpec, ToolCall as ProviderCall } from "../providers/provider.ts";
 import { buildRepoMap } from "../agent/repomap.ts";
+import { IGNORE } from "../graph/filegraph.ts";
 import { wrap, blockedBySandbox, SANDBOX_NOTE } from "../sandbox.ts";
 import { isSecretPath } from "../secrets.ts";
 
 // Tool calls an agent may request. Executed locally, jailed to the project root.
-export type ToolCall =
+type ToolCall =
   | { tool: "read_file"; path: string; offset?: number; limit?: number }
   | { tool: "write_file"; path: string; content: string }
   // from/to: hashline anchors ("12:a3"), set instead of oldString when the agent uses editFormat: hashline
@@ -85,7 +86,7 @@ export function leavesProject(root: string, p: string): boolean {
 // ponytail: fixed ceilings, not per-agent configurable — move to agents.yaml if a real project
 // needs a longer build than this.
 export const SHELL_TIMEOUT_MS = 120_000;
-export const SHELL_MAX_OUTPUT = 100_000;
+const SHELL_MAX_OUTPUT = 100_000;
 
 // What a spawned command is allowed to inherit. An allowlist, not a denylist, because the thing
 // being kept out (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, …) grows with every provider
@@ -137,7 +138,7 @@ export function shell(
   root: string,
   command: string,
   args: string[],
-  limits: { timeoutMs?: number; maxOutput?: number; onOutput?: (chunk: string) => void; sandbox?: boolean } = {}, // timeouts: tests; onOutput: live view; sandbox: OS containment (sandbox.ts)
+  limits: { timeoutMs?: number; maxOutput?: number; onOutput?: (chunk: string) => void; sandbox?: boolean; signal?: AbortSignal } = {}, // timeouts: tests; onOutput: live view; sandbox: OS containment (sandbox.ts); signal: the user's cancel
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const timeoutMs = limits.timeoutMs ?? SHELL_TIMEOUT_MS;
   const maxOutput = limits.maxOutput ?? SHELL_MAX_OUTPUT;
@@ -170,6 +171,7 @@ export function shell(
       if (done) return;
       done = true;
       clearTimeout(timer);
+      limits.signal?.removeEventListener("abort", kill);
       const err = stderr.text() + extraErr;
       // Told plainly, so the model's next step is a different approach rather than the same command
       // again or a claim that it worked.
@@ -178,12 +180,18 @@ export function shell(
       // ordinary failure of the command itself.
       res({ stdout: stdout.text(), stderr: err + (timedOut ? `\n[timed out after ${timeoutMs / 1000}s]` : "") + note, code: timedOut ? -1 : code });
     };
-    const timer = setTimeout(() => {
-      timedOut = true;
+    const kill = () => {
       killTree(child.pid);
       child.kill("SIGKILL");
       setTimeout(() => finish(-1), 2000).unref(); // a pipe that still will not close must not hold the tool call
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill();
     }, timeoutMs);
+    // /cancel used to wait out whatever was running — up to the full timeout of a test suite.
+    if (limits.signal?.aborted) kill();
+    else limits.signal?.addEventListener("abort", kill, { once: true });
     child.stdout.on("data", (d) => {
       stdout.add(String(d));
       limits.onOutput?.(String(d));
@@ -233,8 +241,8 @@ function killTree(pid: number | undefined): void {
 // A tool result is pushed into `turns` and re-sent on every later iteration of the loop, so an
 // unbounded read is not one big response — it is one big response per turn, forever. Cap it, and
 // refuse binaries outright rather than feeding a model a screenful of replacement characters.
-export const READ_FILE_MAX = 256_000;
-export const READ_FILE_MAX_LINES = 1500; // a window, not a wall: past this the model is told how to page
+const READ_FILE_MAX = 256_000;
+const READ_FILE_MAX_LINES = 1500; // a window, not a wall: past this the model is told how to page
 
 // Reads come back line-numbered (`    12\ttext`), the same shape `grep` reports matches in. That
 // shared coordinate system is most of what makes navigation work: the model greps, gets
@@ -316,21 +324,12 @@ async function readCapped(abs: string, shown: string, offset?: number, limit?: n
   return numberLines(window.join("\n"), from, hashline) + note + charNote;
 }
 
-// Directories never worth walking. A hardcoded set rather than a .gitignore parser: these are 99%
-// of the noise, and the cost of the remaining 1% is a few extra paths in a listing — whereas the
-// cost of walking node_modules is the tool being unusable.
-// ponytail: no .gitignore parsing, no per-project config. Add it when a real project's build
-// output is drowning a search.
-const IGNORED_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", ".next", ".nuxt", ".svelte-kit", "target", "vendor",
-  "__pycache__", ".venv", "venv", ".cache", "coverage", ".turbo", ".output", ".gradle", ".idea",
-]);
 
 // Ceiling on one walk. A monorepo with a million files should degrade to "a partial answer, fast"
 // rather than to a hung tool call.
 const MAX_WALK_FILES = 20_000;
 const GREP_MAX_FILE_BYTES = 1_000_000; // a minified bundle is not what anyone is grepping for
-const GREP_CONCURRENCY = 48;
+const GREP_TIMEOUT_MS = 15_000;
 
 // Project-relative paths of every file under `dir`, ignore-set applied. Symlinked directories are
 // skipped by construction (withFileTypes reports them as links, not directories), so no cycle
@@ -349,9 +348,10 @@ async function listFiles(root: string, dir: string): Promise<string[]> {
     for (const e of entries) {
       const abs = join(current, e.name);
       if (e.isDirectory()) {
-        // .niti/logs holds raw test output saved by condense.ts; a project-wide search turning up
-        // old test logs is noise. Named directly (a file path) it is still readable and greppable.
-        if (!IGNORED_DIRS.has(e.name) && !(e.name === "logs" && basename(current) === ".niti")) stack.push(abs);
+        // Never into dependency trees, build output or niti's own .niti/ — whose worktrees/ is a whole
+        // second copy of the project. A path named directly (`.niti/logs`) is still searchable: only
+        // the entries below the starting point are filtered.
+        if (!IGNORE.has(e.name)) stack.push(abs);
       } else if (e.isFile()) {
         out.push(relative(root, abs).split(sep).join("/")); // "/" on every OS — it's what the model and the globs speak
         if (out.length >= MAX_WALK_FILES) break;
@@ -369,7 +369,7 @@ async function listDir(root: string, rel: string, allowLink = false): Promise<st
   } catch (err) {
     return `error: cannot list ${rel || "."}: ${(err as Error).message}`;
   }
-  const visible = entries.filter((e) => !IGNORED_DIRS.has(e.name)).sort((a, b) => a.name.localeCompare(b.name));
+  const visible = entries.filter((e) => !IGNORE.has(e.name)).sort((a, b) => a.name.localeCompare(b.name));
   if (visible.length === 0) return `${rel || "."} is empty`;
   // Directories first and marked with a trailing slash — the model's next call is almost always
   // "descend into one of these", and it should not have to guess which entries it can descend into.
@@ -395,9 +395,9 @@ async function grepFiles(
   opts: { path?: string; glob?: string; limit: number; ignoreCase?: boolean; allowLink?: boolean },
 ): Promise<string> {
   if (!pattern) return "error: grep needs a pattern";
-  let re: RegExp;
+  const flags = opts.ignoreCase ? "i" : "";
   try {
-    re = new RegExp(pattern, opts.ignoreCase ? "i" : "");
+    new RegExp(pattern, flags);
   } catch (err) {
     return `error: invalid regular expression ${JSON.stringify(pattern)}: ${(err as Error).message}`;
   }
@@ -408,47 +408,73 @@ async function grepFiles(
     const g = new Bun.Glob(opts.glob);
     // Match the basename too, so `*.ts` means what everyone means by it rather than only matching
     // files sitting at the project root.
-    candidates = candidates.filter((p) => g.match(p) || g.match(p.split(sep).pop() ?? p));
+    candidates = candidates.filter((p) => g.match(p) || g.match(p.split("/").pop() ?? p)); // listFiles speaks "/" on every OS
   }
   if (candidates.length === 0) return "no files to search (check the path/glob)";
 
+  const files = candidates.map((rel) => ({ rel, abs: join(root, rel) }));
+  const r = await scanInWorker({ pattern, flags, files, limit: opts.limit, maxBytes: GREP_MAX_FILE_BYTES });
+  if (!r) return `error: grep gave up after ${GREP_TIMEOUT_MS / 1000}s — ${JSON.stringify(pattern)} is too slow to match (a repetition inside a repetition, like (a+)+, backtracks exponentially). Simplify it, or narrow the path or glob.`;
+  if (r.total === 0) return `no matches for ${pattern}`;
+  const more = r.total > r.lines.length ? `\n[${r.total - r.lines.length}+ more matches in ${r.files} files — narrow the pattern or pass a glob]` : "";
+  return r.lines.join("\n") + more;
+}
+
+interface ScanJob {
+  pattern: string;
+  flags: string;
+  files: { rel: string; abs: string }[];
+  limit: number;
+  maxBytes: number;
+}
+
+// Runs inside a Worker (see scanInWorker), which receives only this function's source text — so it
+// must use nothing but its argument and globals.
+async function scanFiles(job: ScanJob): Promise<{ lines: string[]; total: number; files: number }> {
+  const re = new RegExp(job.pattern, job.flags);
   const lines: string[] = [];
+  const hitFiles = new Set<string>();
   let total = 0;
-  const files = new Set<string>();
-  for (let i = 0; i < candidates.length; i += GREP_CONCURRENCY) {
-    const batch = candidates.slice(i, i + GREP_CONCURRENCY);
-    const results = await Promise.all(batch.map((rel) => grepOne(root, rel, re)));
-    for (const hits of results) {
-      for (const h of hits) {
-        total++;
-        files.add(h.file);
-        if (lines.length < opts.limit) lines.push(`${h.file}:${h.line}: ${h.text}`);
-      }
+  for (const f of job.files) {
+    const file = Bun.file(f.abs);
+    if (file.size > job.maxBytes) continue;
+    let bytes: Uint8Array;
+    try {
+      bytes = await file.bytes();
+    } catch {
+      continue; // unreadable: skip it rather than failing the whole search
+    }
+    if (bytes.includes(0)) continue; // binary
+    const text = new TextDecoder().decode(bytes).split("\n");
+    for (let i = 0; i < text.length; i++) {
+      if (!re.test(text[i]!)) continue;
+      total++;
+      hitFiles.add(f.rel);
+      if (lines.length < job.limit) lines.push(`${f.rel}:${i + 1}: ${text[i]!.trim().slice(0, 200)}`);
     }
     // Enough to answer with, and enough to tell the model to narrow down. Scanning the rest only
     // to throw it away is latency nobody reads.
-    if (total > opts.limit * 4) break;
+    if (total > job.limit * 4) break;
   }
-  if (total === 0) return `no matches for ${pattern}`;
-  const more = total > lines.length ? `\n[${total - lines.length}+ more matches in ${files.size} files — narrow the pattern or pass a glob]` : "";
-  return lines.join("\n") + more;
+  return { lines, total, files: hitFiles.size };
 }
 
-async function grepOne(root: string, rel: string, re: RegExp): Promise<{ file: string; line: number; text: string }[]> {
-  const abs = join(root, rel);
+const SCAN_WORKER = URL.createObjectURL(new Blob([`self.onmessage = async (e) => postMessage(await (${scanFiles.toString()})(e.data));`], { type: "application/javascript" }));
+
+// The matching runs off the event loop that every agent, the server and the TUI's stream share,
+// and is killed past a deadline: a pattern that backtracks exponentially (`(a+)+$`, `(a|a)*b`) once
+// froze all of it. undefined = it ran out of time.
+export async function scanInWorker(job: ScanJob, timeoutMs = GREP_TIMEOUT_MS): Promise<Awaited<ReturnType<typeof scanFiles>> | undefined> {
+  const worker = new Worker(SCAN_WORKER);
   try {
-    const info = await stat(abs);
-    if (info.size > GREP_MAX_FILE_BYTES) return [];
-    const buf = await readFile(abs);
-    if (buf.includes(0)) return []; // binary
-    const out: { file: string; line: number; text: string }[] = [];
-    const lines = buf.toString("utf8").split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      if (re.test(lines[i]!)) out.push({ file: rel, line: i + 1, text: lines[i]!.trim().slice(0, 200) });
-    }
-    return out;
-  } catch {
-    return [];
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(undefined), timeoutMs);
+      worker.onmessage = (e) => (clearTimeout(timer), resolve(e.data));
+      worker.onerror = (e) => (clearTimeout(timer), reject(new Error(e.message)));
+      worker.postMessage(job);
+    });
+  } finally {
+    worker.terminate();
   }
 }
 
@@ -457,7 +483,7 @@ export async function runTool(
   call: ToolCall,
   allowed: string[],
   root: string = process.cwd(),
-  hooks: { onOutput?: (chunk: string) => void; allowOutside?: boolean; sandbox?: boolean; hashline?: boolean } = {}, // shell output as it arrives; a human-approved path outside the project
+  hooks: { onOutput?: (chunk: string) => void; allowOutside?: boolean; sandbox?: boolean; hashline?: boolean; signal?: AbortSignal } = {}, // shell output as it arrives; a human-approved path outside the project; the user's cancel
 ): Promise<string> {
   if (!allowed.includes(call.tool)) {
     throw new Error(`tool '${call.tool}' not allowed for this agent`);
@@ -504,7 +530,7 @@ export async function runTool(
       if (!call.command.trim()) {
         return "error: shell was called with an empty command. Give the program to run in `command` (for example command: \"npm\", args: [\"run\", \"typecheck\"]).";
       }
-      const r = await shell(root, call.command, call.args, { onOutput: hooks.onOutput, sandbox: hooks.sandbox });
+      const r = await shell(root, call.command, call.args, { onOutput: hooks.onOutput, sandbox: hooks.sandbox, signal: hooks.signal });
       return `exit ${r.code}\n${r.stdout}${r.stderr}`;
     }
   }
@@ -525,7 +551,7 @@ export async function runTool(
 // the hunk that will actually be applied. When editDiff rendered the model's un-recovered snippet,
 // the '-' lines in the dialog were text that does not appear in the file — and the approval dialog
 // is the one place in niti where a human is asked to vouch for a change.
-export function resolveEdit(before: string, oldString: string, newString: string): { old: string; replacement: string } {
+function resolveEdit(before: string, oldString: string, newString: string): { old: string; replacement: string } {
   let old = oldString;
   let replacement = newString;
   if (countOf(before, old) === 0) {
@@ -708,13 +734,13 @@ export function snippetDiff(path: string, before: string | null, after: string, 
 
 // --- the live view: what a finished tool call and a file change look like on screen ---
 
-export interface DiffLine {
+interface DiffLine {
   k: "+" | "-" | " ";
   t: string;
   o?: number; // line number in the old file (context and removed lines)
   n?: number; // line number in the new file (context and added lines)
 }
-export interface Hunk {
+interface Hunk {
   lines: DiffLine[];
 }
 
@@ -1023,11 +1049,11 @@ export function splitCommand(line: string): string[] {
 
 // Models routinely encode a whole command line as `{"command":"git status"}`. The args[] array is
 // the documented shape and always wins; tokenizing only fills in when it is absent.
+// A model that sends both (`{"command":"git push --force","args":["origin"]}`) means the line followed
+// by the args — keeping only the first word of `command` silently ran `git origin`.
 export function normalizeShellInput(input: Record<string, unknown>): { command: string; args: string[] } {
-  const line = String(input.command ?? "").trim();
-  if (Array.isArray(input.args) && input.args.length) return { command: line.split(/\s+/)[0] ?? "", args: input.args.map(String) };
-  const [command = "", ...args] = splitCommand(line);
-  return { command, args };
+  const [command = "", ...rest] = splitCommand(String(input.command ?? "").trim());
+  return { command, args: [...rest, ...(Array.isArray(input.args) ? input.args.map(String) : [])] };
 }
 
 // Inputs already rewritten to {command, args}. A command that legitimately contains a space (a path

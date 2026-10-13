@@ -94,3 +94,19 @@ test("languageId maps by extension and falls back to plaintext", () => {
   expect(languageId("main.go")).toBe("go");
   expect(languageId("LICENSE")).toBe("plaintext");
 });
+
+test("a server that crashes mid-session is respawned on the next call, and the registry says when it isn't running", async () => {
+  const root = project();
+  const registry = new LspRegistry([fakeServer], root);
+  const client = registry.clientFor(join(root, "a.ts"))!;
+  expect(registry.list()[0]!.running).toBe(false); // configured, not yet needed
+  expect(await client.diagnostics(join(root, "a.ts"))).toHaveLength(1);
+  expect(registry.list()[0]!.running).toBe(true);
+  const proc = (client as unknown as { proc: { kill(): void; exitCode: number | null } }).proc;
+  proc.kill();
+  while (client.running) await new Promise((r) => setTimeout(r, 10));
+  expect(registry.list()[0]!.running).toBe(false); // dead, and said so
+  expect(await client.diagnostics(join(root, "a.ts"))).toHaveLength(1); // back, with the file re-opened
+  registry.close();
+  await expect(client.diagnostics(join(root, "a.ts"))).rejects.toThrow(); // stop() is final
+});

@@ -36,6 +36,8 @@ export async function isGitRepo(root: string): Promise<boolean> {
 }
 
 // Create an isolated worktree on a fresh branch off the current HEAD, under .niti/worktrees/<id>.
+// Inside the project on purpose: node_modules (untracked, so never checked out) is still found by
+// every `node_modules/.bin` and require() lookup walking up from the worktree — checks run as usual.
 export async function createWorktree(root: string, id: string): Promise<WorktreeHandle> {
   const branch = `niti/${id}`;
   const path = join(root, ".niti", "worktrees", id);
@@ -174,6 +176,9 @@ export async function mergeFiles(root: string, branch: string, files: string[]):
   // `files` are repo-relative (that is what the worktree's diff reports), and git reads pathspecs
   // relative to its cwd — which is a subfolder when niti was launched from one.
   const top = (await git(root, ["rev-parse", "--show-toplevel"])).stdout.trim() || root;
+  // checkout overwrites the working copy without asking — refuse rather than lose the user's own edits.
+  const dirty = (await git(top, ["status", "--porcelain", "--", ...files])).stdout.trim();
+  if (dirty) return { ok: false, message: `these files have uncommitted changes of your own — commit or stash them first:\n${dirty}` };
   const checkout = await git(top, ["checkout", branch, "--", ...files]);
   if (checkout.code !== 0) return { ok: false, message: checkout.stderr.trim() || checkout.stdout.trim() };
   const commit = await git(top, ["commit", "-q", "-m", `niti: merge ${files.length} file(s) from ${branch}`, "--", ...files]);
@@ -197,8 +202,10 @@ export async function mergeBack(root: string, branch: string): Promise<{ ok: boo
 // Tear down a worktree once its branch has been merged or abandoned. --force discards uncommitted
 // changes in the worktree itself — safe here because mergeBack (or the user) already decided its
 // fate; this is cleanup, not a second chance to save work.
+// git() never throws, so the exit code is checked; a worktree already gone (a manual rm) counts as removed.
 export async function removeWorktree(root: string, path: string): Promise<void> {
-  await git(root, ["worktree", "remove", "--force", path]);
+  const r = await git(root, ["worktree", "remove", "--force", path]);
+  if (r.code !== 0 && existsSync(path)) throw new Error(r.stderr.trim() || "git worktree remove failed");
 }
 
 // Undo a conflicted merge so the user's working tree is not left full of conflict markers they
@@ -209,14 +216,16 @@ export async function abortMerge(root: string): Promise<void> {
 
 // Delete the worktree AND its branch — a discard that leaves `niti/<id>` behind is not a discard,
 // and those branches accumulate one per abandoned run.
+// Each step's failure is reported — "discarded" was once reported even when nothing had been.
 export async function discardWorktree(root: string, handle: WorktreeHandle): Promise<void> {
   await removeWorktree(root, handle.path);
-  await git(root, ["branch", "-D", handle.branch]);
+  const deleted = await git(root, ["branch", "-D", handle.branch]);
+  if (deleted.code !== 0 && !/not found/.test(deleted.stderr)) throw new Error(deleted.stderr.trim() || "git branch -D failed");
 }
 
 // Worktrees whose directory is gone (a crash, a manual rm -rf, a machine reboot mid-run) stay
 // registered in .git/worktrees forever and make `git worktree add` fail on the same id later.
 // `prune` is git's own answer; run it before creating a new one.
-export async function pruneWorktrees(root: string): Promise<void> {
+async function pruneWorktrees(root: string): Promise<void> {
   await git(root, ["worktree", "prune"]);
 }

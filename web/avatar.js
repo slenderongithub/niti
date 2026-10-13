@@ -16,6 +16,15 @@ const THEME_DEFAULTS = { // the "graphite" palette — only used where there is 
   red: "#d47a7a", amber: "#d9b26f", blue: "#6fb3b8", pink: "#d49ab5",
   bg: "#16181d", line: "#2e333d",
 };
+// HTML-escapes text before it goes into innerHTML. Every dynamic insertion in app.js and graph.js
+// goes through it, and agent ids and task text come from the model. Quotes too, not just angle
+// brackets: values are interpolated into attributes (class="…", style="…"), where an unescaped quote
+// closes the attribute and adds its own — and the page URL carries the bearer token, so a missed
+// escape is a token leak. Here, in the one script both pages load first, so there is one copy.
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
 function themeColors() {
   // No real DOM (unit tests, or any other non-browser load) — fall back rather than throw.
   if (typeof getComputedStyle !== "function") return THEME_DEFAULTS;

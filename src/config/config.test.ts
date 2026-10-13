@@ -2,7 +2,8 @@ import { test, expect } from "bun:test";
 import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadAgents, loadOptions, loadInstructions, loadPermissions, loadMcpServers, saveAgents, setTheme, isHomeDir } from "./config.ts";
+import { loadAgents, loadOptions, loadInstructions, loadPermissions, loadMcpServers, saveAgents, setTheme, isHomeDir, readConfig } from "./config.ts";
+import { checkTrust, grantTrust } from "../trust/trust-store.ts";
 
 function writeYaml(body: string): string {
   const dir = mkdtempSync(join(tmpdir(), "niti-cfg-"));
@@ -254,4 +255,46 @@ agents:
   expect(loadAgents(agent("editFormat: str_replace"))[0]?.editFormat).toBeUndefined();
   expect(loadAgents(agent(""))[0]?.editFormat).toBeUndefined();
   expect(() => loadAgents(agent("editFormat: hashlines"))).toThrow(/editFormat/);
+});
+
+test("an instructions file outside the project is skipped, not sent to the provider", () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-instr-"));
+  const outside = join(mkdtempSync(join(tmpdir(), "niti-secret-")), "credentials");
+  writeFileSync(outside, "aws_secret_access_key = XYZ");
+  writeFileSync(join(root, "NOTES.md"), "use tabs");
+  const text = loadInstructions([outside, "../" + outside.split("/").slice(-2).join("/"), "NOTES.md"], root);
+  expect(text).toContain("use tabs");
+  expect(text).not.toContain("XYZ");
+});
+
+test("niti's own write to a trusted project's agents.yaml keeps it trusted; an outside change does not", () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-retrust-"));
+  process.env.NITI_TRUST_FILE = join(dir, "trusted.json");
+  try {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "niti-proj-")));
+    mkdirSync(join(root, ".niti"));
+    const path = join(root, ".niti", "agents.yaml");
+    writeFileSync(path, "theme: graphite\n");
+    grantTrust(root, readConfig(path));
+    setTheme("graphite-light", path);
+    expect(checkTrust(root, readConfig(path))).toBe("trusted");
+    writeFileSync(path, "theme: graphite-light\nsandbox: false\n"); // e.g. a git pull
+    expect(checkTrust(root, readConfig(path))).toBe("changed");
+  } finally {
+    delete process.env.NITI_TRUST_FILE;
+  }
+});
+
+test("a custom agent may take its endpoint from the saved credential, as the TUI's team picker stores it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-custom-"));
+  process.env.NITI_AUTH_FILE = join(dir, "auth.json");
+  try {
+    const agent = { id: "c", provider: "custom", model: "m", role: "R", systemPrompt: "s" };
+    expect(() => saveAgents([agent], join(dir, "agents.yaml"))).toThrow(/needs a 'baseURL'/); // nowhere at all
+    writeFileSync(process.env.NITI_AUTH_FILE, JSON.stringify({ credentials: [{ provider: "custom", type: "local", baseURL: "http://localhost:8000/v1" }] }));
+    saveAgents([agent], join(dir, "agents.yaml"));
+    expect(loadAgents(join(dir, "agents.yaml"))[0]!.provider).toBe("custom");
+  } finally {
+    delete process.env.NITI_AUTH_FILE;
+  }
 });

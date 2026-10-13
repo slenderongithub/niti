@@ -1,7 +1,8 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, existsSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { shell } from "./tools/tools.ts";
 import { seatbeltProfile, sandboxKind } from "./sandbox.ts";
 
@@ -39,4 +40,21 @@ test.skipIf(!onMac)("the profile denies reading credential stores and quotes pat
   expect(p).toContain(`(deny file-read*`);
   expect(p).toContain(join(homedir(), ".ssh"));
   expect(p).toContain('\\"quoted\\"');
+});
+
+test("git hooks and git config are read-only in the sandbox — git runs them later, outside it", () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-sbx-git-"));
+  spawnSync("git", ["init", "-q"], { cwd: root });
+  const profile = seatbeltProfile(root);
+  const deny = profile.split("\n").find((l) => l.startsWith("(deny file-write*") && l.includes(".niti"))!;
+  for (const p of [join(".git", "hooks"), join(".git", "config"), join(".config", "git")]) expect(deny).toContain(p);
+});
+
+test.skipIf(!onMac)("verification checks run inside the sandbox too — a check script cannot write outside the project", async () => {
+  const { runChecks } = await import("./agent/verify.ts");
+  const root = mkdtempSync(join(tmpdir(), "niti-sbx-verify-"));
+  const outside = join(homedir(), `.niti-sbx-verify-${process.pid}`);
+  const r = await runChecks(root, [{ name: "touch outside", command: "touch", args: [outside] }], true);
+  expect(r.ok).toBe(false);
+  expect(existsSync(outside)).toBe(false);
 });

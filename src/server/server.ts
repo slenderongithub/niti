@@ -528,10 +528,9 @@ export function startServer(
         return json((await engine.worktreeStatus()) ?? { active: false });
       }
       if (p === "/worktree/merge" && method === "POST") {
-        // An optional `files` list selects a partial merge (see engine.mergeWorktreeFiles) — no
-        // body, or no `files` key, keeps the original whole-run merge behavior unchanged.
+        // An optional `files` list selects a partial merge — no body, or no `files` key, merges the whole run.
         const { files } = (await readBody(req)) as { files?: string[] };
-        return json(Array.isArray(files) ? await engine.mergeWorktreeFiles(files) : await engine.mergeWorktree());
+        return json(await engine.mergeWorktree(Array.isArray(files) ? files : undefined));
       }
       if (p === "/worktree/discard" && method === "POST") {
         return json(await engine.discardWorktree());
@@ -628,7 +627,7 @@ async function readBody(req: Request): Promise<any> {
 // /complete and /embed resolve the stored key for `provider` — a caller-chosen remote baseURL would
 // let anyone holding the session token forward that key to a host of their choosing. Local
 // runtimes (Ollama, LM Studio) are the only legitimate reason to pass one per request.
-export function isLoopback(url: string): boolean {
+function isLoopback(url: string): boolean {
   try {
     const host = new URL(url).hostname;
     return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
@@ -649,7 +648,7 @@ export function resolveTheme(name: string): string {
 // → <pkg>/web), and a locally compiled dev binary sitting at the repo root next to ./web directly.
 // fileURLToPath rather than URL.pathname because the latter stays percent-encoded, so any path with
 // a space in it 404s too.
-export function resolveWebDir(): string {
+function resolveWebDir(): string {
   const candidates: string[] = [];
   if (process.env.NITI_WEB_DIR) candidates.push(process.env.NITI_WEB_DIR);
   try {

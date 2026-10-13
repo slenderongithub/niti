@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { CATALOG, LIVE_CONTEXT } from "./catalog.ts";
 import { LIVE_PRICES, type Price } from "./pricing.ts";
+import { resolveBaseURL } from "../auth/auth-store.ts";
 
 // Keeps every provider's model list current without a niti release. Model lists used to be a
 // snapshot frozen at build time, so a picker months old offered models that had been deprecated
@@ -19,7 +20,7 @@ import { LIVE_PRICES, type Price } from "./pricing.ts";
 const SOURCE = "https://models.dev/api.json";
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10_000;
-export const MAX_MODELS = 12; // newest N per provider; anything older is still usable via "custom…"
+const MAX_MODELS = 12; // newest N per provider; anything older is still usable via "custom…"
 
 // niti's provider id → models.dev's, where they differ. Everything else is the same id.
 const MODELS_DEV_ID: Record<string, string> = {
@@ -39,21 +40,21 @@ export interface RawModel {
   cost?: { input?: number; output?: number; cache_read?: number };
 }
 
-export interface ProviderModels {
+interface ProviderModels {
   models: string[]; // newest first, at most MAX_MODELS
   deprecated: string[]; // models.dev says these are on their way out
   prices: Record<string, Price>;
   contexts: Record<string, number>;
 }
 
-export interface ModelsCache {
+interface ModelsCache {
   fetchedAt: number;
   providers: Record<string, ProviderModels>; // keyed by niti provider id
 }
 
 // Whether an niti agent can run this model at all. Exported for the build-time generator, so the
 // shipped snapshot and the live list can never disagree about what belongs in a picker.
-export function usable(m: RawModel, vendor: string): boolean {
+function usable(m: RawModel, vendor: string): boolean {
   if (!m.tool_call) return false; // niti is a tool loop
   if (m.status === "deprecated" || m.status === "alpha") return false;
   // Text in, text out, and nothing else out: image, audio and video generators (and Gemini's
@@ -132,7 +133,7 @@ export function isDeprecated(provider: string, model: string): boolean {
   return DEPRECATED.get(provider)?.has(model) ?? false;
 }
 
-export function cachePath(): string {
+function cachePath(): string {
   return process.env.NITI_MODELS_FILE || join(homedir(), ".config", "niti", "models.json");
 }
 
@@ -146,7 +147,7 @@ export function readCache(path = cachePath()): ModelsCache | undefined {
   }
 }
 
-export async function fetchModels(fetchImpl: typeof fetch = fetch): Promise<ModelsCache> {
+async function fetchModels(fetchImpl: typeof fetch = fetch): Promise<ModelsCache> {
   const res = await fetchImpl(SOURCE, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`models.dev: HTTP ${res.status}`);
   return { fetchedAt: Date.now(), providers: digest((await res.json()) as Record<string, { models?: Record<string, RawModel> }>) };
@@ -182,9 +183,12 @@ export function startModelRefresh(opts: { fetchImpl?: typeof fetch; now?: number
 // `GET /v1/models`; a server that isn't running falls back to the catalog's seed names.
 export async function localModels(provider: string, fetchImpl: typeof fetch = fetch): Promise<string[] | undefined> {
   const entry = Object.hasOwn(CATALOG, provider) ? CATALOG[provider] : undefined;
-  if (entry?.category !== "local" || !entry.baseURL) return undefined;
+  // The endpoint saved with `auth login` (another port, another machine) before the catalog default
+  // — the same order the provider factory uses, so the picker lists what the agent will talk to.
+  const baseURL = resolveBaseURL(provider) ?? entry?.baseURL;
+  if (entry?.category !== "local" || !baseURL) return undefined;
   try {
-    const res = await fetchImpl(`${entry.baseURL.replace(/\/$/, "")}/models`, { signal: AbortSignal.timeout(1500) });
+    const res = await fetchImpl(`${baseURL.replace(/\/$/, "")}/models`, { signal: AbortSignal.timeout(1500) });
     if (!res.ok) return undefined;
     const ids = ((await res.json()) as { data?: { id?: string }[] }).data?.map((m) => m.id).filter((id): id is string => !!id) ?? [];
     return ids.length ? ids : undefined;

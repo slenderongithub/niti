@@ -229,3 +229,29 @@ test("notes: upsertNote persists current state (latest write wins), survives a f
   const url = notes.find((n) => n.key === "api-base-url");
   expect(url).toEqual({ key: "api-base-url", value: "https://api.internal/v2", from: "backend", time: 1002 });
 });
+
+test("a rewind leaves a file alone that changed after the write it would undo", () => {
+  const s = store();
+  const id = s.createSession({ agentId: "a", kind: "task", provider: "p", model: "m" });
+  const file = join(mkdtempSync(join(tmpdir(), "niti-kept-")), "x.txt");
+  writeFileSync(file, "agent wrote this");
+  s.checkpoint(id, file, "original", "agent wrote this");
+  writeFileSync(file, "then the user edited it");
+  expect(s.undoLast()?.action).toBe("kept");
+  expect(readFileSync(file, "utf8")).toBe("then the user edited it");
+});
+
+test("opening the store ignores niti's generated state, so committing .niti/ shares only the config", () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "niti-ignore-")), ".niti");
+  openDb(join(dir, "niti.db")).close();
+  const ignore = readFileSync(join(dir, ".gitignore"), "utf8");
+  for (const generated of ["niti.db*", "session.json", "logs/", "reports/", "worktrees/"]) expect(ignore).toContain(generated);
+});
+
+test("resuming on a different provider drops the old provider's native blocks, keeping the turns", () => {
+  const s = store();
+  const id = s.createSession({ agentId: "a", kind: "task", provider: "anthropic", model: "m", taskId: "t1" });
+  s.appendMessage(id, "assistant", toParts({ role: "assistant", text: "hi", toolCalls: [], raw: [{ type: "thinking" }] }));
+  expect(resumeConversation(s, "t1", "a", "anthropic")[0]).toMatchObject({ raw: [{ type: "thinking" }] });
+  expect(resumeConversation(s, "t1", "a", "google")[0]).toEqual({ role: "assistant", text: "hi", toolCalls: [], raw: undefined });
+});

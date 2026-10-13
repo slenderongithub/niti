@@ -38,19 +38,23 @@ function read(forWrite = false): AuthCredential[] {
   }
 }
 
-// 0600 file inside a 0700 dir — credentials are secrets, keep them owner-only.
-function write(creds: AuthCredential[]): void {
-  const path = authFile();
+// A 0600 JSON file inside a 0700 dir — for what must stay owner-only: credentials here, and the trust
+// store (trust-store.ts), which gates code execution. tmp + rename, so a crash mid-write leaves the old
+// file intact instead of a truncated one.
+export function writePrivateJson(path: string, data: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  // tmp + rename, so a crash mid-write leaves the old store intact instead of a truncated one.
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ credentials: creds }, null, 2), { mode: 0o600 });
+  writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
   try {
     chmodSync(tmp, 0o600); // enforce even if umask loosened it
   } catch {
     // best effort (e.g. Windows) — the mode option above already covers POSIX
   }
   renameSync(tmp, path);
+}
+
+function write(creds: AuthCredential[]): void {
+  writePrivateJson(authFile(), { credentials: creds });
 }
 
 export function listCredentials(): AuthCredential[] {

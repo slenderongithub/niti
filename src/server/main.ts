@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { Engine } from "../engine.ts";
-import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions } from "../config/config.ts";
+import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions, saveAgents, type NitiOptions } from "../config/config.ts";
+import type { AgentConfig } from "../agent/agent.ts";
 import { LspRegistry } from "../lsp/registry.ts";
 import { makeProvider } from "../providers/factory.ts";
 import { McpManager } from "../mcp/mcp.ts";
@@ -12,9 +13,45 @@ import { AuditLog } from "../store/audit-log.ts";
 import { startServer, type ServerHandle } from "./server.ts";
 import { startModelRefresh, isDeprecated } from "../providers/live-catalog.ts";
 
-export interface ServeResult {
+interface ServeResult {
   engine: Engine;
   server: ServerHandle;
+}
+
+// The Engine as .niti/agents.yaml describes it — one builder for the server and the CLI's headless
+// run, so an option wired into one can't be missing from the other. Flags (`auto`, `worktree`) can
+// only turn a setting on; `watch` is the default when agents.yaml says nothing.
+export async function buildEngine(o: { configs: AgentConfig[]; interactive: boolean; auto?: boolean; worktree?: boolean; watch?: boolean }): Promise<{ engine: Engine; options: NitiOptions }> {
+  const options = loadOptions();
+  const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions, process.cwd(), options.projectInstructions !== false);
+  const mcpServers = loadMcpServers();
+  let mcp: McpManager | undefined;
+  if (mcpServers.length) {
+    mcp = new McpManager();
+    await mcp.connect(mcpServers, (name, err) => console.error(`niti: MCP server '${name}' unavailable: ${err}`));
+  }
+  const db = openDb();
+  const engine = new Engine({
+    configs: o.configs,
+    makeProvider,
+    mcp,
+    systemSuffix: skillText,
+    interactive: o.interactive,
+    store: new SessionStore(db),
+    audit: new AuditLog(db),
+    permissions: loadPermissions(),
+    settings: { autoCompact: options.autoCompact, thinkingMode: options.thinkingMode },
+    auto: o.auto || options.auto,
+    lsp: new LspRegistry(loadLspServers()),
+    watch: options.watch ?? o.watch,
+    maxTurns: options.maxTurns,
+    verify: options.verify,
+    repoMap: options.repoMap,
+    sandbox: options.sandbox,
+    worktree: o.worktree || options.worktree,
+    persist: (configs) => saveAgents(configs),
+  });
+  return { engine, options };
 }
 
 // Boot the headless core: build the engine from .niti/agents.yaml, start the local server, and
@@ -35,37 +72,14 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   // /agents against a live server. Once agents.yaml exists we load it (invalid files still throw).
   const configs = existsSync(".niti/agents.yaml") ? loadAgents() : [];
   if (!configs.length) console.error("niti: no agents configured yet — running in setup mode");
-  const options = loadOptions();
-  const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions, process.cwd(), options.projectInstructions !== false);
-
-  const mcpServers = loadMcpServers();
-  let mcp: McpManager | undefined;
-  if (mcpServers.length) {
-    mcp = new McpManager();
-    await mcp.connect(mcpServers, (name, err) => console.error(`niti: MCP server '${name}' unavailable: ${err}`));
-  }
-
-  const db = openDb();
-  const engine: Engine = new Engine({
+  const { engine, options } = await buildEngine({
     configs,
-    makeProvider,
-    mcp,
-    systemSuffix: skillText,
     interactive: opts.interactive ?? true, // gate write_file/shell through approvals by default
-    store: new SessionStore(db),
-    audit: new AuditLog(db),
-    permissions: loadPermissions(),
-    settings: { autoCompact: options.autoCompact, thinkingMode: options.thinkingMode },
-    auto: opts.auto || options.auto, // the flag and the config both turn it on; neither can turn the other off
-    lsp: new LspRegistry(loadLspServers()),
+    auto: opts.auto,
+    worktree: opts.worktree,
     // A long-lived server is exactly where an external edit is worth announcing, so watching is on
     // unless agents.yaml explicitly says otherwise.
-    watch: options.watch ?? true,
-    maxTurns: options.maxTurns,
-    verify: options.verify,
-    repoMap: options.repoMap,
-    sandbox: options.sandbox,
-    worktree: opts.worktree || options.worktree,
+    watch: true,
   });
   notify = (payload) => engine.bus.publish({ agentId: "orchestrator", type: "error", payload, time: Date.now() });
   engine.orch.load(loadTasks()); // show any prior tasks on connect

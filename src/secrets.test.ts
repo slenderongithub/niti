@@ -19,3 +19,13 @@ test("a shell call naming a secret anywhere in its arguments is caught", () => {
   expect(shellTouchesSecret("cat", ["package.json"], "/proj")).toBe(false);
   expect(shellTouchesSecret("cp", [".env.example", ".env.example.bak"], "/proj")).toBe(false);
 });
+
+test("a shell read of files it never names asks: recursive grep, rg without its filters, git show <rev>:<secret>", () => {
+  expect(shellTouchesSecret("grep", ["-rn", "API_KEY", "."], "/proj")).toBe(true);
+  expect(shellTouchesSecret("rg", ["-uu", "sk-"], "/proj")).toBe(true);
+  expect(shellTouchesSecret("git", ["show", "HEAD:.env"], "/proj")).toBe(true);
+  // rg's defaults skip hidden and ignored files, and a non-recursive grep names its file.
+  expect(shellTouchesSecret("rg", ["TODO", "src"], "/proj")).toBe(false);
+  expect(shellTouchesSecret("grep", ["-n", "TODO", "src/a.ts"], "/proj")).toBe(false);
+  expect(shellTouchesSecret("git", ["log", "--oneline"], "/proj")).toBe(false);
+});

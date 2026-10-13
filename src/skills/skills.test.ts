@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadSkills, skillsPrompt } from "./skills.ts";
+import { loadSkills, skillsPrompt, frontmatter } from "./skills.ts";
 
 function makeSkillsDir(): string {
   const root = mkdtempSync(join(tmpdir(), "niti-skills-"));
@@ -35,4 +35,10 @@ test("skillsPrompt lists each skill with its file path", () => {
   const text = skillsPrompt([{ name: "testing", description: "d", path: ".niti/skills/testing/SKILL.md" }]);
   expect(text).toContain("testing: d");
   expect(text).toContain(".niti/skills/testing/SKILL.md");
+});
+
+test("frontmatter reads files with Windows line endings too", () => {
+  expect(frontmatter("---\r\nname: deploy\r\ndescription: ship it\r\n---\r\nRun $ARGUMENTS\r\n")).toEqual({ fm: { name: "deploy", description: "ship it" }, body: "Run $ARGUMENTS" });
+  expect(frontmatter("---\nname: x\n---\nbody")).toEqual({ fm: { name: "x" }, body: "body" });
+  expect(frontmatter("no frontmatter here")).toEqual({ fm: {}, body: "no frontmatter here" });
 });

@@ -5,10 +5,9 @@ square, and makes a second "blink" frame with every open eye shut — detected a
 in the face's eye band, painted over with the surrounding body colour, and redrawn as a closed lid.
 Eyes already closed in the drawing (a wink, a laugh) are left alone.
 
-The CLI's copy: the source drawings sit beside this script, and it writes only the CLI's outputs.
-(niti-app/scripts/make-avatars.py is the desktop app's own copy, which also writes the app's
-256px set; keep the two in step when the art changes.)
-  web/avatars/niti{n}.png, niti{n}-blink.png    128px, dashboard + graph
+The one avatar pipeline for both products; the source drawings sit beside this script.
+  web/avatars/niti{n}.png, niti{n}-blink.png                                 128px, dashboard + graph
+  niti-app/src/renderer/src/assets/avatars/niti{n}.png, niti{n}-blink.png   256px, the desktop app
 
   python3 scripts/avatars/make-avatars.py        (needs Pillow)
 """
@@ -125,7 +124,9 @@ def square(im, size):
 
 
 web_dir = ROOT / "web/avatars"
+app_dir = ROOT / "niti-app/src/renderer/src/assets/avatars"
 web_dir.mkdir(parents=True, exist_ok=True)
+app_dir.mkdir(parents=True, exist_ok=True)
 for n in range(1, 7):
     src = Image.open(SRC / f"niti{n}.png").convert("RGBA")
     # Drop the faint stray pixels around the drawing before anything else.
@@ -137,4 +138,5 @@ for n in range(1, 7):
     # No open eyes (avatar 4 laughs with its eyes shut): no blink frame.
     for img, suffix in ((hi, ""), (closed, "-blink"))[: 2 if count else 1]:
         img.resize((128, 128), Image.LANCZOS).save(web_dir / f"niti{n}{suffix}.png", optimize=True)
-print("wrote", web_dir)
+        img.resize((256, 256), Image.LANCZOS).save(app_dir / f"niti{n}{suffix}.png", optimize=True)
+print("wrote", web_dir, app_dir)

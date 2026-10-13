@@ -1,7 +1,6 @@
 import type { Task, TaskNode } from "./task.ts";
 
-// Shared task queue. claimTask is synchronous → atomic under Node's single-threaded event loop.
-// ponytail: no mutex needed — a synchronous find-then-mark can't be interleaved by another agent.
+// The task board: what the planner made, as the scheduler (scheduler.ts) runs it and every client sees it.
 export class Orchestrator {
   private tasks: Task[] = [];
   private nextId = 1;
@@ -42,40 +41,9 @@ export class Orchestrator {
     this.nextId = 1;
   }
 
-  // Returns the next pending task this agent may claim, marked in_progress, or undefined.
-  // A task this agent just failed is off-limits until its backoff passes — otherwise a failing
-  // agent immediately reclaims its own requeued task before any other agent's loop gets a turn,
-  // which defeats the point of failover. A *different* agent can claim it right away (no reason
-  // to make a healthy agent wait out another agent's cooldown).
-  claimTask(agentId: string): Task | undefined {
-    const now = Date.now();
-    const t = this.tasks.find(
-      (t) => t.status === "pending" && (t.lastFailedBy !== agentId || (t.availableAt ?? 0) <= now),
-    );
-    if (!t) return undefined;
-    t.status = "in_progress";
-    t.assignedTo = agentId;
-    return t;
-  }
-
-  complete(task: Task, ok: boolean): void {
-    task.status = ok ? "done" : "failed";
-  }
-
-  // Failover: return the task to the pool so another agent claims it. Bumps the attempt counter
-  // and imposes a short backoff (so a transient rate limit has a moment to clear) plus a
-  // same-agent exclusion (via claimTask) so the failing agent doesn't just grab it right back.
-  requeue(task: Task, agentId: string): void {
-    task.status = "pending";
-    task.assignedTo = undefined;
-    task.attempts = (task.attempts ?? 0) + 1;
-    task.lastFailedBy = agentId;
-    task.availableAt = Date.now() + Math.min(task.attempts * 500, 3000);
-  }
-
   // User-triggered reassignment of a not-yet-started task to a different agent. Only "pending"
   // tasks qualify — an in_progress task already has a live agent working it, and interrupting that
-  // is a different, unbuilt feature (failover via requeue() handles the failure case, not a user
+  // is a different, unbuilt feature (the scheduler's failover handles the failure case, not a user
   // changing their mind mid-task). The scheduler reads t.role to decide who picks up a pending task
   // (scheduler.ts's readiness loop), so changing it here is sufficient to redirect it.
   reassign(taskId: string, role: string): string | undefined {
@@ -84,11 +52,6 @@ export class Orchestrator {
     if (t.status !== "pending") return `only pending tasks can be reassigned (${taskId} is ${t.status})`;
     t.role = role;
     return undefined;
-  }
-
-  // True while any task is still pending or being worked (so workers wait for possible failovers).
-  hasUnfinished(): boolean {
-    return this.tasks.some((t) => t.status === "pending" || t.status === "in_progress");
   }
 
   get all(): readonly Task[] {

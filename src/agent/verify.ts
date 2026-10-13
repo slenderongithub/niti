@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { shell } from "../tools/tools.ts";
 import { condenseForModel } from "../tools/condense.ts";
 import { truncateMiddle } from "./context.ts";
+import { projectFiles } from "../graph/filegraph.ts";
 
 // A model's "done" is a claim, not a fact. Everything else in the harness — the review gate, the
 // hand-off, the DAG releasing dependents — treats it as a fact, so a task that doesn't compile
@@ -29,12 +30,8 @@ export function detectChecks(root = process.cwd()): Check[] {
   const has = (f: string) => existsSync(join(root, f));
 
   if (has("package.json")) {
-    let scripts: Record<string, unknown> = {};
-    try {
-      scripts = (JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {}) as Record<string, unknown>;
-    } catch {
-      return []; // an unparseable package.json is the user's problem, not something to guess around
-    }
+    const scripts = packageScripts(root);
+    if (!scripts) return []; // an unparseable package.json is the user's problem, not something to guess around
     const runner = has("bun.lock") || has("bun.lockb") ? "bun" : has("pnpm-lock.yaml") ? "pnpm" : has("yarn.lock") ? "yarn" : "npm";
     // First match wins. `typecheck` is the cheapest real signal; `build` is the fallback for
     // projects that never added one.
@@ -54,6 +51,15 @@ export function detectChecks(root = process.cwd()): Check[] {
 // `verify:` from agents.yaml — a list of command lines, split on whitespace like the shell tool's
 // fallback. ponytail: no quote handling; a check that needs quoting can live in a package script,
 // which is where a check that complicated belongs anyway.
+// package.json's scripts — undefined when it is missing or does not parse.
+function packageScripts(root: string): Record<string, unknown> | undefined {
+  try {
+    return (JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {}) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
 export function parseChecks(lines: string[]): Check[] {
   return lines
     .map((line) => line.trim().split(/\s+/).filter(Boolean))
@@ -67,17 +73,19 @@ const VERIFY_TIMEOUT_MS = 180_000;
 // and a head-only cut used to hand the model forty lines of passing tests and none of the failure.
 const REPORT_MAX = 4_000;
 
-export interface VerifyResult {
+interface VerifyResult {
   ok: boolean;
   report: string; // "" when ok
 }
 
 // Runs every check; reports all failures at once rather than stopping at the first, so one pass
 // gives the model the whole picture instead of one error per round-trip.
-export async function runChecks(root: string, checks: Check[]): Promise<VerifyResult> {
+// `sandbox`: the same OS containment as the agent's own shell. A check runs project scripts the agent
+// can edit (package.json, check.js), unprompted, so running it unconfined was a way round the sandbox.
+export async function runChecks(root: string, checks: Check[], sandbox = false): Promise<VerifyResult> {
   const failures: string[] = [];
   for (const c of checks) {
-    const r = await shell(root, c.command, c.args, { timeoutMs: VERIFY_TIMEOUT_MS });
+    const r = await shell(root, c.command, c.args, { timeoutMs: VERIFY_TIMEOUT_MS, sandbox });
     if (r.code === 0) continue;
     // A missing tool is not a failing check. `cargo check` on a machine without cargo would
     // otherwise be reported to the model as "your code is broken", and it would set about fixing
@@ -157,26 +165,26 @@ function fileTokens(parts: string[]): string[] {
 function commandTargets(checks: Check[], root: string): string[] {
   const out: string[] = [];
   let scripts: Record<string, unknown> | undefined;
-  const loadScripts = (): Record<string, unknown> => {
-    if (scripts) return scripts;
-    try {
-      scripts = (JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {}) as Record<string, unknown>;
-    } catch {
-      scripts = {};
-    }
-    return scripts;
-  };
 
   for (const c of checks) {
     out.push(...fileTokens(c.args));
     const base = c.command.split("/").pop() ?? c.command;
     if (!RUNNERS.has(base) || c.args[0] !== "run" || !c.args[1]) continue;
-    const body = loadScripts()[c.args[1]];
+    const body = (scripts ??= packageScripts(root) ?? {})[c.args[1]];
     // Split on whitespace and shell operators — a script is routinely `tsc --noEmit && node check.js`,
     // and both halves decide the verdict.
     if (typeof body === "string") out.push(...fileTokens(body.split(/[\s;|&]+/).filter(Boolean)));
   }
   return out;
+}
+
+// The enforcers a check is made of, project-relative: the files it runs, and every strictness config
+// in the project — nested ones too (packages/web/tsconfig.json), since checkSurface classifies them by
+// name wherever they sit. A shell command can rewrite these without naming them in a file tool, so
+// they are snapshotted before one runs (see agent.ts) — the tamper guard judges against that snapshot.
+export function enforcerFiles(checks: Check[], root = process.cwd()): string[] {
+  const configs = projectFiles(root).files.filter((f) => ENFORCER_FILE.has(f.split("/").pop()!));
+  return [...new Set([...commandTargets(checks, root), ...configs])];
 }
 
 // Classifies a project-relative path, or undefined when it is ordinary source. `root` is needed to

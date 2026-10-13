@@ -2,20 +2,15 @@
 // niti-core — the headless engine + scripting CLI. The usage text below is USAGE, printed by
 // --help; keep them as one thing so the comment and the help output can't drift apart.
 import pkg from "../package.json";
-import { makeProvider } from "./providers/factory.ts";
 import { Engine } from "./engine.ts";
-import { loadAgents, loadMcpServers, loadPermissions, loadLspServers, loadOptions, loadInstructions, saveAgents } from "./config/config.ts";
-import { LspRegistry } from "./lsp/registry.ts";
-import { McpManager } from "./mcp/mcp.ts";
+import { loadAgents, saveAgents, readConfig } from "./config/config.ts";
 import { setKey } from "./keystore/keystore.ts";
 import { startDeviceFlow, pollForToken } from "./providers/copilot.ts";
-import { loadSkills, skillsPrompt } from "./skills/skills.ts";
 import { loadTasks } from "./session.ts";
 import { openDb } from "./store/db.ts";
-import { SessionStore } from "./store/session-store.ts";
 import { AuditLog } from "./store/audit-log.ts";
 import { checkTrust, grantTrust } from "./trust/trust-store.ts";
-import { serveMain } from "./server/main.ts";
+import { serveMain, buildEngine } from "./server/main.ts";
 import { setCredential, removeCredential, listCredentials } from "./auth/auth-store.ts";
 import { CATALOG, providerKeys } from "./providers/catalog.ts";
 import type { AgentConfig } from "./agent/agent.ts";
@@ -92,7 +87,7 @@ const projectRoot = process.cwd();
 
 // Claude-Code-style "do you trust this folder?" — the first time niti is about to read this
 // directory's config, spawn its MCP servers, or run agents against its code, the human confirms it.
-// Runs BEFORE any of that (loadMcpServers/mcp.connect in serveMain, agents.yaml in buildEngine),
+// Runs BEFORE any of that (loadMcpServers/mcp.connect and agents.yaml, both in buildEngine),
 // so an untrusted directory's config never executes anything on the strength of just being cloned.
 //
 // --trust (or its env-var equivalent, NITI_TRUST=1) means "treat this run as already approved"
@@ -101,24 +96,24 @@ const projectRoot = process.cwd();
 // Neither is a blanket "always trust everything" flag — both are scoped to one process's run.
 async function ensureTrusted(root: string): Promise<void> {
   if (args.includes("--trust") || process.env.NITI_TRUST === "1") return;
-  const servers = loadMcpServers();
-  const status = checkTrust(root, servers);
+  const config = readConfig();
+  const status = checkTrust(root, config);
   if (status === "trusted") return;
   if (!process.stdin.isTTY) {
     die(
-      `'${root}' is not a trusted directory (${status === "changed" ? "its mcpServers: config changed" : "first time here"}).\n` +
+      `'${root}' is not a trusted directory (${status === "changed" ? "its .niti/agents.yaml changed" : "first time here"}).\n` +
         `Run 'niti-core trust grant' once to approve it, or pass --trust to run without persisting.`,
     );
   }
-  const why = status === "changed" ? "Its mcpServers: config has changed since you last trusted it." : "niti hasn't run here before.";
+  const why = status === "changed" ? "Its .niti/agents.yaml has changed since you last trusted it." : "niti hasn't run here before.";
   console.log(
     `\n${why}\nTrusting a directory lets niti read its .niti/agents.yaml, spawn any MCP servers it ` +
       `configures, and run agents against its code.\n\n  ${root}\n`,
   );
   const answer = (prompt("Trust this folder? [1] Yes, proceed  [2] Yes, and remember  [3] No, exit") ?? "3").trim();
   if (answer === "2") {
-    grantTrust(root, servers);
-    console.log("niti: trusted — this won't ask again unless the MCP config changes.\n");
+    grantTrust(root, config);
+    console.log("niti: trusted — this won't ask again unless .niti/agents.yaml changes.\n");
   } else if (answer !== "1") {
     console.log("niti: not trusted — exiting without touching this directory.");
     process.exit(0);
@@ -195,15 +190,14 @@ if (args[0] === "audit") {
 }
 
 if (args[0] === "trust") {
-  // No server spawn, no engine — this only needs the root + the mcpServers: config to hash.
+  // No server spawn, no engine — this only needs the root + the config to hash.
   if (args[1] === "check") {
-    const servers = loadMcpServers();
-    const status = checkTrust(projectRoot, servers);
+    const status = checkTrust(projectRoot, readConfig());
     console.log(JSON.stringify({ trusted: status === "trusted", root: projectRoot, changed: status === "changed" }));
     process.exit(status === "trusted" ? 0 : 1);
   }
   if (args[1] === "grant") {
-    grantTrust(projectRoot, loadMcpServers());
+    grantTrust(projectRoot, readConfig());
     console.log(`niti: trusted ${projectRoot}`);
     process.exit(0);
   }
@@ -274,7 +268,8 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
   try {
     // Not interactive (there's no TTY to prompt on), but not a blanket auto-approve either: the
     // engine denies anything resolving to `ask` unless --auto was typed. See engine.ts.
-    engine = await buildEngine(false);
+    applyCachedModels(); // current prices and windows as of the last refresh; no fetch for a one-shot run
+    ({ engine } = await buildEngine({ configs: loadAgents(), interactive: false, auto: args.includes("--auto"), worktree: args.includes("--worktree") }));
   } catch (err) {
     surfaceStartupError(err);
     throw err; // unreachable (surfaceStartupError exits)
@@ -317,39 +312,6 @@ if (args[0] !== "serve" && !args.includes("--web") && args[0] !== "init") {
 }
 
 // --- helpers ---------------------------------------------------------------
-async function buildEngine(interactive: boolean): Promise<Engine> {
-  const configs = loadAgents();
-  const options = loadOptions();
-  const skillText = skillsPrompt(loadSkills()) + loadInstructions(options.instructions, process.cwd(), options.projectInstructions !== false);
-  const mcpServers = loadMcpServers();
-  let mcp: McpManager | undefined;
-  if (mcpServers.length) {
-    mcp = new McpManager();
-    await mcp.connect(mcpServers, (name, err) => console.error(`niti: MCP server '${name}' unavailable: ${err}`));
-  }
-  const db = openDb();
-  applyCachedModels(); // current prices and windows as of the last refresh; no fetch for a one-shot run
-  return new Engine({
-    configs,
-    makeProvider,
-    mcp,
-    systemSuffix: skillText,
-    interactive,
-    store: new SessionStore(db),
-    audit: new AuditLog(db),
-    permissions: loadPermissions(),
-    settings: { autoCompact: options.autoCompact, thinkingMode: options.thinkingMode },
-    auto: args.includes("--auto") || options.auto,
-    lsp: new LspRegistry(loadLspServers()),
-    watch: options.watch,
-    maxTurns: options.maxTurns,
-    verify: options.verify,
-    repoMap: options.repoMap,
-    sandbox: options.sandbox,
-    worktree: args.includes("--worktree") || options.worktree,
-  });
-}
-
 // Bun's prompt() echoes. For a credential that means the key sits in the terminal in cleartext and
 // then in the shell's scrollback — and in whatever terminal recording or shared session happened to
 // be running. Read it with echo off when we own a TTY; fall back to the plain prompt (with a

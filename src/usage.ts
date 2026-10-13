@@ -7,6 +7,8 @@ export interface AgentUsage {
   cacheReadTokens: number; // cumulative — served from cache, priced far below a fresh input token
   cacheWriteTokens: number; // cumulative — written to cache this call, priced slightly above one
   reasoningTokens: number; // cumulative — the thinking share of outputTokens (already included in it)
+  usd: number; // cumulative, each call priced at the model that made it
+  unpriced: boolean; // some call's model is not in the price table, so usd is a lower bound
 }
 
 export interface RateLimitSnapshot {
@@ -21,8 +23,8 @@ export class UsageTracker {
 
   // `context` is the whole prompt of this call, cached part included. Anthropic's input_tokens is only
   // the uncached tail, so without it lastInput — the context depth the panel shows — reads near zero.
-  record(agentId: string, input: number, output: number, cacheRead = 0, cacheWrite = 0, context?: number, reasoning = 0): void {
-    const u = this.byAgent.get(agentId) ?? { inputTokens: 0, outputTokens: 0, calls: 0, lastInput: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
+  record(agentId: string, input: number, output: number, cacheRead = 0, cacheWrite = 0, context?: number, reasoning = 0, cost?: { usd: number; priced: boolean }): void {
+    const u = this.byAgent.get(agentId) ?? { inputTokens: 0, outputTokens: 0, calls: 0, lastInput: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, usd: 0, unpriced: false };
     u.inputTokens += input;
     u.outputTokens += output;
     u.calls += 1;
@@ -30,6 +32,8 @@ export class UsageTracker {
     u.cacheReadTokens += cacheRead;
     u.cacheWriteTokens += cacheWrite;
     u.reasoningTokens += reasoning;
+    u.usd += cost?.usd ?? 0;
+    if (!cost?.priced) u.unpriced = true;
     this.byAgent.set(agentId, u);
   }
 

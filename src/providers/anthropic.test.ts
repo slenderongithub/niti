@@ -131,8 +131,7 @@ test("reasoning maps to effort; thinking off asks for low effort and never sends
   expect(seen.params.thinking).toEqual({ type: "adaptive" });
   expect(seen.params.output_config).toEqual({ effort: "medium" });
 
-  p.setThinking(false);
-  await p.send("s", [{ role: "user", text: "x" }], []);
+  await p.send("s", [{ role: "user", text: "x" }], [], undefined, undefined, false);
   expect(seen.params.thinking).toBeUndefined(); // disabled would 400 on Opus 5.5
   expect(seen.params.output_config).toEqual({ effort: "low" });
 });
@@ -167,4 +166,12 @@ test("prompt caching is withheld from Anthropic-compatible third parties, same a
   await shim.send("SYS", turns, []);
   expect(seen.params.system).toBe("SYS"); // plain string, not the cache_control array form
   expect(seen.params.messages[0]).toEqual({ role: "user", content: "first" }); // not cache-marked either
+});
+
+test("a reply stopped at max_tokens is flagged truncated", async () => {
+  const p = new AnthropicProvider("claude-opus-4-8", "k");
+  withStub(p, { ...reply([{ type: "text", text: "half" }]), stop_reason: "max_tokens" });
+  expect((await p.send("s", [{ role: "user", text: "x" }], [])).truncated).toBe(true);
+  withStub(p, { ...reply([{ type: "text", text: "all" }]), stop_reason: "end_turn" });
+  expect((await p.send("s", [{ role: "user", text: "x" }], [])).truncated).toBe(false);
 });
