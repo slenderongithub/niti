@@ -323,9 +323,7 @@ func (m Picker) back() (tea.Model, tea.Cmd) {
 		}
 	case "provider":
 		if len(m.roles) > 0 { // undo the last completed teammate rather than re-picking the size
-			last := m.roles[len(m.roles)-1]
-			delete(m.usedIDs, last.ID)
-			m.roles = m.roles[:len(m.roles)-1]
+			m.popRole()
 			m.toProvider()
 			return m, nil
 		}
@@ -343,9 +341,7 @@ func (m Picker) back() (tea.Model, tea.Cmd) {
 		return m.toOrchestratorOrFinish()
 	case "orchestrator":
 		if len(m.roles) > 0 {
-			last := m.roles[len(m.roles)-1]
-			delete(m.usedIDs, last.ID)
-			m.roles = m.roles[:len(m.roles)-1]
+			m.popRole()
 		}
 		m.toProvider()
 	}
@@ -597,7 +593,7 @@ func (m Picker) View() string {
 	}
 	if m.stage == "error" {
 		// The hint is the whole point: without it the screen states a problem and offers no verb.
-		return screen(m.width, m.height, "Something went wrong", fit(m.width, widest(m.err)),
+		return screen(m.width, m.height, "Something went wrong", fit(m.width, ui.Widest(m.err)),
 			lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.BgDeep).Render(m.err),
 			"enter retries · ctrl+c quits", "", true)
 	}
@@ -612,7 +608,7 @@ func (m Picker) View() string {
 	if m.stage == "provider" {
 		roles = renderRoles(m.roles)
 	}
-	cardW := fit(m.width, widest(head, hint, fixed, roles, m.input.Placeholder)+2, m.list.NaturalWidth())
+	cardW := fit(m.width, ui.Widest(head, hint, fixed, roles, m.input.Placeholder)+2, m.list.NaturalWidth())
 	inner := cardW - 2
 
 	if m.status != "" {
@@ -694,4 +690,11 @@ func (m Picker) stageText() (head, hint, fixed string) {
 // firstStep is where setup opens: "Your team" with a saved roster, otherwise the size question.
 func (m Picker) firstStep() bool {
 	return m.stage == "team" || (m.stage == "size" && len(m.existing) == 0)
+}
+
+// popRole undoes the last completed teammate, freeing its id for reuse — going back a step.
+func (m *Picker) popRole() {
+	last := m.roles[len(m.roles)-1]
+	delete(m.usedIDs, last.ID)
+	m.roles = m.roles[:len(m.roles)-1]
 }

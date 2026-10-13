@@ -266,14 +266,7 @@ func shortModel(name string) string {
 
 // fmtTokLong is fmtTok with the lowercase k/m the stats screenshots use (20.2m, 347.5k).
 func fmtTokLong(n int) string {
-	switch {
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fm", float64(n)/1e6)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1fk", float64(n)/1e3)
-	default:
-		return fmt.Sprintf("%d", n)
-	}
+	return strings.ToLower(fmtTok(n))
 }
 
 // dur renders a millisecond span as "1d 4h 42m" — the longest-session readout.

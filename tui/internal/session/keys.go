@@ -17,6 +17,9 @@ import (
 // This is the main screen only. Each overlay (pager, settings, pickers, palette, diff viewer) owns
 // its keys and prints its own hint line inside its frame.
 
+// escToPrompt is every focused panel's way back to typing.
+var escToPrompt = binding{keys: []string{"esc"}, label: "esc", desc: "Prompt", help: "back to the prompt", footer: true, run: func(m *Model) tea.Cmd { m.region = regionPrompt; return nil }}
+
 type binding struct {
 	keys   []string // as tea.KeyMsg.String() reports them
 	label  string   // how the key is drawn: "^p", "tab", "f1"
@@ -94,7 +97,7 @@ func (m Model) keymap() []binding {
 				}
 				return nil
 			}},
-			{keys: []string{"esc"}, label: "esc", desc: "Prompt", help: "back to the prompt", footer: true, run: func(m *Model) tea.Cmd { m.region = regionPrompt; return nil }},
+			escToPrompt,
 		}
 	case regionTranscript:
 		if m.viewer != nil {
@@ -117,14 +120,14 @@ func (m Model) keymap() []binding {
 			{keys: []string{"pgdown", "ctrl+d", " "}, run: func(m *Model) tea.Cmd { m.scrollTranscript(-m.pageRows()); return nil }},
 			{keys: []string{"g", "home"}, label: "g", desc: "Top", help: "jump to the oldest output", run: func(m *Model) tea.Cmd { m.scrollTranscript(agentLogMax); return nil }},
 			{keys: []string{"G", "end"}, label: "G", desc: "Follow", help: "jump to the newest output and keep following it", footer: true, run: func(m *Model) tea.Cmd { m.follow(); return nil }},
-			{keys: []string{"esc"}, label: "esc", desc: "Prompt", help: "back to the prompt", footer: true, run: func(m *Model) tea.Cmd { m.region = regionPrompt; return nil }},
+			escToPrompt,
 		}
 	case regionAgents:
 		local = []binding{
 			{keys: []string{"up", "k"}, label: "↑↓", desc: "Move", help: "move between agents", footer: true, run: func(m *Model) tea.Cmd { m.agentCursor = wrap(m.agentCursor-1, len(m.order)); return nil }},
 			{keys: []string{"down", "j"}, run: func(m *Model) tea.Cmd { m.agentCursor = wrap(m.agentCursor+1, len(m.order)); return nil }},
 			{keys: []string{"enter"}, label: "enter", desc: "Open", help: "show only this agent's transcript (enter again: all agents)", footer: true, run: (*Model).openAgentAtCursor},
-			{keys: []string{"esc"}, label: "esc", desc: "Prompt", help: "back to the prompt", footer: true, run: func(m *Model) tea.Cmd { m.region = regionPrompt; return nil }},
+			escToPrompt,
 		}
 	default: // the prompt
 		other := "Plan mode"

@@ -79,7 +79,7 @@ func TestDenyAndTellSendsTheNextMessageToThatAgent(t *testing.T) {
 	m = next.(Model)
 	run(cmd)
 	m = typing(m, "just move it to trash/")
-	next, cmd = m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd = m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
 	run(cmd)
 	if len(*calls) != 2 || !strings.Contains((*calls)[0], `"ok":false`) || !strings.HasPrefix((*calls)[1], "/agents/b/message") {
 		t.Fatalf("t should deny, then route the next message to b, calls=%v", *calls)

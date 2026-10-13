@@ -144,11 +144,7 @@ func (m Model) settingsView(w, h int) string {
 	if m.sett.tab == 4 {
 		hint = "↑/↓ overview/models · ←/→ tabs · esc close"
 	}
-	inner := max(h-2, 1) // Padding(1,·) eats the top and bottom row
-	lines = padTo(lines, inner-1)
-	lines = append(lines, txt(theme.Muted, bg).Render(hint))
-	return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Padding(1, 2).Background(bg).
-		Render(exactly(lines, inner))
+	return fullPanel(lines, txt(theme.Muted, bg).Render(hint), w, h, bg)
 }
 
 // settWelcome — the landing panel: greeting, version, a one-line project summary, and a signpost to
@@ -268,15 +264,26 @@ func subTabHead(active int) string {
 	return strings.Join(parts, txt(theme.Muted, bg).Render("   ·   ")) + txt(theme.Muted, bg).Render("   (↑/↓)")
 }
 
+// statsHead is the top of a stats sub-tab: its heading, then — until the history has loaded, or if
+// it failed to — the one line saying so, with ready=false for the caller to stop there.
+func (m Model) statsHead(tab, w int) (lines []string, ready bool) {
+	bg := theme.BgDeep
+	lines = []string{subTabHead(tab), ""}
+	if !m.sett.statsLoaded {
+		return append(lines, txt(theme.Muted, bg).Render("loading history…")), false
+	}
+	if m.sett.statsErr != "" {
+		return append(lines, txt(theme.Red, bg).Render(truncate("stats unavailable: "+m.sett.statsErr, w))), false
+	}
+	return lines, true
+}
+
 func (m Model) settStatsOverview(w int) []string {
 	bg := theme.BgDeep
 	s := m.sett.stats
-	lines := []string{subTabHead(0), ""}
-	if !m.sett.statsLoaded {
-		return append(lines, txt(theme.Muted, bg).Render("loading history…"))
-	}
-	if m.sett.statsErr != "" {
-		return append(lines, txt(theme.Red, bg).Render(truncate("stats unavailable: "+m.sett.statsErr, w)))
+	lines, ready := m.statsHead(0, w)
+	if !ready {
+		return lines
 	}
 
 	// The contribution heatmap: a year of days, most recent on the right, shaded by that day's tokens.
@@ -315,12 +322,9 @@ func (m Model) settStatsOverview(w int) []string {
 func (m Model) settStatsModels(w int) []string {
 	bg := theme.BgDeep
 	s := m.sett.stats
-	lines := []string{subTabHead(1), ""}
-	if !m.sett.statsLoaded {
-		return append(lines, txt(theme.Muted, bg).Render("loading history…"))
-	}
-	if m.sett.statsErr != "" {
-		return append(lines, txt(theme.Red, bg).Render(truncate("stats unavailable: "+m.sett.statsErr, w)))
+	lines, ready := m.statsHead(1, w)
+	if !ready {
+		return lines
 	}
 
 	lines = append(lines, txt(theme.Accent, bg).Bold(true).Render("Tokens per day"))

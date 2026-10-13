@@ -223,9 +223,7 @@ func (m Model) diffView(w, h int) string {
 			"",
 			m.diffv.textarea.View(),
 		}
-		lines = padTo(lines, inner-1)
-		lines = append(lines, txt(theme.Muted, bg).Render("ctrl+s save edit · esc cancel edit"))
-		return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Padding(1, 2).Background(bg).Render(exactly(lines, inner))
+		return fullPanel(lines, txt(theme.Muted, bg).Render("ctrl+s save edit · esc cancel edit"), w, h, bg)
 	}
 
 	var diffText string
@@ -262,7 +260,11 @@ func (m Model) diffView(w, h int) string {
 	}
 
 	lines := append([]string{txt(theme.Accent, bg).Bold(true).Render(truncate(head, iw))}, body...)
-	lines = padTo(lines, inner-1)
-	lines = append(lines, txt(theme.Muted, bg).Render(truncate("↑↓ scroll · "+keys, iw)))
-	return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Padding(1, 2).Background(bg).Render(exactly(lines, inner))
+	return fullPanel(lines, txt(theme.Muted, bg).Render(truncate("↑↓ scroll · "+keys, iw)), w, h, bg)
+}
+
+// fullPanel is a pane that fills w×h: its lines, padded down so the hint sits on the bottom row.
+func fullPanel(lines []string, hint string, w, h int, bg lipgloss.Color) string {
+	inner := max(h-2, 1) // Padding(1,·) eats the top and bottom row
+	return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Padding(1, 2).Background(bg).Render(exactly(append(padTo(lines, inner-1), hint), inner))
 }

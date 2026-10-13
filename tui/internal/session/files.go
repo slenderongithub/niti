@@ -363,8 +363,14 @@ func (m *Model) editFile(path string) tea.Cmd {
 			editor = "notepad"
 		}
 	}
-	parts := strings.Fields(editor)
-	c := exec.Command(parts[0], append(parts[1:], filepath.Join(m.root, filepath.FromSlash(path)))...)
+	file := filepath.Join(m.root, filepath.FromSlash(path))
+	// Through the shell, as git does: $EDITOR can carry arguments ("code -w") or a quoted path with
+	// spaces ("/Applications/Sublime Text.app/…/subl"), which splitting on whitespace broke.
+	c := exec.Command("sh", "-c", editor+` "$1"`, "sh", file)
+	if runtime.GOOS == "windows" {
+		parts := strings.Fields(editor)
+		c = exec.Command(parts[0], append(parts[1:], file)...)
+	}
 	return tea.ExecProcess(c, func(err error) tea.Msg { return editorDoneMsg{path: path, err: err} })
 }
 

@@ -7,7 +7,6 @@ import (
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // The carousel is the ctrl+l model switcher: a popup in the middle of the screen that picks a
@@ -206,7 +205,7 @@ func (m Model) carouselView(w, h int) string {
 	if m.car.status != "" {
 		hint = m.car.status + "\n" + hint
 	}
-	boxW := clamp(max(m.car.list.NaturalWidth(), widest(title, hint, m.car.query))+6, 34, max(w-6, 34))
+	boxW := clamp(max(m.car.list.NaturalWidth(), ui.Widest(title, hint, m.car.query))+6, 34, max(w-6, 34))
 	body := m.car.list.Render(boxW-4, rows, theme.BgPane)
 	if m.car.query != "" {
 		body = txt(theme.Green, theme.BgPane).Render("  /"+m.car.query) + "\n" + body
@@ -214,14 +213,3 @@ func (m Model) carouselView(w, h int) string {
 	return ui.Box(title, body, hint, boxW)
 }
 
-// widest is the display width of the longest of these lines — how every popup here decides how much
-// of the terminal it actually needs.
-func widest(lines ...string) int {
-	n := 0
-	for _, l := range lines {
-		for _, part := range strings.Split(l, "\n") {
-			n = max(n, lipgloss.Width(part))
-		}
-	}
-	return n
-}

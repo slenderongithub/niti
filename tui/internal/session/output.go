@@ -88,7 +88,7 @@ func (m Model) outputView(w, h int) string {
 	}
 	// Width follows the content, capped by the terminal — a two-column list shouldn't get a box
 	// sized for the widest command output imaginable.
-	natural := widest(m.out.title, hint)
+	natural := ui.Widest(m.out.title, hint)
 	for _, l := range all {
 		natural = max(natural, lipgloss.Width(l))
 	}

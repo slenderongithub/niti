@@ -43,3 +43,15 @@ func Frame(s string, w, h int) string {
 	}, strings.ToValidUTF8(s, "?"))
 	return lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render(s)
 }
+
+// Widest is the display width of the longest of these lines — how every popup and setup card decides
+// how much of the terminal it actually needs.
+func Widest(lines ...string) int {
+	n := 0
+	for _, l := range lines {
+		for _, part := range strings.Split(l, "\n") {
+			n = max(n, lipgloss.Width(part))
+		}
+	}
+	return n
+}

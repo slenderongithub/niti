@@ -494,7 +494,9 @@ func TestOpenAgentsViewFocusesTheLeadAndReduceMotionStopsTheTick(t *testing.T) {
 	if m.focus != "b" {
 		t.Fatalf("should open on the lead's tab, got %q", m.focus)
 	}
-	if spinner(true) != spinner(true) || !isSpinning(spinner(true)) {
+	// Held still: the first frame whatever the clock says (comparing two calls made a moment apart
+	// proved nothing — the animated frame only changes every 100ms).
+	if spinner(true) != string([]rune(spinFrames)[0]) || !isSpinning(spinner(true)) {
 		t.Fatal("reduced-motion spinner must be a fixed spinFrames glyph")
 	}
 

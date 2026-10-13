@@ -59,13 +59,10 @@ func (m Model) taskLines() []string {
 	line := func(parts ...string) string {
 		return padRight(strings.Join(parts, txt(theme.Fg, bg).Render("  ")), cw, bg)
 	}
-	cell := func(s string, fg lipgloss.Color, w int, bold bool) string {
-		return padRight(txt(fg, bg).Bold(bold).Render(truncate(s, w)), w, bg)
-	}
-	blank := cell("", theme.Fg, 0, false)
+	blank := cell("", theme.Fg, 0, false, bg)
 	out := []string{
 		line(txt(theme.Fg, bg).Bold(true).Render(taskSummary(counts, len(m.tasks)))),
-		line(cell("STATUS", theme.Muted, statusW, true), cell("ID", theme.Muted, idW, true), cell("AGENT", theme.Muted, agentW, true), cell("TASK", theme.Muted, descW, true)),
+		line(cell("STATUS", theme.Muted, statusW, true, bg), cell("ID", theme.Muted, idW, true, bg), cell("AGENT", theme.Muted, agentW, true, bg), cell("TASK", theme.Muted, descW, true, bg)),
 		line(txt(theme.Line, bg).Render(strings.Repeat("─", cw))),
 	}
 	for _, t := range m.tasks {
@@ -91,10 +88,10 @@ func (m Model) taskLines() []string {
 		}
 		for i, d := range desc {
 			if i > 0 {
-				out = append(out, line(cell("", theme.Fg, statusW, false), cell("", theme.Fg, idW, false), cell("", theme.Fg, agentW, false), descCell(d, descW, bg)))
+				out = append(out, line(cell("", theme.Fg, statusW, false, bg), cell("", theme.Fg, idW, false, bg), cell("", theme.Fg, agentW, false, bg), descCell(d, descW, bg)))
 				continue
 			}
-			out = append(out, line(cell(glyph+" "+word, theme.StatusColor(t.Status), statusW, t.Status == "in_progress"), cell(t.ID, theme.Muted, idW, false), cell(who, agentFg, agentW, false), descCell(d, descW, bg)))
+			out = append(out, line(cell(glyph+" "+word, theme.StatusColor(t.Status), statusW, t.Status == "in_progress", bg), cell(t.ID, theme.Muted, idW, false, bg), cell(who, agentFg, agentW, false, bg), descCell(d, descW, bg)))
 		}
 	}
 	return append(out, blank)
@@ -106,4 +103,9 @@ func descCell(d string, w int, bg lipgloss.Color) string {
 		return padRight(txt(theme.Muted, bg).Italic(true).Render(truncate("↳ "+rest, w)), w, bg)
 	}
 	return padRight(txt(theme.Fg, bg).Render(truncate(d, w)), w, bg)
+}
+
+// cell is one fixed-width table cell, truncated to fit — the agent and task tables share the shape.
+func cell(s string, fg lipgloss.Color, w int, bold bool, bg lipgloss.Color) string {
+	return padRight(txt(fg, bg).Bold(bold).Render(truncate(s, w)), w, bg)
 }

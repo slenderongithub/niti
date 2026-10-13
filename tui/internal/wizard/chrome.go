@@ -33,16 +33,6 @@ func fit(w int, natural ...int) int {
 	return clamp(want+2, cardMin, min(cardMax, max(w-6, cardMin))) // +2 for the card's side padding
 }
 
-func widest(lines ...string) int {
-	n := 0
-	for _, l := range lines {
-		for _, part := range strings.Split(l, "\n") {
-			n = max(n, lipgloss.Width(part))
-		}
-	}
-	return n
-}
-
 // screen is the setup frame — see ui.SetupScreen. The step name heads the panel, the hint sits
 // muted under the content, and the footer lists the keys for this kind of step.
 // On the first step there is nothing to go back to, so esc is left out.

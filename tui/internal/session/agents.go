@@ -27,13 +27,10 @@ func (m Model) agentLines() []string {
 		modelW = max(modelW, min(lipgloss.Width(st.cfg.Provider+"/"+st.cfg.Model), 34))
 	}
 	toolW := max(cw-3-1-roleW-modelW-statusW-6, 12)
-	cell := func(s string, fg lipgloss.Color, w int, bold bool) string {
-		return padRight(txt(fg, bg).Bold(bold).Render(truncate(s, w)), w, bg)
-	}
 	sep := txt(theme.Fg, bg).Render("  ")
 	row := func(cells ...string) string { return padRight(strings.Join(cells, sep), cw, bg) }
 	out := []string{
-		row(cell("", theme.Muted, 3, true), cell("ROLE", theme.Muted, roleW, true), cell("MODEL", theme.Muted, modelW, true), cell("STATE", theme.Muted, statusW, true), cell("TOOLS", theme.Muted, toolW, true)),
+		row(cell("", theme.Muted, 3, true, bg), cell("ROLE", theme.Muted, roleW, true, bg), cell("MODEL", theme.Muted, modelW, true, bg), cell("STATE", theme.Muted, statusW, true, bg), cell("TOOLS", theme.Muted, toolW, true, bg)),
 		row(txt(theme.Line, bg).Render(strings.Repeat("─", cw))),
 	}
 	for _, id := range m.order {
@@ -42,8 +39,8 @@ func (m Model) agentLines() []string {
 		if len(st.cfg.AllowedTools) > 0 {
 			tools = strings.Join(st.cfg.AllowedTools, ", ")
 		}
-		out = append(out, row(cell(st.avatar, st.color, 3, true), cell(agentName(st), st.color, roleW, true), cell(st.cfg.Provider+"/"+st.cfg.Model, theme.Fg, modelW, false),
-			cell(st.status, theme.StatusColor(st.status), statusW, false), cell(tools, theme.Muted, toolW, false)))
+		out = append(out, row(cell(st.avatar, st.color, 3, true, bg), cell(agentName(st), st.color, roleW, true, bg), cell(st.cfg.Provider+"/"+st.cfg.Model, theme.Fg, modelW, false, bg),
+			cell(st.status, theme.StatusColor(st.status), statusW, false, bg), cell(tools, theme.Muted, toolW, false, bg)))
 	}
 	return out
 }

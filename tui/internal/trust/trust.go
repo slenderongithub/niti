@@ -1,5 +1,5 @@
 // Package trust renders the "do you trust this folder?" prompt shown before niti spawns its core
-// in a project directory it hasn't confirmed before (or whose MCP server config has changed since
+// in a project directory it hasn't confirmed before (or whose .niti/agents.yaml has changed since
 // it was last confirmed) — the same reason Claude Code asks before reading/acting in a new folder.
 // It runs standalone, before any session state exists, so it takes no dependency on the session
 // package — just the shared ui/theme widgets every other popup in the app already uses.
@@ -67,7 +67,7 @@ func (m Model) View() string {
 	}
 	why := "niti hasn't run in this folder before."
 	if m.Changed {
-		why = "This folder's MCP server config changed since you last trusted it."
+		why = "This folder's .niti/agents.yaml changed since you last trusted it."
 	}
 	bg := theme.BgDeep
 	st := func(c lipgloss.Color) lipgloss.Style { return lipgloss.NewStyle().Foreground(c).Background(bg) }
