@@ -17,14 +17,11 @@ This file is the single merged source of project history/architecture context, r
 - **`niti-core`** — the headless Bun/TypeScript engine + scripting CLI (`src/cli.ts`). Used
   standalone for one-shot/CI runs, `serve`, `auth`, `init`, `--web`, and it's what `niti` spawns.
   Build: `bun run build`.
-- **`old-tech/ink-tui/`** — the original React/Ink interactive TUI (niti v1). Archived, not deleted,
-  not wired into the active build — `src/cli.ts` no longer imports or renders it. Has its own
-  `package.json`/`tsconfig.json` so it doesn't affect the root project's deps or `tsc`/`bun test`.
 
 ## Architecture (as built)
 
 ```
-       Go + Bubbletea TUI (niti)   Web dashboard (--web)   Electron desktop app (desktop/)
+       Go + Bubbletea TUI (niti)   Web dashboard (--web)   Electron desktop app (niti-app/)
         team picker · panes · graph   localhost force-graph   embedded panels, file:// renderer
                               └──────────── HTTP + SSE (src/server) ────────────┘
                                                   ▼

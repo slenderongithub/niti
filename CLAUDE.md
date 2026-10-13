@@ -7,8 +7,8 @@ niti ships **one product in two packagings** from this repository:
 | **CLI** | `src/`, `tui/`, `web/`, `scripts/`, `bin/` | `niti` (Go TUI) + `niti-core` (Bun engine). **The main product.** |
 | **Desktop app** | `niti-app/` | The same product as an Electron + React app over the same engine — see `niti-app/README.md`. |
 
-`old-tech/` is the archived v1 Ink TUI. Dead, kept for reference, part of nothing. (A VS Code fork
-in `ide/` and an earlier Electron app in `desktop/` were deleted in October 2026; neither exists.)
+(The archived v1 Ink TUI in `old-tech/`, a VS Code fork in `ide/` and an earlier Electron app in
+`desktop/` were deleted in October 2026; none of them exists.)
 
 **Rules, in order of how easy they are to break by accident:**
 
@@ -24,8 +24,8 @@ in `ide/` and an earlier Electron app in `desktop/` were deleted in October 2026
    env in `scripts/e2e/*` ⇄ `niti-app/scripts/fixture.ts`. Verify both sides: `zsh scripts/e2e/run.sh`
    and `cd niti-app && npm run check`. Intentional differences stay (the app's own version line,
    its native features, each product's design tokens).
-3. **Never let one product's files into another's view of the project.** `niti-app/` and
-   `old-tech/` are in the `IGNORE` set in `src/graph/filegraph.ts`, which bounds both the `/graph`
+3. **Never let one product's files into another's view of the project.** `niti-app/` is in
+   the `IGNORE` set in `src/graph/filegraph.ts`, which bounds both the `/graph`
    view and the project map injected into every agent's system prompt. A filter added anywhere else
    that lists project files must honour that same set — `filegraph.test.ts` asserts it, so if you
    are about to make that test pass by editing the test, you have it backwards. IGNORE matches any

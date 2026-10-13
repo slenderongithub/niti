@@ -20,3 +20,4 @@ node_modules/
 # eval token baseline: scripts/eval/run.ts --save-tokens base.json
 /base.json
 .serena/
+__pycache__/
