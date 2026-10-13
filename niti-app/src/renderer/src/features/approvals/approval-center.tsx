@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { motion } from "motion/react";
@@ -41,6 +42,7 @@ function describe(r: ApprovalRequest): { verb: string; target: string } {
 // y allow · a always for this agent · n deny · e edit before allowing · t deny and tell it why.
 export function ApprovalCenter() {
   const approvals = useApp((s) => s.session.approvals);
+  const bulk = approvals.filter((r) => !r.dangerous).length; // what "Allow all" covers: never a dangerous one
   const agents = useApp((s) => s.session.agents);
   const lead = useApp((s) => s.session.leadId);
   const api = useApp((s) => s.api);
@@ -70,8 +72,11 @@ export function ApprovalCenter() {
   const act = async (fn: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
-    await fn();
-    setBusy(false);
+    try {
+      await fn();
+    } finally {
+      setBusy(false); // or one failed call left every button here disabled for good
+    }
   };
   const allow = () => act(() => answerApproval(true, undefined, undefined, head?.id));
   const always = () => act(() => answerApproval(true, "agent", undefined, head?.id));
@@ -86,7 +91,8 @@ export function ApprovalCenter() {
     act(async () => {
       const id = head!.agentId;
       await answerApproval(false, undefined, undefined, head!.id);
-      if (draft.trim() && api) await api.messageAgent(id, draft.trim()).catch(() => {});
+      // Said, not swallowed: if the agent has already stopped, the explanation didn't reach it.
+      if (draft.trim() && api) await api.messageAgent(id, draft.trim()).catch((e: Error) => toast.error(`denied, but ${id} didn't get your note: ${e.message}`));
     });
 
   useEffect(() => {
@@ -246,9 +252,9 @@ export function ApprovalCenter() {
                     )}
                   </div>
                   <div className="flex gap-2">
-                    {approvals.length > 1 && (
+                    {bulk > 1 && (
                       <Button variant="ghost" onClick={() => void act(approveAll)} disabled={busy}>
-                        <CheckCheck /> Allow all {approvals.length}
+                        <CheckCheck /> Allow all {bulk}
                       </Button>
                     )}
                     <Button variant="outline" onClick={() => void always()} disabled={busy}>

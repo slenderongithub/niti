@@ -510,7 +510,7 @@ function resetSession(d: Draft) {
   d.s = { ...emptyState(), ready: true, root: keep.root, agents, order: keep.order, leadId: keep.leadId, lastSeq: keep.lastSeq, nextId: keep.nextId, fileEpoch: keep.fileEpoch + 1, status: "session cleared" };
 }
 
-export function applyEvent(d: Draft, e: ServerEvent) {
+function applyEvent(d: Draft, e: ServerEvent) {
   if (typeof e.seq === "number" && e.kind !== "connection" && e.kind !== "resync") d.s.lastSeq = Math.max(d.s.lastSeq, e.seq);
   switch (e.kind) {
     case "agent_event":
@@ -661,4 +661,4 @@ export function groupItems(items: Item[]): RenderItem[] {
   return out;
 }
 
-export { Draft };
+

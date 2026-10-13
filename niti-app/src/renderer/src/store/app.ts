@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import type { AppInfo, CoreExit, TrustStatus } from "../../../shared/bridge";
 import { Api } from "@/lib/api";
@@ -12,7 +13,7 @@ import { useUI } from "./ui";
 // One window's journey: launch → trust → starting → team setup → session. The renderer drives it;
 // main only runs the processes. `session` is the reducer's output, replaced on every event batch.
 
-export type Phase = "launch" | "trust" | "starting" | "setup" | "restarting" | "session" | "error";
+type Phase = "launch" | "trust" | "starting" | "setup" | "restarting" | "session" | "error";
 
 interface AppState {
   info: AppInfo | null;
@@ -50,15 +51,20 @@ function closeStream() {
 export const useApp = create<AppState>((set, get) => {
   const fail = (err: unknown) => set({ phase: "error", error: err instanceof Error ? err.message : String(err) });
 
+  // A (re)started core's handshake → the client every call goes through, plus its slash commands.
+  function attach(hs: { url: string; token: string }): Api {
+    const api = new Api(hs.url, hs.token);
+    set({ api });
+    void api.commands().then((r) => set({ commands: r.commands })).catch(() => {});
+    return api;
+  }
+
   async function boot(): Promise<void> {
     const root = get().root!;
     set({ phase: "starting", error: null, coreExit: null });
-    const hs = await window.niti.startCore(root);
-    const api = new Api(hs.url, hs.token);
+    const api = attach(await window.niti.startCore(root));
     const info = await api.session();
-    set({ api, sessionInfo: info, session: fromSession(info) });
-    void api.commands().then((r) => set({ commands: r.commands })).catch(() => {});
-    set({ phase: "setup" });
+    set({ sessionInfo: info, session: fromSession(info), phase: "setup" });
   }
 
   function connect(api: Api, info: SessionInfo) {
@@ -138,10 +144,7 @@ export const useApp = create<AppState>((set, get) => {
           // agents.yaml is read only at boot: a new team means a new core.
           set({ phase: "restarting" });
           closeStream();
-          const hs = await window.niti.restartCore();
-          api = new Api(hs.url, hs.token);
-          set({ api });
-          void api.commands().then((r) => set({ commands: r.commands })).catch(() => {});
+          api = attach(await window.niti.restartCore());
         }
         const info = await api.session();
         connect(api, info);
@@ -170,10 +173,7 @@ export const useApp = create<AppState>((set, get) => {
       try {
         closeStream();
         set({ coreExit: null, phase: "restarting" });
-        const hs = await window.niti.restartCore().catch(() => window.niti.startCore(get().root!));
-        const api = new Api(hs.url, hs.token);
-        set({ api });
-        void api.commands().then((r) => set({ commands: r.commands })).catch(() => {});
+        const api = attach(await window.niti.restartCore().catch(() => window.niti.startCore(get().root!)));
         connect(api, await api.session());
       } catch (err) {
         fail(err);
@@ -207,3 +207,7 @@ export const useApp = create<AppState>((set, get) => {
 function applyServerPrefs(info: SessionInfo) {
   useUI.getState().setReduceMotion(Boolean(info.prefs?.reduceMotion));
 }
+
+// The roster as most views read it: the team in order, and who leads. Shallow-compared, so a view
+// re-renders exactly when one of the three changes — as it did with three separate selectors.
+export const useRoster = () => useApp(useShallow((s) => ({ order: s.session.order, agents: s.session.agents, lead: s.session.leadId })));

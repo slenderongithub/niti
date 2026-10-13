@@ -7,7 +7,8 @@ import type { ThemeSource } from "../../../shared/bridge";
 export type Page = "session" | "tasks" | "tokens" | "graph" | "dashboard" | "settings";
 export const PAGES: Page[] = ["session", "tasks", "tokens", "graph", "dashboard", "settings"];
 
-function load<T>(key: string, fallback: T): T {
+// A `niti.`-prefixed localStorage value, or `fallback` when it is missing, unreadable or unavailable.
+export function load<T>(key: string, fallback: T): T {
   try {
     const v = localStorage.getItem(`niti.${key}`);
     return v === null ? fallback : (JSON.parse(v) as T);

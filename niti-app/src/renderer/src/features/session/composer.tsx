@@ -14,7 +14,7 @@ import { interrupt, isSlashCommand, LOCAL_COMMANDS, send, type Target } from "@/
 import { steerTarget, workingAgents } from "@/lib/reducer";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/store/app";
-import { useUI } from "@/store/ui";
+import { load, save, useUI } from "@/store/ui";
 import { useAgentsLite } from "@/hooks/use-agents-lite";
 
 // The command line to the whole team. Split in two so typing re-renders only the input: the
@@ -23,14 +23,8 @@ import { useAgentsLite } from "@/hooks/use-agents-lite";
 type Menu = { kind: "slash"; query: string } | { kind: "mention"; query: string; start: number } | null;
 
 const HISTORY_MAX = 200;
-const historyKey = (root: string) => `niti.history.${root}`;
-function loadHistory(root: string): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(historyKey(root)) ?? "[]") as string[];
-  } catch {
-    return [];
-  }
-}
+// Sent prompts, per project — also what the command palette offers to re-run.
+export const historyKey = (root: string) => `history.${root}`;
 
 // prefix > substring > subsequence — the TUI's menu ranking (internal/ui/list.go:58-103).
 function rank(name: string, q: string): number {
@@ -162,7 +156,7 @@ const ComposerInput = memo(function ComposerInput({ placeholder, suggestion, act
   const [sel, setSel] = useState("");
   const [files, setFiles] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const hist = useRef<{ list: string[]; i: number; draft: string }>({ list: loadHistory(root), i: -1, draft: "" });
+  const hist = useRef<{ list: string[]; i: number; draft: string }>({ list: load<string[]>(historyKey(root), []), i: -1, draft: "" });
   const ta = useRef<HTMLTextAreaElement>(null);
   const lastEsc = useRef(0);
 
@@ -235,11 +229,7 @@ const ComposerInput = memo(function ComposerInput({ placeholder, suggestion, act
     const list = hist.current.list.filter((h) => h !== t);
     list.push(t);
     hist.current = { list: list.slice(-HISTORY_MAX), i: -1, draft: "" };
-    try {
-      localStorage.setItem(historyKey(root), JSON.stringify(hist.current.list));
-    } catch {
-      /* history is a convenience */
-    }
+    save(historyKey(root), hist.current.list); // a convenience: unavailable storage is ignored
     setBusy(true);
     const ok = await send(t, target);
     setBusy(false);

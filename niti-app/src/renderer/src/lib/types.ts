@@ -43,7 +43,7 @@ export interface Prefs {
   notifyOnDone: boolean;
 }
 
-export interface EngineSettings {
+interface EngineSettings {
   autoCompact: boolean;
   thinkingMode: boolean;
 }
@@ -63,7 +63,7 @@ export interface SessionInfo {
   theme?: string;
 }
 
-export type AgentEventType =
+type AgentEventType =
   | "thought"
   | "tool_call"
   | "file_edit"
@@ -169,6 +169,7 @@ export interface ApprovalRequest {
   agentId: string;
   tool: string;
   input: Record<string, unknown>;
+  dangerous?: boolean; // must be decided on its own: never part of "allow all" (absent from older cores)
 }
 
 export interface TurnSummary {
@@ -184,7 +185,7 @@ export interface TurnSummary {
   costKnown: boolean;
 }
 
-export type ServerEventBody =
+type ServerEventBody =
   | { kind: "agent_event"; event: AgentEvent }
   | { kind: "agent_message"; message: AgentMessage }
   | { kind: "orchestration"; event: OrchestrationEvent }

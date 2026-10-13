@@ -49,7 +49,7 @@ import { fmtAgo, shortPath } from "@/lib/format";
 import { runSlash } from "@/lib/actions";
 import type { Checkpoint, Credential, Providers, WorktreeStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useApp } from "@/store/app";
+import { useApp, useRoster } from "@/store/app";
 import { useOutput } from "@/store/output";
 import { useUI } from "@/store/ui";
 import type { ThemeSource } from "../../../../shared/bridge";
@@ -224,9 +224,7 @@ function Appearance() {
 }
 
 function Team() {
-  const order = useApp((s) => s.session.order);
-  const agents = useApp((s) => s.session.agents);
-  const lead = useApp((s) => s.session.leadId);
+  const { order, agents, lead } = useRoster();
   const focusAgent = useUI((s) => s.focusAgent);
   const setModelPicker = useUI((s) => s.setModelPicker);
   return (

@@ -3,7 +3,7 @@ import { FileCode2, LayoutGrid, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { cn } from "@/lib/utils";
-import { useApp } from "@/store/app";
+import { useApp, useRoster } from "@/store/app";
 import { closeFileTab, useEditor } from "@/store/editor";
 import { useUI } from "@/store/ui";
 import { CodeEditor } from "@/features/editor/code-editor";
@@ -13,9 +13,7 @@ import { Welcome } from "./welcome";
 // The session's centre: all agents side by side (the TUI's overview), one agent, or a file you
 // opened — all as tabs in one strip. Esc goes back to everyone.
 export function TranscriptArea() {
-  const order = useApp((s) => s.session.order);
-  const agents = useApp((s) => s.session.agents);
-  const lead = useApp((s) => s.session.leadId);
+  const { order, agents, lead } = useRoster();
   const hasContent = useApp((s) => s.session.active || Boolean(s.session.goal) || s.session.order.some((id) => s.session.agents[id]!.items.length > 0));
   const focused = useUI((s) => s.focusedAgent);
   const focus = useUI((s) => s.focusAgent);

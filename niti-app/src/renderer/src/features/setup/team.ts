@@ -4,7 +4,7 @@ import type { AgentConfig } from "@/lib/types";
 // so a team built here is byte-for-byte what the TUI would have written.
 
 export const MAX_AGENTS = 6;
-export const DEFAULT_TOOLS = ["read_file", "write_file", "edit", "shell"];
+const DEFAULT_TOOLS = ["read_file", "write_file", "edit", "shell"];
 
 export function teamHint(n: number): string {
   if (n === 1) return "solo — one model does everything";

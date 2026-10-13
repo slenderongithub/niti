@@ -7,7 +7,7 @@ import { defaultParams, ringPosition, seedPosition, tick, type SimLink, type Sim
 
 export type GraphMode = "project" | "agents";
 
-export interface GNode extends SimNode {
+interface GNode extends SimNode {
   label: string;
   group: string;
   color: string;
@@ -19,7 +19,7 @@ export interface GNode extends SimNode {
   lead?: boolean;
 }
 
-export interface GraphTheme {
+interface GraphTheme {
   ink: string;
   muted: string;
   accent: string;

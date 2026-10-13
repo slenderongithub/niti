@@ -9,7 +9,7 @@ import { WindowChrome } from "./window-chrome";
 import { useEffect } from "react";
 
 // The trust prompt (tui/internal/trust/trust.go): niti will read files, run commands and start MCP
-// servers in this folder, so the first visit — or a changed mcpServers block — asks first.
+// servers in this folder, so the first visit — or a changed .niti/agents.yaml — asks first.
 export function TrustScreen() {
   const trust = useApp((s) => s.trust);
   const root = useApp((s) => s.root);
@@ -38,10 +38,10 @@ export function TrustScreen() {
               <div className={`mb-2 flex size-11 items-center justify-center rounded-xl ${changed ? "bg-warning/15 text-warning" : "bg-primary/12 text-primary"}`}>
                 {changed ? <ShieldAlert className="size-5" /> : <ShieldCheck className="size-5" />}
               </div>
-              <CardTitle className="text-lg">{changed ? "This folder's MCP servers changed" : "Do you trust this folder?"}</CardTitle>
+              <CardTitle className="text-lg">{changed ? "This folder's niti config changed" : "Do you trust this folder?"}</CardTitle>
               <CardDescription className="leading-relaxed">
                 {changed
-                  ? "Since you last trusted it, the mcpServers block in .niti/agents.yaml changed. Those servers run as programs on your machine."
+                  ? "Since you last trusted it, .niti/agents.yaml changed. It decides what runs here: MCP servers, language servers, checks and permissions."
                   : "niti hasn't run here before. Trusting it lets your agents work in this folder."}
               </CardDescription>
             </CardHeader>

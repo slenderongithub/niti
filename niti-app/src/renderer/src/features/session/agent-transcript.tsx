@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { ArrowDown, ChevronUp, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -10,43 +10,10 @@ import { cn } from "@/lib/utils";
 import { useApp } from "@/store/app";
 import { useUI } from "@/store/ui";
 import { ItemView, TodoList } from "./items";
+import { useFollow } from "@/hooks/use-follow";
 import { Hourglass } from "lucide-react";
 
 const WINDOW = 150; // rendered rows; older ones load on demand
-
-// Follows the bottom while the user is there; once they scroll up it holds still and counts what
-// arrived below (the TUI's "scrolled back · N new below · G follows").
-function useFollow(dep: unknown) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [atBottom, setAtBottom] = useState(true);
-  const [unseen, setUnseen] = useState(0);
-  const bottom = useRef(true);
-  const onScroll = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    const at = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-    if (at !== bottom.current) {
-      bottom.current = at;
-      setAtBottom(at);
-      if (at) setUnseen(0);
-    }
-  }, []);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (bottom.current) el.scrollTop = el.scrollHeight;
-    else setUnseen((n) => n + 1);
-  }, [dep]);
-  const jump = () => {
-    const el = ref.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    bottom.current = true;
-    setAtBottom(true);
-    setUnseen(0);
-  };
-  return { ref, onScroll, atBottom, unseen, jump };
-}
 
 const openKeys = () => {
   useUI.getState().go("settings");

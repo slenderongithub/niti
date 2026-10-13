@@ -129,7 +129,7 @@ export async function runSlash(text: string): Promise<boolean> {
   }
 }
 
-export async function runShell(cmd: string): Promise<void> {
+async function runShell(cmd: string): Promise<void> {
   const t = toast.loading(`$ ${cmd}`);
   try {
     const r = await window.niti.runShell(cmd);
@@ -198,10 +198,11 @@ export async function answerApproval(ok: boolean, scope?: "agent" | "path", edit
   }
 }
 
-// Approve all approves exactly the requests on screen — never ones that arrived after the click.
+// Approve all approves exactly the requests on screen — never ones that arrived after the click, and
+// never a dangerous one (rm -rf, network, outside the project, a credential), which the core asks
+// about precisely so that it is decided on its own.
 export async function approveAll() {
-  const shown = useApp.getState().session.approvals;
-  for (const r of shown) await answerApproval(true, undefined, undefined, r.id);
+  for (const r of useApp.getState().session.approvals.filter((a) => !a.dangerous)) await answerApproval(true, undefined, undefined, r.id);
 }
 
 export async function switchModel(agentId: string, providerModel: string) {

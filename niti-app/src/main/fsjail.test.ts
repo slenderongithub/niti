@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, realpathSync, symlinkSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JailError, readProjectFile, resolveInRoot, writeProjectFile } from "./fsjail";
@@ -38,4 +38,10 @@ test("writes atomically and refuses to clobber a newer file", () => {
   const c = writeProjectFile(root, "src/a.ts", "mine", w.ok ? w.mtimeMs : 0);
   expect(c).toMatchObject({ ok: false, conflict: true });
   expect(readFileSync(join(root, "src/a.ts"), "utf8")).toBe("export const a = 2;\n");
+});
+
+test("saving keeps the file's mode, so a script stays executable", () => {
+  writeFileSync(join(root, "run.sh"), "#!/bin/sh\necho hi\n", { mode: 0o755 });
+  writeProjectFile(root, "run.sh", "#!/bin/sh\necho bye\n");
+  expect(statSync(join(root, "run.sh")).mode & 0o777).toBe(0o755);
 });

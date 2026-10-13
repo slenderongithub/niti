@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { ArrowDown, ChevronDown, MessagesSquare, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { EmptyState } from "@/components/empty-state";
 import { SectionCard } from "@/components/layout";
 import { fmtClock } from "@/lib/format";
+import { useFollow } from "@/hooks/use-follow";
 import { messageColor, tint } from "@/lib/identity";
 import type { AgentView, FeedItem } from "@/lib/reducer";
 import type { AgentMessage, MessageKind } from "@/lib/types";
@@ -124,24 +125,12 @@ function PairAvatars({ a, b }: { a?: AgentView; b?: AgentView }) {
 }
 
 function Stream({ items, agents, name }: { items: FeedItem[]; agents: Record<string, AgentView>; name: (id: string) => string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const bottom = useRef(true);
-  const [unseen, setUnseen] = useState(0);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (bottom.current) el.scrollTop = el.scrollHeight;
-    else setUnseen((n) => n + 1);
-  }, [items.length]);
+  const { ref, onScroll, unseen, jump } = useFollow(items.length);
   return (
     <div className="relative min-h-0">
       <div
         ref={ref}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          bottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-          if (bottom.current && unseen) setUnseen(0);
-        }}
+        onScroll={onScroll}
         className="h-full overflow-y-auto px-5 py-4 scrollbar-thin"
       >
         {items.length === 0 ? (
@@ -157,11 +146,7 @@ function Stream({ items, agents, name }: { items: FeedItem[]; agents: Record<str
           size="sm"
           variant="secondary"
           className="absolute bottom-3 left-1/2 h-7 -translate-x-1/2 gap-1.5 rounded-full border px-3 text-xs shadow-md"
-          onClick={() => {
-            ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: "smooth" });
-            bottom.current = true;
-            setUnseen(0);
-          }}
+          onClick={jump}
         >
           <ArrowDown /> {unseen} new
         </Button>

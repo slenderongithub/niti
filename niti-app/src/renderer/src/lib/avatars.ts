@@ -1,4 +1,4 @@
-// The six agent avatars (scripts/make-avatars.py makes them from the drawings): one per roster
+// The six agent avatars (scripts/avatars/make-avatars.py at the repo root makes them from the drawings): one per roster
 // slot, an open frame and a blink frame. Avatar 4 laughs with its eyes shut, so it has no blink.
 import a1 from "@/assets/avatars/niti1.png";
 import a2 from "@/assets/avatars/niti2.png";
@@ -19,6 +19,6 @@ export const avatarIndex = (slot: number) => ((slot % 6) + 6) % 6;
 
 // When each slot blinks: a 5.2s cycle, offset per slot so a team never blinks in unison.
 export const BLINK_PERIOD = 5200;
-export const BLINK_LENGTH = 160;
+const BLINK_LENGTH = 160;
 export const blinkOffset = (slot: number) => (avatarIndex(slot) * 1700) % BLINK_PERIOD;
 export const isBlinking = (slot: number, now: number) => (now + blinkOffset(slot)) % BLINK_PERIOD < BLINK_LENGTH;

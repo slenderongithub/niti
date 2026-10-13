@@ -35,7 +35,7 @@ export interface CoreExit {
   logTail: string;
 }
 
-export interface ShellResult {
+interface ShellResult {
   code: number;
   output: string;
 }

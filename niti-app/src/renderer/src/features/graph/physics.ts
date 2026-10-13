@@ -142,7 +142,7 @@ function collide(tree: Cell | null, p: SimNode, reach: number) {
 let disp = new Float64Array(0);
 const acc = { x: 0, y: 0 };
 
-export function freeze(nodes: SimNode[], sim: SimParams) {
+function freeze(nodes: SimNode[], sim: SimParams) {
   sim.alpha = 0;
   for (const p of nodes) {
     p.vx = 0;

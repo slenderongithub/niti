@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useApp } from "@/store/app";
 
-export type AgentLite = { id: string; index: number; role: string; status: string; color: string; model: string };
+type AgentLite = { id: string; index: number; role: string; status: string; color: string; model: string };
 
 // The roster's identity and status as one primitive key, so a component re-renders when an agent's
 // role or status changes — not on every streamed token.

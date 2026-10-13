@@ -16,7 +16,7 @@ import { messageColor } from "@/lib/identity";
 import { fmtTokens } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { FileGraph } from "@/lib/types";
-import { useApp } from "@/store/app";
+import { useApp, useRoster } from "@/store/app";
 import { useUI } from "@/store/ui";
 import { GraphEngine, type GraphMode, type HoverInfo } from "./engine";
 
@@ -31,9 +31,7 @@ function resolveColor(c: string): string {
 export default function GraphPage() {
   const api = useApp((s) => s.api);
   const epoch = useApp((s) => s.session.fileEpoch);
-  const order = useApp((s) => s.session.order);
-  const agents = useApp((s) => s.session.agents);
-  const lead = useApp((s) => s.session.leadId);
+  const { order, agents, lead } = useRoster();
   const messages = useApp((s) => s.session.messages);
   const dark = useUI((s) => s.resolvedDark);
   const go = useUI((s) => s.go);
@@ -57,6 +55,12 @@ export default function GraphPage() {
   const [forces, setForces] = useState({ link: 42, charge: 30, gravity: 6 });
   const [legend, setLegend] = useState<{ label: string; color: string; count: number }[]>([]);
   const fitted = useRef(false);
+  // The first graph a mode draws is framed once; after that the camera is the user's.
+  const fitOnce = (e: GraphEngine) => {
+    if (fitted.current) return;
+    fitted.current = true;
+    setTimeout(() => e.fit(false), 30);
+  };
   const seenMsgs = useRef(messages.length);
 
   // engine lifecycle
@@ -148,10 +152,7 @@ export default function GraphPage() {
       graph.edges,
     );
     setLegend(e.groups());
-    if (!fitted.current) {
-      fitted.current = true;
-      setTimeout(() => e.fit(false), 30);
-    }
+    fitOnce(e);
   }, [graph, mode]);
 
   // agents → engine
@@ -180,10 +181,7 @@ export default function GraphPage() {
       }),
       edges,
     );
-    if (!fitted.current) {
-      fitted.current = true;
-      setTimeout(() => e.fit(false), 30);
-    }
+    fitOnce(e);
   }, [mode, roster, msgEdges, lead, dark]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const e = engine.current;
@@ -358,35 +356,25 @@ export default function GraphPage() {
       {/* legend */}
       <AnimatePresence>
         {mode === "project" && legend.length > 0 && (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} className="absolute bottom-3 left-3">
-            <Card className="max-w-[min(560px,60vw)] gap-1.5 rounded-xl px-3 py-2 shadow-lg">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Directories</div>
-              <div className="flex flex-wrap gap-x-3 gap-y-1">
-                {legend.slice(0, 14).map((g) => (
-                  <span key={g.label} className="flex items-center gap-1.5 text-[11px]">
-                    <span className="size-2 rounded-full" style={{ background: g.color }} />
-                    {g.label}
-                    <span className="text-muted-foreground tabular">{g.count}</span>
-                  </span>
-                ))}
-              </div>
-            </Card>
-          </motion.div>
+          <LegendCard key="dirs" title="Directories" className="max-w-[min(560px,60vw)]">
+            {legend.slice(0, 14).map((g) => (
+              <span key={g.label} className="flex items-center gap-1.5 text-[11px]">
+                <span className="size-2 rounded-full" style={{ background: g.color }} />
+                {g.label}
+                <span className="text-muted-foreground tabular">{g.count}</span>
+              </span>
+            ))}
+          </LegendCard>
         )}
         {mode === "agents" && (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} className="absolute bottom-3 left-3">
-            <Card className="gap-1.5 rounded-xl px-3 py-2 shadow-lg">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Messages</div>
-              <div className="flex flex-wrap gap-x-3 gap-y-1">
-                {(["question", "answer", "handoff", "review", "note"] as const).map((k) => (
-                  <span key={k} className="flex items-center gap-1.5 text-[11px] capitalize">
-                    <span className="size-2 rounded-full" style={{ background: messageColor(k) }} />
-                    {k}
-                  </span>
-                ))}
-              </div>
-            </Card>
-          </motion.div>
+          <LegendCard key="messages" title="Messages">
+            {(["question", "answer", "handoff", "review", "note"] as const).map((k) => (
+              <span key={k} className="flex items-center gap-1.5 text-[11px] capitalize">
+                <span className="size-2 rounded-full" style={{ background: messageColor(k) }} />
+                {k}
+              </span>
+            ))}
+          </LegendCard>
         )}
       </AnimatePresence>
 
@@ -527,5 +515,17 @@ function NeighbourList({ icon: Icon, title, items, onPick }: { icon: typeof Arro
         ))}
       </div>
     </div>
+  );
+}
+
+// The floating key in the bottom-left corner — one per graph mode.
+function LegendCard({ title, className, children }: { title: string; className?: string; children: React.ReactNode }) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} className="absolute bottom-3 left-3">
+      <Card className={cn("gap-1.5 rounded-xl px-3 py-2 shadow-lg", className)}>
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</div>
+        <div className="flex flex-wrap gap-x-3 gap-y-1">{children}</div>
+      </Card>
+    </motion.div>
   );
 }

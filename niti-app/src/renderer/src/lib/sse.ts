@@ -6,7 +6,7 @@ import type { ServerEvent } from "./types";
 // Events are delivered in batches once per animation frame, so a burst of streamed deltas costs
 // one render, not hundreds.
 
-export interface StreamOptions {
+interface StreamOptions {
   url: (from: number) => string;
   from: number;
   onEvents: (events: ServerEvent[]) => void;

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useHarness } from "./use-harness";
 import { EditorView } from "@codemirror/view";
 import { answerApproval, send } from "@/lib/actions";
 import { useEditor } from "@/store/editor";
@@ -9,15 +9,8 @@ import { PAGES, useUI } from "@/store/ui";
 // the fake model — approving each write through the approval dialog — and render every page again
 // with a transcript, diffs, a task board and usage on it. Report to main (which also fails the run
 // on any console error) and exit.
-export function useSmoke() {
-  const smoke = useApp((s) => s.info?.harness === "smoke");
-  const phase = useApp((s) => s.phase);
-  const ready = useApp((s) => s.session.ready);
-  const ran = useRef(false);
-  useEffect(() => {
-    if (!smoke || phase !== "session" || !ready || ran.current) return;
-    ran.current = true;
-    void (async () => {
+export const useSmoke = () =>
+  useHarness("smoke", async () => {
       const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
       const tour = async () => {
         for (const p of PAGES) {
@@ -135,6 +128,4 @@ export function useSmoke() {
         ok: fail.length === 0,
         detail: fail.length ? fail.join("; ") : `${s.order.length} agents · ${PAGES.length} pages ×2 · ${approvals} approvals · ${s.tasks.length} tasks · ${diffs} diffs · run ${s.summary?.ok ? "ok" : "not ok"}`,
       });
-    })();
-  }, [smoke, phase, ready]);
-}
+  });

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 // One app-wide confirm dialog, awaited like a function: `if (await ask({...})) …`.
-export interface Ask {
+interface Ask {
   title: string;
   description?: string;
   confirm: string;

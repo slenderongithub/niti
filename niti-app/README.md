@@ -89,8 +89,8 @@ bun scripts/smoke.ts --packaged   # smoke (and perf.ts / audit.ts) against the p
 src/main/       windows, menu, IPC, niti-core lifecycle (core.ts), login-shell env (env.ts)
 src/preload/    the typed window.niti bridge
 src/renderer/   React: lib/ (API, SSE, reducer), store/, features/, components/ui (shadcn)
-scripts/        fixture, live/smoke/audit/perf checks, core bundling, make-avatars.py (the avatar
-                pipeline: drawings → app PNGs, web/avatars, and the TUI's terminal art)
+scripts/        fixture, live/smoke/audit/perf checks, core bundling (the avatar PNGs come from
+                the repo's scripts/avatars/make-avatars.py)
 ```
 
 Each window has one project and its own niti-core. The renderer talks to the core over HTTP and SSE, using the URL and token from the core's handshake.

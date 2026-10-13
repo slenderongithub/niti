@@ -3,7 +3,7 @@ import { Bug, BookOpenText, FlaskConical, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { greeting } from "@/lib/format";
-import { useApp } from "@/store/app";
+import { useApp, useRoster } from "@/store/app";
 
 const STARTERS = [
   { icon: BookOpenText, text: "Explain how this codebase is structured and where to start reading" },
@@ -14,9 +14,7 @@ const STARTERS = [
 
 // No goal yet: the team, linked by ⇄ as in the TUI.
 export function Welcome() {
-  const order = useApp((s) => s.session.order);
-  const agents = useApp((s) => s.session.agents);
-  const lead = useApp((s) => s.session.leadId);
+  const { order, agents, lead } = useRoster();
   const auto = useApp((s) => s.sessionInfo?.auto);
   const fill = (t: string) => window.dispatchEvent(new CustomEvent("niti:prefill", { detail: t }));
   return (

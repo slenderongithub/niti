@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 export const REPO = join(import.meta.dir, "../..");
 
-export interface Fixture {
+interface Fixture {
   project: string;
   state: string;
   llmPort: number;

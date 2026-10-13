@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useHarness } from "./use-harness";
 import { useApp } from "@/store/app";
 import { PAGES, useUI, type Page } from "@/store/ui";
 
@@ -56,17 +56,7 @@ function settled(el: Element | null): boolean {
   return true;
 }
 
-export function usePerf() {
-  const perf = useApp((s) => s.info?.harness === "perf");
-  const phase = useApp((s) => s.phase);
-  const ready = useApp((s) => s.session.ready);
-  const ran = useRef(false);
-  useEffect(() => {
-    if (!perf || phase !== "session" || !ready || ran.current) return;
-    ran.current = true;
-    void run();
-  }, [perf, phase, ready]);
-}
+export const usePerf = () => useHarness("perf", run);
 
 async function run() {
   const events: Entry[] = [];

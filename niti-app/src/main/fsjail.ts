@@ -1,11 +1,11 @@
-import { lstatSync, realpathSync, statSync, readFileSync, writeFileSync, renameSync, existsSync } from "node:fs";
+import { lstatSync, realpathSync, statSync, readFileSync, writeFileSync, renameSync, existsSync, chmodSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // The editor's file access, held to the project: a path is only readable or writable if it
 // resolves — symlinks followed — to somewhere inside the project root. The engine has no write
 // route, so this is the one place the app writes into a project, and it is the user doing it.
 
-export const MAX_EDIT_BYTES = 5 * 1024 * 1024;
+const MAX_EDIT_BYTES = 5 * 1024 * 1024;
 
 export class JailError extends Error {}
 
@@ -50,6 +50,7 @@ export function writeProjectFile(root: string, rel: string, content: string, exp
   }
   const tmp = join(dirname(abs), `.${Date.now()}.niti-save`);
   writeFileSync(tmp, content);
+  if (existsSync(abs)) chmodSync(tmp, statSync(abs).mode); // the rename replaces the file: keep its mode (a script's +x)
   renameSync(tmp, abs);
   return { ok: true, mtimeMs: statSync(abs).mtimeMs };
 }

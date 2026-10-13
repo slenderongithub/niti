@@ -6,10 +6,10 @@ const RE_PATH = strField("(?:path|file_path|filePath)");
 const RE_CMD = strField("command");
 const RE_Q = strField("(?:query|pattern|symbol)");
 const RE_KEY = strField("key");
-export const RE_KEY_ERROR = /api[ _-]?key|\b(401|403)\b|unauthori[sz]ed|forbidden|invalid (x-api-key|credential|token)|authentication|no API key/i;
+const RE_KEY_ERROR = /api[ _-]?key|\b(401|403)\b|unauthori[sz]ed|forbidden|invalid (x-api-key|credential|token)|authentication|no API key/i;
 const RE_TASK = /^(starting|queued) (\S+?)(?: → (\S+))?: (.*)$/;
 
-export const TOOL_VERBS: Record<string, string> = {
+const TOOL_VERBS: Record<string, string> = {
   read_file: "Read",
   write_file: "Write",
   edit: "Edit",
@@ -41,7 +41,7 @@ export const PAST_VERB: Record<string, string> = {
   Recall: "Recalled",
 };
 
-export const NOUNS: Record<string, [string, string]> = {
+const NOUNS: Record<string, [string, string]> = {
   Run: ["shell command", "shell commands"],
   Read: ["file", "files"],
   List: ["directory", "directories"],
@@ -64,7 +64,7 @@ export function truncate(s: string, n: number): string {
   return chars.length > n ? chars.slice(0, Math.max(n - 1, 0)).join("") + "…" : s;
 }
 
-export function verbFor(tool: string): string {
+function verbFor(tool: string): string {
   const v = TOOL_VERBS[tool];
   if (v) return v;
   const words = tool.replace(/^mcp__[^_]+__/, "").replace(/_/g, " ");

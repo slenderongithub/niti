@@ -25,7 +25,7 @@ function repoRoot(): string | undefined {
   return existsSync(join(root, "src/cli.ts")) ? root : undefined;
 }
 
-export async function resolveCore(): Promise<Launch | undefined> {
+async function resolveCore(): Promise<Launch | undefined> {
   const env = await userEnv();
   const bun = env.NITI_BUN || which("bun", env.PATH ?? "") || "bun";
   if (env.NITI_CORE_ENTRY) return { cmd: bun, args: ["run", env.NITI_CORE_ENTRY], label: `bun run ${env.NITI_CORE_ENTRY}` };
@@ -43,7 +43,10 @@ export async function coreLabel(): Promise<string> {
   return (await resolveCore())?.label ?? "niti-core not found";
 }
 
-function run(launch: Launch, args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+// One short niti-core CLI call (trust check/grant) in `cwd`.
+async function run(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  const launch = await resolveCore();
+  if (!launch) throw new Error(notFound());
   return userEnv().then(
     (env) =>
       new Promise((resolve) => {
@@ -56,9 +59,7 @@ function run(launch: Launch, args: string[], cwd: string): Promise<{ code: numbe
 }
 
 export async function trustCheck(root: string): Promise<TrustStatus> {
-  const launch = await resolveCore();
-  if (!launch) throw new Error(notFound());
-  const r = await run(launch, ["trust", "check"], root);
+  const r = await run(["trust", "check"], root);
   // Exit 1 means "not trusted", not failure — the JSON is on stdout either way.
   try {
     const j = JSON.parse(r.stdout.trim().split("\n").pop() || "{}") as Partial<TrustStatus>;
@@ -69,9 +70,7 @@ export async function trustCheck(root: string): Promise<TrustStatus> {
 }
 
 export async function trustGrant(root: string): Promise<void> {
-  const launch = await resolveCore();
-  if (!launch) throw new Error(notFound());
-  const r = await run(launch, ["trust", "grant"], root);
+  const r = await run(["trust", "grant"], root);
   if (r.code !== 0) throw new Error(`niti-core trust grant failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`);
 }
 

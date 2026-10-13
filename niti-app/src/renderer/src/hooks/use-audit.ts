@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useHarness } from "./use-harness";
 import { send } from "@/lib/actions";
 import { useApp } from "@/store/app";
 import { PAGES, useUI, type Page } from "@/store/ui";
@@ -39,7 +39,7 @@ function scrollsX(el: Element): boolean {
   return o === "auto" || o === "scroll";
 }
 
-export function auditDom(scope: Element = document.body): string[] {
+function auditDom(scope: Element = document.body): string[] {
   const out: string[] = [];
   const all = scope.querySelectorAll<HTMLElement>("*");
   const W = window.innerWidth;
@@ -137,17 +137,7 @@ export function auditDom(scope: Element = document.body): string[] {
   return out;
 }
 
-export function useAudit() {
-  const audit = useApp((s) => s.info?.harness === "audit");
-  const phase = useApp((s) => s.phase);
-  const ready = useApp((s) => s.session.ready);
-  const ran = useRef(false);
-  useEffect(() => {
-    if (!audit || phase !== "session" || !ready || ran.current) return;
-    ran.current = true;
-    void run();
-  }, [audit, phase, ready]);
-}
+export const useAudit = () => useHarness("audit", run);
 
 async function run() {
   const found = new Map<string, Set<string>>();
@@ -161,17 +151,23 @@ async function run() {
     note(where, auditDom());
   };
 
-  for (const theme of ["dark", "light"] as const) {
-    useUI.getState().setTheme(theme);
-    for (const [w, h] of SIZES) {
-      await window.niti.auditResize(w, h);
-      // Empty project first, then after a run, so both states are covered.
-      for (const p of PAGES) {
-        useUI.getState().go(p as Page);
-        await check(`${p} · empty · ${w}×${h} · ${theme}`);
+  // Every page, in both themes and at every size; `more` adds checks at each size. Run on an empty
+  // project first, then after a run, so both states are covered.
+  const sweep = async (state: string, more?: (at: string) => Promise<void>) => {
+    for (const theme of ["dark", "light"] as const) {
+      useUI.getState().setTheme(theme);
+      for (const [w, h] of SIZES) {
+        await window.niti.auditResize(w, h);
+        for (const p of PAGES) {
+          useUI.getState().go(p as Page);
+          if (p === "session") useUI.getState().focusAgent(null);
+          await check(`${p} · ${state} · ${w}×${h} · ${theme}`);
+        }
+        await more?.(`${w}×${h} · ${theme}`);
       }
     }
-  }
+  };
+  await sweep("empty");
 
   // Fill the project: a finished run, an open file.
   await useApp.getState().api?.setAuto(true);
@@ -184,25 +180,16 @@ async function run() {
   useUI.getState().viewFile("src/a.ts");
   await wait(800);
 
-  for (const theme of ["dark", "light"] as const) {
-    useUI.getState().setTheme(theme);
-    for (const [w, h] of SIZES) {
-      await window.niti.auditResize(w, h);
-      for (const p of PAGES) {
-        useUI.getState().go(p as Page);
-        if (p === "session") useUI.getState().focusAgent(null);
-        await check(`${p} · after a run · ${w}×${h} · ${theme}`);
-      }
-      useUI.getState().go("session");
-      useUI.getState().viewFile("src/a.ts");
-      await check(`editor · ${w}×${h} · ${theme}`);
-      for (const section of ["team", "providers", "behaviour", "integrations", "worktree", "history", "about"]) {
-        useUI.getState().go("settings");
-        location.hash = section;
-        await check(`settings#${section} · ${w}×${h} · ${theme}`);
-      }
+  await sweep("after a run", async (at) => {
+    useUI.getState().go("session");
+    useUI.getState().viewFile("src/a.ts");
+    await check(`editor · ${at}`);
+    for (const section of ["team", "providers", "behaviour", "integrations", "worktree", "history", "about"]) {
+      useUI.getState().go("settings");
+      location.hash = section;
+      await check(`settings#${section} · ${at}`);
     }
-  }
+  });
 
   // The setup wizard, step by step (Settings → Rebuild team), and Esc back from each step —
   // including from inside the filter lists, where focus sits.

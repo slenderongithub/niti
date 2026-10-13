@@ -7,7 +7,7 @@ import { useUI } from "./ui";
 // Open files: what's on disk (content + mtime, for conflict checks) and whether you've changed it.
 // The CodeMirror state per file lives outside React, so switching tabs keeps undo history.
 
-export interface Buffer {
+interface Buffer {
   status: "loading" | "ready" | "error";
   error?: string;
   saved: string; // last content known to be on disk

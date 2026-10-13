@@ -213,7 +213,3 @@ export function CodeEditor({ path }: { path: string }) {
     </div>
   );
 }
-
-export function currentEditorText(path: string): string | undefined {
-  return editorStates.get(path)?.doc.toString();
-}

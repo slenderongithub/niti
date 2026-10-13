@@ -32,7 +32,8 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { interrupt, LOCAL_COMMANDS, runSlash, showHelp } from "@/lib/actions";
 import { useApp } from "@/store/app";
-import { useUI } from "@/store/ui";
+import { load, useUI } from "@/store/ui";
+import { historyKey } from "@/features/session/composer";
 import { useApprovalUI } from "@/features/approvals/approval-center";
 import { PixelAvatar } from "@/components/pixel-avatar";
 import type { RecentProject } from "../../../../shared/bridge";
@@ -72,11 +73,7 @@ function PaletteBody() {
 
   const history = useMemo(() => {
     if (!open) return [];
-    try {
-      return (JSON.parse(localStorage.getItem(`niti.history.${app.root}`) ?? "[]") as string[]).slice(-50).reverse();
-    } catch {
-      return [];
-    }
+    return load<string[]>(historyKey(app.root ?? ""), []).slice(-50).reverse();
   }, [open, app.root]);
 
   const historyMode = q.startsWith("history:");
