@@ -716,6 +716,28 @@ export class Engine {
     return undefined;
   }
 
+  // Interrupt one agent, the way esc interrupts Claude Code: the model call or tool it is in is
+  // abandoned (an approval it waits on is refused), and it carries on from the operator's message
+  // instead of failing its task. Only for an agent working on a task — one that is only planning or
+  // answering a teammate gets the message as a plain steer (aborting those would break the plan or
+  // the teammate's question). MCP/LSP calls, file-lock waits and a teammate's ask_agent answer
+  // finish before it lands. Returns an error string, or undefined on success.
+  interruptAgent(agentId: string, text?: string): string | undefined {
+    const agent = this.byId.get(agentId);
+    if (!agent) return `no such agent: ${agentId}`;
+    if (!agent.busy) return `${agentId} isn't running — nothing to interrupt`;
+    const message = text?.trim() || "The operator interrupted you. Stop, reconsider what you were doing, and continue only if it is still the right step.";
+    const onTask = this.orch.all.some((t) => t.status === "in_progress" && t.assignedTo === agentId);
+    if (!onTask) return this.messageAgent(agentId, message);
+    // Message first, so the loop finds it the moment the step is abandoned.
+    const posted = this.messageBus.post({ from: USER, to: agentId, kind: "handoff", subject: message.slice(0, 70), body: message });
+    if (!posted.ok) return posted.reason;
+    this.bus.publish({ agentId, type: "message", payload: `[interrupted by user] ${message}`, time: Date.now() });
+    this.approvals.denyAll(agentId);
+    agent.interrupt();
+    return undefined;
+  }
+
   // Live model switch for the focused agent (drives /model + POST /model). Returns an error string
   // (missing key, unknown provider) or undefined on success.
   switchModel(agentId: string, provider: string, model: string, baseURL?: string): string | undefined {

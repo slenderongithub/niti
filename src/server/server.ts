@@ -555,6 +555,14 @@ export function startServer(
         return err ? json({ error: err }, 409) : json({ ok: true });
       }
 
+      if (p.startsWith("/agents/") && p.endsWith("/interrupt") && method === "POST") {
+        const agentId = safeDecode(p.slice("/agents/".length, -"/interrupt".length));
+        if (agentId === undefined) return json({ error: "malformed agent id" }, 400);
+        const { text } = (await readBody(req)) as { text?: string };
+        const err = engine.interruptAgent(agentId, text);
+        return err ? json({ error: err }, 409) : json({ ok: true });
+      }
+
       // The Files panel and @-mentions: the project's files, bounded by the same IGNORE set as /graph.
       if (p === "/files" && method === "GET") {
         return json(projectFiles(engine.root));
