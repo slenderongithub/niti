@@ -4,7 +4,7 @@ import { ArrowUp, AtSign, Check, ChevronDown, Hammer, ListChecks, Megaphone, Sla
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Command, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -50,14 +50,18 @@ export function Composer() {
   const agents = useAgentsLite();
   const byId = useMemo(() => Object.fromEntries(agents.map((a) => [a.id, a])), [agents]);
   const [target, setTarget] = useState<Target>("auto");
+  const [interruptNow, setInterruptNow] = useState(false); // one agent: stop its current step for this message
 
   // Target follows focus: focusing a working agent while a run is on steers to it by default.
   useEffect(() => setTarget(focused && byId[focused] ? focused : "auto"), [focused]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const targetLabel = !active ? "Team" : target === "auto" ? `Auto · ${byId[autoTo ?? ""]?.role ?? "lead"}` : target === "broadcast" ? `Everyone working (${working.length})` : (byId[target]?.role ?? target);
+  const interrupting = active && interruptNow && target !== "broadcast";
   const placeholder = active
     ? target === "broadcast"
       ? "Message everyone working…"
+      : interrupting
+        ? `Interrupt ${targetLabel.replace(/^Auto · /, "")} — what should it do instead?`
       : `Message ${targetLabel.replace(/^Auto · /, "")}…`
     : suggestion
       ? `${suggestion}   (tab to use)`
@@ -95,6 +99,11 @@ export function Composer() {
               {target === "broadcast" && <Check className="text-primary" />}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem checked={interruptNow} onCheckedChange={(v) => setInterruptNow(v === true)} disabled={target === "broadcast"}>
+              Interrupt it now
+              <span className="ml-auto text-xs text-muted-foreground">don't wait</span>
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
             {agents.map((a) => (
               <DropdownMenuItem key={a.id} onClick={() => setTarget(a.id)} disabled={a.status !== "working"}>
                 <PixelAvatar slot={a.index} color={a.color} size={14} />
@@ -125,6 +134,7 @@ export function Composer() {
       suggestion={suggestion}
       active={active}
       target={active ? target : "team"}
+      interruptNow={interrupting}
       toolbar={toolbar}
       stop={
         active ? (
@@ -144,7 +154,7 @@ export function Composer() {
   );
 }
 
-const ComposerInput = memo(function ComposerInput({ placeholder, suggestion, active, target, toolbar, stop }: { placeholder: string; suggestion: string; active: boolean; target: Target; toolbar: ReactNode; stop: ReactNode }) {
+const ComposerInput = memo(function ComposerInput({ placeholder, suggestion, active, target, interruptNow, toolbar, stop }: { placeholder: string; suggestion: string; active: boolean; target: Target; interruptNow: boolean; toolbar: ReactNode; stop: ReactNode }) {
   const root = useApp((s) => s.root) ?? "";
   const api = useApp((s) => s.api);
   const commands = useApp((s) => s.commands);
@@ -231,7 +241,7 @@ const ComposerInput = memo(function ComposerInput({ placeholder, suggestion, act
     hist.current = { list: list.slice(-HISTORY_MAX), i: -1, draft: "" };
     save(historyKey(root), hist.current.list); // a convenience: unavailable storage is ignored
     setBusy(true);
-    const ok = await send(t, target);
+    const ok = await send(t, target, interruptNow);
     setBusy(false);
     // In Plan mode the goal stays put: switch to Build and send it again to run exactly that plan.
     if (ok && !(mode === "plan" && !isSlashCommand(t) && !t.startsWith("!") && !active)) setText("");

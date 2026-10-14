@@ -76,6 +76,7 @@ export class Api {
   prompt = (text: string, mode: "build" | "plan") => this.post<{ accepted: boolean }>("/prompt", { text, mode });
   cancel = () => this.post<{ ok: boolean }>("/cancel");
   messageAgent = (id: string, text: string) => this.post<{ ok: boolean }>(`/agents/${encodeURIComponent(id)}/message`, { text });
+  interruptAgent = (id: string, text: string) => this.post<{ ok: boolean }>(`/agents/${encodeURIComponent(id)}/interrupt`, { text });
   commands = () => this.get<{ commands: CommandInfo[] }>("/commands");
   runCommand = (name: string, args = "") => this.req<CommandResult>("POST", `/commands/${encodeURIComponent(name)}`, { args }, 120_000);
   graph = () => this.get<FileGraph>("/graph");

@@ -147,7 +147,9 @@ export type Target = "team" | "auto" | "broadcast" | string; // string = an agen
 // text steers one agent, or every working agent at once with Broadcast.
 export const isSlashCommand = (t: string) => /^\/[^\s/]*(\s|$)/.test(t);
 
-export async function send(text: string, target: Target): Promise<boolean> {
+// `interrupt`: for one agent, abandon what it is doing now and carry on from this message, instead
+// of waiting for its next step (the TUI's x in the Agents panel).
+export async function send(text: string, target: Target, interrupt = false): Promise<boolean> {
   const t = text.trim();
   if (!t) return false;
   // A command name never contains "/": "/Users/me/app.ts is broken" is a prompt, not a command.
@@ -166,6 +168,13 @@ export async function send(text: string, target: Target): Promise<boolean> {
       const r = await api().runCommand("goal", `note ${t}`);
       if (!r.ok) throw new Error(r.message);
       toast.success("Note for the goal", { description: r.message });
+      return true;
+    }
+    if (session.active && interrupt && target !== "team" && target !== "broadcast") {
+      const id = target === "auto" ? steerTarget(session, useUI.getState().focusedAgent ?? undefined) : target;
+      if (!id) throw new Error("no agent is working right now");
+      await api().interruptAgent(id, t);
+      toast.success(`Interrupted ${session.agents[id]?.cfg.role ?? id}`, { description: "It stops what it's doing and carries on from your message." });
       return true;
     }
     if (session.active && target !== "team") {

@@ -170,6 +170,11 @@ try {
     (e: Error) => e.message,
   );
   check("steer: a mid-run message is delivered to the working agent", steer === "ok", `${to}: ${steer}`);
+  const intr = await api.interruptAgent(steerTarget(state)!, "STEER-MARKER do it smaller").then(
+    () => "ok",
+    (e: Error) => e.message,
+  );
+  check("interrupt: one agent, and the run goes on", intr === "ok" && state.active, intr);
   await api.cancel();
   await until((s) => !s.active, 20_000, "cancel");
   check("cancel: the run stops", !state.active);
