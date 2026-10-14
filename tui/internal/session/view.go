@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/niti/tui/internal/theme"
-	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 )
 
 // Layout — posting's shape: titled panels whose borders carry the live detail, a prompt panel whose

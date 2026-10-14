@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/niti/tui/internal/theme"
-	"github.com/niti/tui/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 )
 
 // Commands like /help, /agents, /tasks and /sessions answer with a table, not a sentence. Those

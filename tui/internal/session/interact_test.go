@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/niti/tui/internal/api"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/niti/tui/internal/api"
 )
 
 // A fake core that records what the TUI asked of it.

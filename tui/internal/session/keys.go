@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/niti/tui/internal/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/theme"
 )
 
 // One table drives three things: what a key does (onKey dispatches through it), what the footer

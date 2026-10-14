@@ -4,9 +4,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // Shared chrome for the setup screens. They're the first thing shown on every launch, so they use

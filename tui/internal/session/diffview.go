@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/niti/tui/internal/api"
-	"github.com/niti/tui/internal/theme"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
 )
 
 // The full-screen diff/patch viewer replaces the one-line approval bar whenever the head of the

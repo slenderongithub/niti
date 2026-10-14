@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // The settings overlay is niti's version of the Claude app's settings panel: one screen, tabs

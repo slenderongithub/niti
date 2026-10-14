@@ -3,12 +3,12 @@
 package session
 
 import (
-	"sort"
-	"slices"
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -57,7 +57,7 @@ type agentState struct {
 	runStart time.Time  // when the in-flight tool call began
 	running  string     // tool call in flight, e.g. "Run npm test"; see toolfeed.go
 	group    *toolGroup // the collapsed line at the tail of log, if any
-	pending  string // partial line being streamed by `delta` events, shown live under the log
+	pending  string     // partial line being streamed by `delta` events, shown live under the log
 	runOut   []string   // the in-flight command's latest output lines (tool_output), under its spinner
 	todos    []api.Todo // the agent's checklist while steps remain, pinned under its header
 	color    lipgloss.Color
@@ -105,52 +105,52 @@ func (s *agentState) feedDelta(chunk string) {
 }
 
 type Model struct {
-	sid       string // this TUI launch's id, shown on the Status tab
+	sid                       string          // this TUI launch's id, shown on the Status tab
 	prefs                     map[string]bool // Config-tab flags, mirrored from the core (see prefRows)
 	autoApprove               bool            // default permission mode; POST /auto flips it live
-	autoCompact, thinkingMode bool // mirrors the core's live settings; toggled from the Config tab
-	verbose   bool   // list every tool call separately instead of collapsing runs
-	ticking   bool // a spinner tick is scheduled
-	client    *api.Client
-	events    <-chan api.Event
-	cancel    context.CancelFunc
-	order     []string // agent ids in roster order
-	agents    map[string]*agentState
-	tasks     []api.Task
-	messages  []api.AgentMessage
-	feed      []string
-	approvals []api.Approval
-	input     textinput.Model
-	goal      string
-	progress  int
-	commands  []api.Command // fetched from the server registry; drives dispatch and the footer hints
-	menu      ui.List       // slash-command suggestions shown over the prompt while typing "/…"
-	menuOpen  bool
-	car       carousel    // the ctrl+l model switcher, when open
-	sett      settings    // the /settings · /status · /config · /usage · /stats overlay, when open
-	out       output      // the pager a multi-line command result opens, when open
-	diffv     diffview    // full-screen state for the diff-viewing approval (edit/write_file only)
-	tp        themePicker // the ctrl+t theme swatch picker, when open
-	ap        agentPicker // the ctrl+g "switch agent window" quick-picker, when open
-	akp       apiKeyPicker // /api: replace a provider's key, when open
-	pal       palette     // the ctrl+p command palette, when open
-	view      string      // "panes" | "usage"
-	focus     string      // agent id currently maximized in the work pane, or "" for the stacked overview
+	autoCompact, thinkingMode bool            // mirrors the core's live settings; toggled from the Config tab
+	verbose                   bool            // list every tool call separately instead of collapsing runs
+	ticking                   bool            // a spinner tick is scheduled
+	client                    *api.Client
+	events                    <-chan api.Event
+	cancel                    context.CancelFunc
+	order                     []string // agent ids in roster order
+	agents                    map[string]*agentState
+	tasks                     []api.Task
+	messages                  []api.AgentMessage
+	feed                      []string
+	approvals                 []api.Approval
+	input                     textinput.Model
+	goal                      string
+	progress                  int
+	commands                  []api.Command // fetched from the server registry; drives dispatch and the footer hints
+	menu                      ui.List       // slash-command suggestions shown over the prompt while typing "/…"
+	menuOpen                  bool
+	car                       carousel     // the ctrl+l model switcher, when open
+	sett                      settings     // the /settings · /status · /config · /usage · /stats overlay, when open
+	out                       output       // the pager a multi-line command result opens, when open
+	diffv                     diffview     // full-screen state for the diff-viewing approval (edit/write_file only)
+	tp                        themePicker  // the ctrl+t theme swatch picker, when open
+	ap                        agentPicker  // the ctrl+g "switch agent window" quick-picker, when open
+	akp                       apiKeyPicker // /api: replace a provider's key, when open
+	pal                       palette      // the ctrl+p command palette, when open
+	view                      string       // "panes" | "usage"
+	focus                     string       // agent id currently maximized in the work pane, or "" for the stacked overview
 	// Keyboard focus on the main screen: "" or regionPrompt (typing), regionTranscript (scrolling),
 	// regionAgents (picking an agent). Distinct from `focus` above, which is which agent is shown.
 	region      string
-	agentCursor int // highlighted row in the Agents panel while it has focus
-	scrollBack  int  // transcript lines scrolled up from the newest; 0 = following the output
+	agentCursor int          // highlighted row in the Agents panel while it has focus
+	scrollBack  int          // transcript lines scrolled up from the newest; 0 = following the output
 	vm          *viewMetrics // what the last frame measured; View has a value receiver, so it reports through this
-	expanded    bool // ctrl+o: show full command output and whole diffs instead of their folded form
-	card        *api.Event // the last run's summary card (turn_summary), shown until the next goal
-	suggestions []string   // next prompts the lead suggested; the first is the prompt's ghost text
-	notify      string     // a notification to send once this batch of events is applied (notifyCmd)
-	steerTo     string     // after "deny & tell": the agent the next message goes to
-	history     []string   // sent prompts, oldest first (.niti/history)
-	histPos     int        // ↑/↓ browsing: steps back from the newest; 0 = not browsing
-	active      bool       // a run is going (session started, not yet ended or cancelled)
-	awake       string     // /awake: "off" | "lid" | "open" — the header chip
+	expanded    bool         // ctrl+o: show full command output and whole diffs instead of their folded form
+	card        *api.Event   // the last run's summary card (turn_summary), shown until the next goal
+	suggestions []string     // next prompts the lead suggested; the first is the prompt's ghost text
+	notify      string       // a notification to send once this batch of events is applied (notifyCmd)
+	steerTo     string       // after "deny & tell": the agent the next message goes to
+	history     []string     // sent prompts, oldest first (.niti/history)
+	histPos     int          // ↑/↓ browsing: steps back from the newest; 0 = not browsing
+	active      bool         // a run is going (session started, not yet ended or cancelled)
+	awake       string       // /awake: "off" | "lid" | "open" — the header chip
 	// The Files panel (files.go).
 	files       []string                // project files, sorted, from GET /files
 	touched     map[string]byte         // what agents did this session: 'M' edited, 'A' created, 'R' read
@@ -160,8 +160,8 @@ type Model struct {
 	changedOnly bool
 	viewer      *fileView // a file open read-only in the main panel
 	menuFiles   bool      // the prompt menu is offering files for an @-mention, not commands
-	unseen      int // lines that arrived while scrolled up — shown in the transcript's border
-	totals    api.Totals
+	unseen      int       // lines that arrived while scrolled up — shown in the transcript's border
+	totals      api.Totals
 	// Project context for the sidebar — fixed for the life of the core process.
 	root string
 	lsp  []api.LspInfo
@@ -177,7 +177,7 @@ type Model struct {
 	// because a frozen-but-normal-looking frame is the worst way to learn the core is gone.
 	disconnected bool
 	quitArm      time.Time // when ctrl+c was last pressed — a second press inside quitGrace leaves
-	quitting    bool
+	quitting     bool
 	// Terminal tab status (tabglow.go).
 	glow        bool   // the terminal takes a tab colour (iTerm2)
 	glowPhase   int    // which working agent's colour the tab shows while several work
@@ -193,7 +193,6 @@ const promptCharLimit = 100_000
 // Quitting takes two keystrokes (or /quit) on purpose: this window holds a live session, and a
 // stray ctrl+c aimed at cancelling a runaway agent used to take the whole thing down with it.
 const quitGrace = 3 * time.Second
-
 
 // New builds the model. `events` is the already-open SSE channel; `cancel` tears down the stream.
 func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, cancel context.CancelFunc) Model {
@@ -558,7 +557,6 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.refreshMenu()
 	return m, cmd
 }
-
 
 // wheelLines is how far one wheel event moves any scrolling view. One constant for the transcript,
 // the pager and the diff, so the same flick goes the same distance everywhere — the transcript

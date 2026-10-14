@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/theme"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // Rendering for the Stats overlay's history-backed panels: the GitHub-style contribution heatmap,

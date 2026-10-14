@@ -18,13 +18,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/session"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/trust"
 	"github.com/niti/tui/internal/ui"
 	"github.com/niti/tui/internal/wizard"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type handshake struct {
@@ -37,9 +37,9 @@ type handshake struct {
 type core struct {
 	client   *api.Client
 	cmd      *exec.Cmd
-	attached bool // true when NITI_SERVER_URL pointed us at a core we don't own
-	log    *os.File     // core stderr goes here, never to the terminal the TUI is drawing on
-	exited chan struct{} // closed when cmd.Wait returns, so the TUI can tell "dead" from "quiet"
+	attached bool          // true when NITI_SERVER_URL pointed us at a core we don't own
+	log      *os.File      // core stderr goes here, never to the terminal the TUI is drawing on
+	exited   chan struct{} // closed when cmd.Wait returns, so the TUI can tell "dead" from "quiet"
 }
 
 // stop ends the core and everything it started. Two things used to go wrong here: SIGKILL is

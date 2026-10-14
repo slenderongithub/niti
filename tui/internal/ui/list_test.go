@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-
 func TestWrapBoundsLinesAndMarksTheCut(t *testing.T) {
 	got := Wrap("alpha beta gamma delta epsilon zeta eta theta", 12, 2)
 	if len(got) != 2 || !strings.HasSuffix(got[1], "…") {
@@ -28,7 +27,11 @@ func TestWrapBoundsLinesAndMarksTheCut(t *testing.T) {
 }
 
 func TestCutLeftKeepsTheStylingAtTheCut(t *testing.T) {
-	cases := []struct{ in string; n int; wantPlain string }{
+	cases := []struct {
+		in        string
+		n         int
+		wantPlain string
+	}{
 		{"hello world", 6, "world"},
 		{"hello", 0, "hello"},
 		{"hello", 9, ""},

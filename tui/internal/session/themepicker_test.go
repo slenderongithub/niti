@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/niti/tui/internal/api"
-	"github.com/niti/tui/internal/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
 )
 
 // esc must leave the palette exactly as it was before the picker opened, even after previewing

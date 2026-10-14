@@ -3,10 +3,10 @@ package session
 import (
 	"strings"
 
-	"github.com/niti/tui/internal/theme"
-	"github.com/niti/tui/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 )
 
 // The theme picker is a small swatch-preview popup — ctrl+t used to just silently cycle to the

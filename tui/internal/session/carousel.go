@@ -3,10 +3,10 @@ package session
 import (
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // The carousel is the ctrl+l model switcher: a popup in the middle of the screen that picks a
@@ -212,4 +212,3 @@ func (m Model) carouselView(w, h int) string {
 	}
 	return ui.Box(title, body, hint, boxW)
 }
-

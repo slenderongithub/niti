@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/niti/tui/internal/api"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/niti/tui/internal/api"
 )
 
 func diffApproval(diff string) api.Approval {
