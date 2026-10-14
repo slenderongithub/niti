@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "niti",
+    "slug": "niti-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "niti",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "com.slenderbuilds.niti",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "niti asks for Face ID before approving risky actions on your Mac.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      ["expo-local-authentication", { "faceIDPermission": "niti asks for Face ID before approving risky actions on your Mac." }],
+      "expo-notifications",
+      ["expo-splash-screen", { "backgroundColor": "#111111", "image": "./assets/images/splash-icon.png", "imageWidth": 76 }]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "relay": ""
+    }
+  }
+}
