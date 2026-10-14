@@ -276,6 +276,8 @@ export function startServer(
           theme: currentTheme, // `theme:` from agents.yaml, or whatever POST /theme last set
           awake: awakeMode(), // /awake: "off" | "lid" | "open"
           goal: engine.goal.status ?? null, // /goal: the persistent objective, or null
+          remote: engine.remote?.state() ?? null, // remote control: account, relay link, phones
+          bootId: engine.bootId,
         });
       }
 
@@ -377,9 +379,12 @@ export function startServer(
         const name = safeDecode(p.slice("/commands/".length));
         if (name === undefined) return json({ error: "malformed command name" }, 400);
         const { args } = (await readBody(req)) as { args?: string };
+        // Set by the remote bridge on what it forwards from a phone. A local caller could set it too,
+        // but it only ever takes privileges away (see /awake).
+        const origin = req.headers.get("x-niti-origin")?.startsWith("remote") ? "remote" : "local";
         // Always 200: the command was dispatched, and its own `ok` says how it went. A non-2xx
         // would strand that message in the client's generic error path.
-        return json(await commands.run(engine, name, args ?? ""));
+        return json(await commands.run(engine, name, args ?? "", { origin }));
       }
 
       if (p === "/graph" && method === "GET") {

@@ -12,6 +12,7 @@ import { SessionStore } from "../store/session-store.ts";
 import { AuditLog } from "../store/audit-log.ts";
 import { startServer, type ServerHandle } from "./server.ts";
 import { startModelRefresh, isDeprecated } from "../providers/live-catalog.ts";
+import { RemoteBridge } from "../remote/bridge.ts";
 
 interface ServeResult {
   engine: Engine;
@@ -86,6 +87,10 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   engine.goal.load(); // a goal the last core left behind comes back paused
 
   const server = startServer(engine, { port: opts.port, theme: options.theme, prefs: options });
+  // Remote control: only here, never in startServer, so a test server never dials a relay. Idle
+  // unless this Mac is signed in (/remote login) and the project hasn't opted out.
+  engine.remote = new RemoteBridge(engine, server, { enabled: options.remote !== false });
+  engine.remote.start();
   // Handshake — the ONLY thing on stdout, first line, machine-readable for the Go TUI.
   process.stdout.write(JSON.stringify({ nitiServer: { url: server.url, token: server.token } }) + "\n");
   // Model lists: the cached copy applies at once, a fresh one is fetched in the background at most

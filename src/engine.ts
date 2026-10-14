@@ -30,6 +30,7 @@ import { TOOL_GUIDANCE, HASHLINE_GUIDANCE } from "./tools/tools.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
 import { release as releaseAwake } from "./awake.ts";
 import { GoalLoop, type GoalHost, type RoundResult } from "./goal.ts";
+import type { RemoteBridge } from "./remote/bridge.ts";
 import { isGitRepo, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
 
 interface EngineOptions {
@@ -87,6 +88,10 @@ export class Engine {
   // Most recent goal submit()/resume() ran — /export's report header. Not persisted; a restart
   // loses it the same way the rest of the live session state does.
   lastGoal = "";
+  // Changes every time a core starts — a phone that sees a new one starts its event cursor over.
+  readonly bootId = crypto.randomUUID().slice(0, 8);
+  // Remote control (src/remote/bridge.ts), when the server started it.
+  remote?: RemoteBridge;
   // Headless only: tool calls refused because there was no one to approve them. A model can still
   // report its task "done" after every write was refused, so the CLI's exit code reads this rather
   // than trusting the task statuses alone.

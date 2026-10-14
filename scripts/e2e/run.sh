@@ -10,9 +10,11 @@ fail=0
 step(){ print -P "\n%B== $1%b"; shift; "$@" || fail=1; }
 step "typecheck" bun run --cwd $NITI typecheck
 step "core unit tests" bun test --cwd $NITI ./src ./web
+step "relay tests" bun test --cwd $NITI/niti-relay
 step "tui unit tests" zsh -c "cd $NITI/tui && go vet ./... && go test ./..."
 step "build binaries" zsh -c "cd $NITI/tui && go build -o $BIN/niti ./cmd/niti && cd $NITI && bun build --compile src/cli.ts --outfile $BIN/niti-core >/dev/null"
 step "core server + slash commands" bun $E2E/server.ts
+step "remote control: core + relay + phone" bun $E2E/remote.ts
 step "headless cli" zsh $E2E/cli.sh
 step "tui against a live core" zsh $E2E/tui.sh
 step "real terminal" env NITI_E2E_BIN=$BIN python3 $E2E/terminal.py

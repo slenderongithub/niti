@@ -84,7 +84,7 @@ test("a recording of one connection is useless on the next: every connection has
 test("the status blob opens only with the status key", () => {
   const key = newStatusKey();
   const blob = sealStatus(key, { goal: "ship it", round: 3 });
-  expect(openStatus(key, blob)).toEqual({ goal: "ship it", round: 3 });
+  expect(openStatus<object>(key, blob)).toEqual({ goal: "ship it", round: 3 });
   expect(openStatus(newStatusKey(), blob)).toBeUndefined();
   expect(openStatus(key, b64(utf8("garbage-garbage-garbage-garbage")))).toBeUndefined();
 });

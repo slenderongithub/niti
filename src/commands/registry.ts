@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Engine } from "../engine.ts";
 import { splitModelId } from "../providers/catalog.ts";
 import { saveTasks } from "../session.ts";
-import { setAuto } from "../config/config.ts";
+import { setAuto, setOption } from "../config/config.ts";
 import { loadSkills, frontmatter } from "../skills/skills.ts";
 import { isGitRepo, snapshotBranch } from "../orchestrator/worktree.ts";
 import { buildExportReport } from "./export.ts";
@@ -20,10 +20,15 @@ interface CommandResult {
   view?: string; // a pure client-side view switch ("panes" | "graph" | "usage")
 }
 
+// Where a command came from: a phone through the remote bridge, or a client on this Mac.
+export interface CommandContext {
+  origin: "local" | "remote";
+}
+
 interface Command {
   name: string; // without the leading slash
   description: string;
-  run: (engine: Engine, args: string) => Promise<CommandResult>;
+  run: (engine: Engine, args: string, ctx?: CommandContext) => Promise<CommandResult>;
 }
 
 const view = (name: string): Command => ({
@@ -65,13 +70,52 @@ export const BUILTIN_COMMANDS: Command[] = [
   {
     name: "awake",
     description: "Keep the Mac awake, lid closed too, until the current or next run finishes (/awake off to stop)",
-    async run(engine, args) {
+    async run(engine, args, ctx) {
       if (args.trim() === "off") {
         release();
         return { ok: true, message: "awake off — normal sleep restored" };
       }
+      // From a phone, never the admin dialog: nobody is at the Mac to answer it, and it would wait
+      // forever. That means lid-open only, which the reply says.
+      const elevate = ctx?.origin === "remote" ? async () => false : undefined;
       // Held for a whole /goal, not just the round that happens to be running.
-      return arm(engine.hub, undefined, () => engine.goal.holdsAwake);
+      return arm(engine.hub, elevate, () => engine.goal.holdsAwake);
+    },
+  },
+  {
+    name: "remote",
+    description: "Control this Mac's niti from your phone: /remote login <email> · code <digits> · devices · revoke <name> · on|off · logout",
+    async run(engine, args, ctx) {
+      if (ctx?.origin === "remote") return { ok: false, message: "/remote can only be run on the Mac" };
+      const r = engine.remote;
+      if (!r) return { ok: false, message: "remote control needs the niti server (it isn't available in a headless run)" };
+      const [sub = "", ...rest] = args.trim().split(/\s+/);
+      switch (sub) {
+        case "":
+        case "status":
+        case "devices":
+          return { ok: true, message: r.describe() };
+        case "login": {
+          const relayAt = rest.indexOf("--relay");
+          const relay = relayAt >= 0 ? rest[relayAt + 1] : undefined;
+          const email = rest.filter((_, i) => i !== relayAt && i !== relayAt + 1)[0];
+          if (!email) return { ok: false, message: "usage: /remote login <email> [--relay <url>]" };
+          return { ok: true, message: await r.loginStart(email, relay) };
+        }
+        case "code":
+          return r.loginVerify(rest.join(""));
+        case "logout":
+          return { ok: true, message: r.logout() };
+        case "revoke":
+          if (!rest.length) return { ok: false, message: "usage: /remote revoke <phone name>" };
+          return { ok: true, message: r.revoke(rest.join(" ")) };
+        case "on":
+        case "off":
+          setOption("remote", sub === "on"); // saved first, like /auto
+          r.setEnabled(sub === "on");
+          return { ok: true, message: sub === "on" ? "remote control on for this project" : "remote control off for this project — phones won't see it" };
+      }
+      return { ok: false, message: "usage: /remote [status|login <email>|code <digits>|devices|revoke <name>|on|off|logout]" };
     },
   },
   {
@@ -404,11 +448,11 @@ export class CommandRegistry {
     return this.byName.has(name);
   }
 
-  async run(engine: Engine, name: string, args = ""): Promise<CommandResult> {
+  async run(engine: Engine, name: string, args = "", ctx: CommandContext = { origin: "local" }): Promise<CommandResult> {
     const cmd = this.byName.get(name);
     if (!cmd) return { ok: false, message: `unknown command: /${name}` };
     try {
-      return await cmd.run(engine, args);
+      return await cmd.run(engine, args, ctx);
     } catch (err) {
       return { ok: false, message: `/${name} failed: ${err instanceof Error ? err.message : err}` };
     }
