@@ -158,5 +158,6 @@ test("a phone can't let another device in, and a phone that isn't connected is p
   void w.engine.submit("write hello");
   await until(() => w.pushes.length > 0, "a push");
   expect(w.pushes[0]).toMatchObject({ to: "ExponentPushToken[bo]", title: expect.stringContaining("Approval needed"), body: "worker wants to write a file" });
+  expect(w.pushes[0]!.data.route).toBe(`/session/${s0.mac}/${s0.session}?sheet=approval`); // the phone opens straight onto it
   w.engine.cancel();
 });

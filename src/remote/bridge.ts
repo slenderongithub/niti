@@ -435,14 +435,16 @@ export class RemoteBridge {
       this.lastGoal = g;
       if (!g || !was || was.state !== "running" || g.state === "running") return;
       if (g.state === "paused" && !g.error) return; // a person paused it; they know
-      this.push("goal", `Goal ${g.state}`, `${g.objective.slice(0, 80)} — ${g.reason}`, "goal");
+      this.push("goal", `Goal ${g.state}`, `${g.objective.slice(0, 80)}: ${g.reason}`);
       return;
     }
-    if (e.kind === "agent_event" && e.event.type === "error" && e.event.agentId === "orchestrator") this.push("error", "niti hit an error", e.event.payload.slice(0, 160), "session");
+    if (e.kind === "agent_event" && e.event.type === "error" && e.event.agentId === "orchestrator") this.push("error", "niti hit an error", e.event.payload.slice(0, 160));
   }
 
-  private push(category: PushCategory, title: string, body: string, route: string): void {
-    this.send({ t: "push", category, title: `${title} · ${basename(this.engine.root)}`, body, route: `${this.session}/${route}` });
+  // `route` is the screen the phone opens when the notification is tapped (niti-mobile's router).
+  private push(category: PushCategory, title: string, body: string, sheet?: "approval"): void {
+    const route = `/session/${macId(this.id!)}/${this.session}${sheet ? `?sheet=${sheet}` : ""}`;
+    this.send({ t: "push", category, title: `${title} · ${basename(this.engine.root)}`, body, route });
   }
 
   private sendStatus(): void {
