@@ -186,3 +186,18 @@ test("/awake: the snapshot seeds it, events move it, and /clear leaves it alone"
   expect(s.awake).toBe("off");
   expect(fromSession(info()).awake).toBe("off"); // an older core sends no field
 });
+
+test("/goal: the snapshot seeds it, events move it, /clear keeps it, and a round ending says so", () => {
+  const g = { objective: "ship", state: "running", reason: "", round: 1, maxRounds: 20, used: { tokens: 0, cost: 0 }, budget: {}, verdicts: [], notes: [], error: false } as const;
+  let s = fromSession(info({ goal: g }));
+  expect(s.goalStatus?.round).toBe(1);
+  s = applyEvents(s, [ev({ kind: "session", state: "started", goal: "goal 1/20: ship" }), ev({ kind: "session", state: "ended" })]);
+  expect(s.status).toContain("goal round 1 done");
+  s = applyEvents(s, [ev({ kind: "session_reset" })]);
+  expect(s.goalStatus?.state).toBe("running");
+  s = applyEvents(s, [ev({ kind: "goal", status: { ...g, state: "done", reason: "tests pass" } })]);
+  expect(s.goalStatus?.state).toBe("done");
+  s = applyEvents(s, [ev({ kind: "goal", status: null })]);
+  expect(s.goalStatus).toBeNull();
+  expect(fromSession(info()).goalStatus).toBeNull(); // an older core sends no field
+});

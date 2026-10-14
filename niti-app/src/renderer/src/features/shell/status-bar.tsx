@@ -1,4 +1,4 @@
-import { ShieldCheck, Zap, Gauge, WifiOff, Coins, Cpu, Coffee } from "lucide-react";
+import { ShieldCheck, Zap, Gauge, WifiOff, Coins, Cpu, Coffee, Target } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -20,6 +20,12 @@ export function StatusBar() {
     return d ? `${d.pct}\u0001${x.session.agents[d.id]?.cfg.role ?? ""}\u0001${x.session.agents[d.id]?.ctxLimit ?? 0}` : "";
   });
   const awake = useApp((x) => x.session.awake);
+  // One string, so the bar re-renders when the goal changes and not on every other event.
+  const goalKey = useApp((x) => {
+    const g = x.session.goalStatus;
+    return g ? [g.state, g.round, g.maxRounds, g.objective, g.reason].join("\u0001") : "";
+  });
+  const [goalState, goalRound, goalMax, goalObjective, goalReason] = goalKey.split("\u0001");
   const info = useApp((x) => x.sessionInfo);
   const api = useApp((x) => x.api);
   const setAuto = useApp((x) => x.setAutoLocal);
@@ -34,6 +40,15 @@ export function StatusBar() {
       await api.setAuto(!auto);
       setAuto(!auto);
       toast.success(!auto ? "Auto-approve on — risky commands still ask" : "Manual approvals — writes and shell ask first");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const goalStatus = async () => {
+    if (!api) return;
+    try {
+      toast((await api.runCommand("goal", "status")).message);
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -63,6 +78,22 @@ export function StatusBar() {
         </TooltipTrigger>
         <TooltipContent side="top">{auto ? "Writes and shell run without asking (risky ones still confirm). Click for manual." : "Writes and shell ask first. Click for auto-approve."}</TooltipContent>
       </Tooltip>
+      <span role="status" aria-atomic="true" className="contents">
+        {goalKey && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="xs" className={cn("h-5 gap-1 px-1.5 text-[11px] font-normal", goalState === "running" ? "text-primary" : "text-muted-foreground")} onClick={() => void goalStatus()}>
+                <Target className="size-3" aria-hidden />
+                {goalState === "running" ? `goal ${goalRound}/${goalMax}` : `goal ${goalState}`}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-80">
+              {goalObjective}
+              {goalReason ? ` — ${goalReason}` : ""}. While it is live, what you type is a note to it. Click for details.
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </span>
       {/* Always mounted, so a screen reader hears "awake" arrive and leave without focus moving. */}
       <span role="status" aria-atomic="true" className="contents">
         {awake !== "off" && (
