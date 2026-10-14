@@ -176,3 +176,13 @@ describe("helpers", () => {
     expect(s.missed).toBe(12);
   });
 });
+
+test("/awake: the snapshot seeds it, events move it, and /clear leaves it alone", () => {
+  let s = fromSession(info({ awake: "lid" }));
+  expect(s.awake).toBe("lid");
+  s = applyEvents(s, [ev({ kind: "session_reset" })]);
+  expect(s.awake).toBe("lid");
+  s = applyEvents(s, [ev({ kind: "awake", state: "off" })]);
+  expect(s.awake).toBe("off");
+  expect(fromSession(info()).awake).toBe("off"); // an older core sends no field
+});

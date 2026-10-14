@@ -61,7 +61,11 @@ export interface SessionInfo {
   prefs: Prefs;
   auto: boolean;
   theme?: string;
+  awake?: AwakeState; // absent from an older core
 }
+
+// /awake: "lid" = awake with the lid closed too, "open" = lid-open only (admin prompt declined).
+export type AwakeState = "off" | "lid" | "open";
 
 type AgentEventType =
   | "thought"
@@ -194,6 +198,7 @@ type ServerEventBody =
   | { kind: "lock"; holders: { path: string; holder: string }[] }
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
   | { kind: "theme"; theme: string }
+  | { kind: "awake"; state: AwakeState }
   | { kind: "session_reset" }
   | ({ kind: "turn_summary" } & TurnSummary)
   | { kind: "resync"; missed: number }

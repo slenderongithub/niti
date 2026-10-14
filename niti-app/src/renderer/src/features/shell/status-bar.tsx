@@ -1,4 +1,4 @@
-import { ShieldCheck, Zap, Gauge, WifiOff, Coins, Cpu } from "lucide-react";
+import { ShieldCheck, Zap, Gauge, WifiOff, Coins, Cpu, Coffee } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -19,6 +19,7 @@ export function StatusBar() {
     const d = deepestContext(x.session);
     return d ? `${d.pct}\u0001${x.session.agents[d.id]?.cfg.role ?? ""}\u0001${x.session.agents[d.id]?.ctxLimit ?? 0}` : "";
   });
+  const awake = useApp((x) => x.session.awake);
   const info = useApp((x) => x.sessionInfo);
   const api = useApp((x) => x.api);
   const setAuto = useApp((x) => x.setAutoLocal);
@@ -33,6 +34,15 @@ export function StatusBar() {
       await api.setAuto(!auto);
       setAuto(!auto);
       toast.success(!auto ? "Auto-approve on — risky commands still ask" : "Manual approvals — writes and shell ask first");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const stopAwake = async () => {
+    if (!api) return;
+    try {
+      toast.success((await api.runCommand("awake", "off")).message);
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -53,6 +63,23 @@ export function StatusBar() {
         </TooltipTrigger>
         <TooltipContent side="top">{auto ? "Writes and shell run without asking (risky ones still confirm). Click for manual." : "Writes and shell ask first. Click for auto-approve."}</TooltipContent>
       </Tooltip>
+      {/* Always mounted, so a screen reader hears "awake" arrive and leave without focus moving. */}
+      <span role="status" aria-atomic="true" className="contents">
+        {awake !== "off" && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="xs" className="h-5 gap-1 px-1.5 text-[11px] font-normal text-warning" onClick={() => void stopAwake()}>
+                <Coffee className="size-3" aria-hidden />
+                {awake === "lid" ? "awake" : "awake · lid open"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {awake === "lid" ? "The Mac stays awake, lid closed too, until the run finishes." : "The Mac stays awake until the run finishes, but closing the lid will still sleep it."} Click to restore
+              normal sleep now.
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </span>
       {ctx && ctx.pct > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>

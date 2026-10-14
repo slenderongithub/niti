@@ -177,8 +177,9 @@ try {
 
   // --- deny ---------------------------------------------------------------------------------
   autoAnswer = async () => void (await api.approve(false));
+  const runsBefore = state.runs.length; // a run cancelled while the lead is still planning leaves no summary
   await api.prompt('CALL:{"name":"write_file","args":{"path":"nope.txt","content":"x"}}END', "build");
-  await until((s) => !s.active && s.runs.length >= 3, 20_000, "deny run");
+  await until((s) => !s.active && s.runs.length > runsBefore, 20_000, "deny run");
   autoAnswer = null;
   check("deny: the file was never written", !existsSync(join(P, "nope.txt")));
   const notApproved = state.order.flatMap((id) => state.agents[id]!.items).some((i) => (i.kind === "tool" && i.status === "fail") || (i.kind === "note" && i.text.includes("not approved")));

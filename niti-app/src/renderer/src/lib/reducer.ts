@@ -6,6 +6,7 @@ import type {
   AgentMessage,
   AgentUsage,
   ApprovalRequest,
+  AwakeState,
   HunkLine,
   OrchestrationEvent,
   RateLimitSnapshot,
@@ -98,6 +99,7 @@ export interface SessionState {
   tasks: Task[];
   goal: string;
   active: boolean;
+  awake: AwakeState; // /awake — the status-bar chip
   progress: number;
   status: string;
   plannedGoal: string; // the goal last planned in Plan mode: sending it in Build runs that plan
@@ -136,6 +138,7 @@ export function emptyState(): SessionState {
     tasks: [],
     goal: "",
     active: false,
+    awake: "off",
     progress: 0,
     status: "",
     plannedGoal: "",
@@ -167,6 +170,7 @@ export function fromSession(info: SessionInfo, prev?: SessionState): SessionStat
   s.root = info.root;
   s.lastSeq = info.lastSeq;
   s.active = info.running;
+  s.awake = info.awake ?? "off";
   s.tasks = info.tasks ?? [];
   info.agents.forEach((cfg, i) => {
     const old = prev?.agents[cfg.id];
@@ -507,7 +511,7 @@ function resetSession(d: Draft) {
     agents[id] = { ...a, status: "idle", activity: "", usage: zeroUsage(), items: [], todos: null };
   }
   const keep = d.s;
-  d.s = { ...emptyState(), ready: true, root: keep.root, agents, order: keep.order, leadId: keep.leadId, lastSeq: keep.lastSeq, nextId: keep.nextId, fileEpoch: keep.fileEpoch + 1, status: "session cleared" };
+  d.s = { ...emptyState(), ready: true, root: keep.root, agents, order: keep.order, leadId: keep.leadId, lastSeq: keep.lastSeq, nextId: keep.nextId, fileEpoch: keep.fileEpoch + 1, awake: keep.awake, status: "session cleared" }; // /clear wipes the transcript, not the Mac's sleep state
 }
 
 function applyEvent(d: Draft, e: ServerEvent) {
@@ -587,6 +591,9 @@ function applyEvent(d: Draft, e: ServerEvent) {
       d.s.locks = locks;
       break;
     }
+    case "awake":
+      d.s.awake = e.state;
+      break;
     case "theme":
       break;
   }

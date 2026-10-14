@@ -10,6 +10,11 @@ import { PAGES, useUI, type Page } from "@/store/ui";
 // "settled" = its entrance animation done (reported, not budgeted).
 const BUDGET = { navP95: 60, keyP95: 24, dialogP95: 100, streamLongTaskMax: 50, idleCpuMax: 5 };
 
+// Long enough that each keystroke p95 is a percentile, not the one or two worst keys: the floor and
+// the composer are compared, and two short noisy samples disagreed by 24ms within a single run.
+const FLOOR_TEXT = "the quick brown fox jumps over the lazy dog ".repeat(2).trim();
+const TYPED_TEXT = "the quick brown fox jumps over the lazy dog while agents work ".repeat(2).trim();
+
 type Entry = { name: string; duration: number; startTime: number };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const frame = () => new Promise<number>((r) => requestAnimationFrame(() => r(performance.now())));
@@ -96,7 +101,9 @@ async function run() {
   const nav: number[] = [];
   const navSettled: number[] = [];
   const order: Page[] = ["tasks", "tokens", "graph", "dashboard", "settings", "session"];
-  for (let round = 0; round < 3; round++) {
+  // pct() over n samples is the max until n ≥ 21: 7 rounds (n=42) lets p95 skip the two worst
+  // clicks, so one GC or vsync hiccup doesn't fail a run that is otherwise 1-2 frames per click.
+  for (let round = 0; round < 7; round++) {
     for (const p of order) {
       const target = document.querySelector(`[data-nav="${p}"]`);
       const t0 = performance.now();
@@ -118,10 +125,10 @@ async function run() {
   await click(raw);
   await wait(150);
   const fb = events.length;
-  await keys("the quick brown fox jumps over the lazy dog");
+  await keys(FLOOR_TEXT);
   await wait(500);
   const floorKeys = events.slice(fb).filter((e) => e.name === "keydown").map((e) => e.duration);
-  const floor = [...floorKeys, ...Array(Math.max(0, 43 - floorKeys.length)).fill(8)];
+  const floor = [...floorKeys, ...Array(Math.max(0, FLOOR_TEXT.length - floorKeys.length)).fill(8)];
   raw.remove();
   out.push(`keystroke floor (bare)   p50 ${pct(floor, 50).toFixed(0)}ms  p95 ${pct(floor, 95).toFixed(0)}ms`);
   // The same with the app hidden: whether the app's DOM makes every frame expensive.
@@ -133,10 +140,10 @@ async function run() {
   await click(raw2);
   await wait(150);
   const fb2 = events.length;
-  await keys("the quick brown fox jumps over the lazy dog");
+  await keys(FLOOR_TEXT);
   await wait(500);
   const k2 = events.slice(fb2).filter((e) => e.name === "keydown").map((e) => e.duration);
-  const floor2 = [...k2, ...Array(Math.max(0, 43 - k2.length)).fill(8)];
+  const floor2 = [...k2, ...Array(Math.max(0, FLOOR_TEXT.length - k2.length)).fill(8)];
   raw2.remove();
   rootEl.style.visibility = "";
   out.push(`keystroke floor (no app) p50 ${pct(floor2, 50).toFixed(0)}ms  p95 ${pct(floor2, 95).toFixed(0)}ms`);
@@ -147,22 +154,24 @@ async function run() {
   await click(document.querySelector('[data-perf="composer"]'));
   await wait(200);
   const before = events.length;
-  await keys("the quick brown fox jumps over the lazy dog while agents work");
+  await keys(TYPED_TEXT);
   await wait(600);
   const keyEvents = events.slice(before).filter((e) => e.name === "keydown" || e.name === "keypress" || e.name === "input" || e.name === "keyup");
   // Event Timing only records events over 16ms, so the unrecorded ones were faster than that.
-  const typed = 63;
+  const typed = TYPED_TEXT.length;
   const keyDur = [...keyEvents.filter((e) => e.name === "keydown").map((e) => e.duration), ...Array(Math.max(0, typed - keyEvents.filter((e) => e.name === "keydown").length)).fill(8)];
   out.push(`keystroke → paint        p50 ${pct(keyDur, 50).toFixed(0)}ms  p95 ${pct(keyDur, 95).toFixed(0)}ms  (slow keydowns ${keyEvents.filter((e) => e.name === "keydown").length}/${typed})`);
   // Budget relative to the floor: what React and the app add on top of the browser's own cost.
-  if (pct(keyDur, 95) > Math.max(BUDGET.keyP95, pct(floor, 95) + 8)) fails.push(`keystroke p95 ${pct(keyDur, 95).toFixed(0)}ms > max(${BUDGET.keyP95}, floor ${pct(floor, 95).toFixed(0)} + 8)`);
+  // Event Timing durations land on whole frames (8ms granularity, 16ms per frame), so the margin is
+  // one frame: +8 failed a run whenever the composer happened to finish one vsync after the floor.
+  if (pct(keyDur, 95) > Math.max(BUDGET.keyP95, pct(floor, 95) + 16)) fails.push(`keystroke p95 ${pct(keyDur, 95).toFixed(0)}ms > max(${BUDGET.keyP95}, floor ${pct(floor, 95).toFixed(0)} + 16)`);
   // Clear what was typed.
   await window.niti.perfInput([{ type: "key", key: "a", modifiers: ["meta"] }, { type: "key", key: "Backspace" }]);
 
   // --- dialogs ---------------------------------------------------------------------------
   const dialog: number[] = [];
   const dialogSettled: number[] = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 24; i++) {
     const t0 = performance.now();
     await click(document.querySelector('[data-perf="palette"]'));
     const t1 = await until(() => visible(document.querySelector("[role=dialog]")));
