@@ -248,6 +248,24 @@ test("opening the store ignores niti's generated state, so committing .niti/ sha
   for (const generated of ["niti.db*", "session.json", "logs/", "reports/", "worktrees/"]) expect(ignore).toContain(generated);
 });
 
+test("a database that already has after_hash but still reads user_version 1 still opens", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "niti-drift-")), "niti.db");
+  const db = openDb(path);
+  db.exec("PRAGMA user_version = 1");
+  db.close();
+  expect(() => openDb(path).close()).not.toThrow();
+});
+
+test("opening a database a newer build wrote leaves its user_version alone", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "niti-newer-")), "niti.db");
+  const db = openDb(path);
+  db.exec("PRAGMA user_version = 99");
+  db.close();
+  const again = openDb(path);
+  expect((again.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(99);
+  again.close();
+});
+
 test("resuming on a different provider drops the old provider's native blocks, keeping the turns", () => {
   const s = store();
   const id = s.createSession({ agentId: "a", kind: "task", provider: "anthropic", model: "m", taskId: "t1" });

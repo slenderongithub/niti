@@ -165,6 +165,12 @@ function migrateLocked(db: Database): void {
   }
   // ALTER TABLEs go here, guarded by `from` — and the column stays out of SCHEMA, so a fresh database
   // (from = 0) gets it here too instead of failing on a duplicate.
-  if (from < 2) db.exec("ALTER TABLE checkpoints ADD COLUMN after_hash TEXT");
-  if (from !== USER_VERSION) db.exec(`PRAGMA user_version = ${USER_VERSION}`);
+  // The column check covers a database already altered whose user_version an older build reset.
+  if (from < 2 && !hasColumn(db, "checkpoints", "after_hash")) db.exec("ALTER TABLE checkpoints ADD COLUMN after_hash TEXT");
+  // Only ever forward: 0.4.7 used `!==`, so running it in a project reset a newer database to 1.
+  if (from < USER_VERSION) db.exec(`PRAGMA user_version = ${USER_VERSION}`);
+}
+
+function hasColumn(db: Database, table: string, column: string): boolean {
+  return (db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
 }
