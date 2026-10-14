@@ -62,6 +62,7 @@ type SessionInfo struct {
 	Theme         string          `json:"theme"`         // `theme:` from agents.yaml, applied at launch
 	Prefs         map[string]bool `json:"prefs"`         // Config-tab flags from agents.yaml (lightMode, reduceMotion, …); nil from an older core
 	Auto          bool            `json:"auto"`          // default permission mode: true = auto-approve
+	Awake         string          `json:"awake"`         // /awake: "off" | "lid" | "open"; "" from an older core
 	Settings      *Settings       `json:"settings"`      // live toggles; nil from an older core
 }
 
@@ -192,7 +193,7 @@ type Event struct {
 	Totals   *Totals         `json:"totals"`
 	Requests []Approval      `json:"requests"`
 	Holders  []Lock          `json:"holders"`
-	State    string          `json:"state"`
+	State    string          `json:"state"` // session events: started|ended|cancelled; awake events: off|lid|open
 	Goal     string          `json:"goal"`
 	Theme    string          `json:"theme"`  // theme events: the palette another client just picked
 	Missed   int             `json:"missed"` // resync events: how many events were lost while disconnected

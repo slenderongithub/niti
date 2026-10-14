@@ -7,6 +7,7 @@ import { setAuto } from "../config/config.ts";
 import { loadSkills, frontmatter } from "../skills/skills.ts";
 import { isGitRepo, snapshotBranch } from "../orchestrator/worktree.ts";
 import { buildExportReport } from "./export.ts";
+import { arm, release } from "../awake.ts";
 
 // Slash commands live here, on the server, rather than in the Go TUI's key handler — otherwise the
 // web dashboard needs an identical second implementation of every one of them. Clients fetch the
@@ -58,6 +59,17 @@ export const BUILTIN_COMMANDS: Command[] = [
     async run(engine) {
       engine.cancel();
       return { ok: true, message: "cancelling — in-flight model calls and shell commands are being stopped" };
+    },
+  },
+  {
+    name: "awake",
+    description: "Keep the Mac awake, lid closed too, until the current or next run finishes (/awake off to stop)",
+    async run(engine, args) {
+      if (args.trim() === "off") {
+        release();
+        return { ok: true, message: "awake off — normal sleep restored" };
+      }
+      return arm(engine.hub);
     },
   },
   {

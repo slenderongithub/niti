@@ -19,6 +19,7 @@ import { CommandRegistry } from "../commands/registry.ts";
 import type { AgentConfig } from "../agent/agent.ts";
 import { makeProvider } from "../providers/factory.ts";
 import { summarizeError, scrubSecrets } from "../providers/provider.ts";
+import { awakeMode } from "../awake.ts";
 
 export interface ServerHandle {
   url: string;
@@ -273,6 +274,7 @@ export function startServer(
           prefs,
           auto: engine.auto, // default permission mode: true = auto-approve
           theme: currentTheme, // `theme:` from agents.yaml, or whatever POST /theme last set
+          awake: awakeMode(), // /awake: "off" | "lid" | "open"
         });
       }
 

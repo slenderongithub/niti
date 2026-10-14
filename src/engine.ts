@@ -28,6 +28,7 @@ import { AUTO_RULES, type PermissionRules } from "./permissions.ts";
 import { watchProject, type ProjectWatcher } from "./watch.ts";
 import { TOOL_GUIDANCE, HASHLINE_GUIDANCE } from "./tools/tools.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
+import { release as releaseAwake } from "./awake.ts";
 import { isGitRepo, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
 
 interface EngineOptions {
@@ -692,6 +693,7 @@ export class Engine {
   close(): void {
     this.watcher?.close();
     this.lsp?.close();
+    releaseAwake();
   }
 
   private totalTokens(): number {

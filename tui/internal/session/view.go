@@ -210,6 +210,9 @@ func (m Model) header(w int) string {
 		mode, mc = "Plan", theme.Alt
 	}
 	chip := lipgloss.NewStyle().Foreground(mc).Background(theme.Tint(mc)).Bold(true).Render(" " + mode + " ")
+	if a := awakeLabel(m.awake); a != "" {
+		chip = lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.Tint(theme.Amber)).Bold(true).Render(" "+a+" ") + txt(theme.Muted, bg).Render(" ") + chip
+	}
 	model := ""
 	if st := m.shownAgent(); st != nil {
 		model = st.cfg.Model
@@ -222,6 +225,17 @@ func (m Model) header(w int) string {
 	right := txt(theme.Muted, bg).Render(where+" ") + chip + txt(theme.Muted, bg).Render(" ")
 	gap := max(w-lipgloss.Width(left)-lipgloss.Width(right), 0)
 	return left + txt(theme.Muted, bg).Render(strings.Repeat(" ", gap)) + right
+}
+
+// awakeLabel is the header chip for /awake: amber, because the Mac is ignoring its own sleep rules.
+func awakeLabel(state string) string {
+	switch state {
+	case "lid":
+		return "awake"
+	case "open":
+		return "awake · lid open"
+	}
+	return ""
 }
 
 // shownAgent is the agent the screen is about: the one maximized, else the lead, else the first.

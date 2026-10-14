@@ -15,6 +15,8 @@ export type ServerEventBody =
   | { kind: "lock"; holders: { path: string; holder: string }[] }
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
   | { kind: "theme"; theme: string }
+  // /awake: "lid" = the Mac stays awake lid-closed, "open" = lid-open only (admin prompt declined).
+  | { kind: "awake"; state: "off" | "lid" | "open" }
   // /clear: the session was wiped. A client drops everything it is showing (transcripts, board,
   // totals, files) — replay can't carry this, because clear() below also empties the buffer.
   | { kind: "session_reset" }

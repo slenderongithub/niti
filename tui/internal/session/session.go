@@ -150,6 +150,7 @@ type Model struct {
 	history     []string   // sent prompts, oldest first (.niti/history)
 	histPos     int        // ↑/↓ browsing: steps back from the newest; 0 = not browsing
 	active      bool       // a run is going (session started, not yet ended or cancelled)
+	awake       string     // /awake: "off" | "lid" | "open" — the header chip
 	// The Files panel (files.go).
 	files       []string                // project files, sorted, from GET /files
 	touched     map[string]byte         // what agents did this session: 'M' edited, 'A' created, 'R' read
@@ -207,7 +208,7 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	m := Model{
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected", vm: &viewMetrics{},
-		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), prefs: map[string]bool{"projectInstructions": true}, autoApprove: sess.Auto,
+		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), prefs: map[string]bool{"projectInstructions": true}, autoApprove: sess.Auto, awake: sess.Awake,
 		autoCompact: true, thinkingMode: true, // the core's defaults, kept when an older core sends none
 	}
 	if sess.Settings != nil {
@@ -866,6 +867,8 @@ func (m *Model) apply(e api.Event) {
 		if !m.tp.open {
 			theme.Use(e.Theme)
 		}
+	case "awake":
+		m.awake = e.State
 	// Synthesized client-side by streamWithReconnect — the core never sends these. Without them a
 	// dead core looked exactly like an idle one: agents "working", progress frozen, status stale.
 	// The core's replay buffer no longer held everything since our last event: say so, rather than
