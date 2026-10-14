@@ -22,7 +22,9 @@ The protocol lives in `../src/remote/protocol.ts`, shared with the core and the 
 - **Your own box**: `bun bun.ts --port=8787`. The same code runs on Bun and SQLite. With no mailer,
   sign-in codes print to the console, and pushes are logged instead of sent.
 
-Point niti at a relay with `remote: { relay: https://… }` in `.niti/agents.yaml`.
+Sign a Mac in to a relay with `/remote login <email> --relay https://…` in niti; the phone app
+asks for the same relay URL. `remote: false` in a project's `.niti/agents.yaml` keeps that project
+out of remote control.
 
 ## Test
 
