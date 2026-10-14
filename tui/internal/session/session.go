@@ -139,20 +139,21 @@ type Model struct {
 	// Keyboard focus on the main screen: "" or regionPrompt (typing), regionTranscript (scrolling),
 	// regionAgents (picking an agent). Distinct from `focus` above, which is which agent is shown.
 	region      string
-	agentCursor int             // highlighted row in the Agents panel while it has focus
-	scrollBack  int             // transcript lines scrolled up from the newest; 0 = following the output
-	vm          *viewMetrics    // what the last frame measured; View has a value receiver, so it reports through this
-	expanded    bool            // ctrl+o: show full command output and whole diffs instead of their folded form
-	card        *api.Event      // the last run's summary card (turn_summary), shown until the next goal
-	suggestions []string        // next prompts the lead suggested; the first is the prompt's ghost text
-	notify      string          // a notification to send once this batch of events is applied (notifyCmd)
-	steerTo     string          // after "deny & tell": the agent the next message goes to
-	interruptTo string          // after x in the Agents panel: the agent the next message interrupts
-	history     []string        // sent prompts, oldest first (.niti/history)
-	histPos     int             // ↑/↓ browsing: steps back from the newest; 0 = not browsing
-	active      bool            // a run is going (session started, not yet ended or cancelled)
-	awake       string          // /awake: "off" | "lid" | "open" — the header chip
-	goalState   *api.GoalStatus // /goal: the header chip, and where the composer sends text while one is live
+	agentCursor int              // highlighted row in the Agents panel while it has focus
+	scrollBack  int              // transcript lines scrolled up from the newest; 0 = following the output
+	vm          *viewMetrics     // what the last frame measured; View has a value receiver, so it reports through this
+	expanded    bool             // ctrl+o: show full command output and whole diffs instead of their folded form
+	card        *api.Event       // the last run's summary card (turn_summary), shown until the next goal
+	suggestions []string         // next prompts the lead suggested; the first is the prompt's ghost text
+	notify      string           // a notification to send once this batch of events is applied (notifyCmd)
+	steerTo     string           // after "deny & tell": the agent the next message goes to
+	interruptTo string           // after x in the Agents panel: the agent the next message interrupts
+	history     []string         // sent prompts, oldest first (.niti/history)
+	histPos     int              // ↑/↓ browsing: steps back from the newest; 0 = not browsing
+	active      bool             // a run is going (session started, not yet ended or cancelled)
+	awake       string           // /awake: "off" | "lid" | "open" — the header chip
+	goalState   *api.GoalStatus  // /goal: the header chip, and where the composer sends text while one is live
+	remote      *api.RemoteState // remote control: the header chip
 	// The Files panel (files.go).
 	files       []string                // project files, sorted, from GET /files
 	touched     map[string]byte         // what agents did this session: 'M' edited, 'A' created, 'R' read
@@ -209,7 +210,7 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	m := Model{
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected", vm: &viewMetrics{},
-		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), prefs: map[string]bool{"projectInstructions": true}, autoApprove: sess.Auto, awake: sess.Awake, goalState: sess.Goal,
+		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), prefs: map[string]bool{"projectInstructions": true}, autoApprove: sess.Auto, awake: sess.Awake, goalState: sess.Goal, remote: sess.Remote,
 		autoCompact: true, thinkingMode: true, // the core's defaults, kept when an older core sends none
 	}
 	if sess.Settings != nil {
@@ -870,6 +871,8 @@ func (m *Model) apply(e api.Event) {
 		}
 	case "awake":
 		m.awake = e.State
+	case "remote":
+		m.remote = e.Remote
 	case "goal":
 		was := m.goalState.Live()
 		m.goalState = e.Status

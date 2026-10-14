@@ -64,6 +64,7 @@ type SessionInfo struct {
 	Auto          bool            `json:"auto"`          // default permission mode: true = auto-approve
 	Awake         string          `json:"awake"`         // /awake: "off" | "lid" | "open"; "" from an older core
 	Goal          *GoalStatus     `json:"goal"`          // /goal: the persistent objective; nil when there is none
+	Remote        *RemoteState    `json:"remote"`        // remote control; nil from an older core
 	Settings      *Settings       `json:"settings"`      // live toggles; nil from an older core
 }
 
@@ -200,6 +201,17 @@ type GoalStatus struct {
 	Error bool `json:"error"`
 }
 
+// RemoteState is remote control as the core reports it: on POST /session and on `remote` events.
+type RemoteState struct {
+	SignedIn bool   `json:"signedIn"`
+	Enabled  bool   `json:"enabled"`
+	Link     string `json:"link"` // up | connecting | off
+	Phones   []struct {
+		Name   string `json:"name"`
+		Online bool   `json:"online"`
+	} `json:"phones"`
+}
+
 // Live reports whether the goal still holds the session: running, or paused waiting to resume.
 func (g *GoalStatus) Live() bool { return g != nil && (g.State == "running" || g.State == "paused") }
 
@@ -220,6 +232,7 @@ type Event struct {
 	Theme    string          `json:"theme"`  // theme events: the palette another client just picked
 	Missed   int             `json:"missed"` // resync events: how many events were lost while disconnected
 	Status   *GoalStatus     `json:"status"` // goal events: the goal's state, nil once it is cleared
+	Remote   *RemoteState    `json:"remote"` // remote events
 
 	// turn_summary events: the end-of-run card.
 	Summary    string       `json:"summary"`

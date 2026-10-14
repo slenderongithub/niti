@@ -63,6 +63,13 @@ func (m Model) keymap() []binding {
 	var local []binding
 	switch m.context() {
 	case "approval":
+		if len(m.approvals) > 0 && isDeviceRequest(m.approvals[0]) {
+			return []binding{
+				{keys: []string{"y", "Y"}, label: "y", desc: "Allow", help: "let this phone control niti on this Mac (only if it shows the same code)", footer: true, run: answer(true, "")},
+				{keys: []string{"n", "N", "esc"}, label: "n", desc: "Deny", help: "refuse it; it will ask again next time niti starts", footer: true, run: answer(false, "")},
+				m.quitBinding(),
+			}
+		}
 		who := "this agent"
 		if len(m.approvals) > 0 {
 			who = m.approvals[0].AgentID
