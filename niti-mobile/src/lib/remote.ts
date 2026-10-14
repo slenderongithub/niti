@@ -1,4 +1,4 @@
-import { authMessage, Channel, deviceId, newDeviceKeys, openStatus, pairingCode, PROTOCOL, sign, type ChannelMessage, type DeviceInfo, type DeviceKeys, type Hello, type PushCategory, type ServerFrame, type SessionInfo } from "../../../src/remote/protocol";
+import { authMessage, Channel, deviceId, newDeviceKeys, openStatus, pairingCode, PROTOCOL, sign, type ChannelMessage, type DeviceInfo, type DeviceKeys, type Hello, type PushCategory, type ServerFrame, type SessionInfo } from "../../../src/remote/protocol.ts";
 
 // The phone's side of remote control: sign in to the relay, see the account's Macs and their
 // projects, and open an end-to-end encrypted session with one to drive its niti. Plain TypeScript

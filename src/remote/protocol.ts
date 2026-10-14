@@ -44,10 +44,17 @@ export function unb64(s: string): Uint8Array {
   return out.subarray(0, o);
 }
 
-const enc = new TextEncoder();
-const dec = new TextDecoder();
-export const utf8 = (s: string) => enc.encode(s);
-export const fromUtf8 = (b: Uint8Array) => dec.decode(b);
+// TextEncoder/TextDecoder where the runtime has them; React Native's engine may not have the decoder,
+// so there is a plain fallback (escape/unescape do the UTF-8 byte mapping).
+const g = globalThis as { TextEncoder?: typeof TextEncoder; TextDecoder?: typeof TextDecoder; escape?: (s: string) => string; unescape?: (s: string) => string };
+export const utf8 = (s: string): Uint8Array =>
+  g.TextEncoder ? new g.TextEncoder().encode(s) : Uint8Array.from(g.unescape!(encodeURIComponent(s)), (c) => c.charCodeAt(0));
+export function fromUtf8(b: Uint8Array): string {
+  if (g.TextDecoder) return new g.TextDecoder().decode(b);
+  let bin = "";
+  for (let i = 0; i < b.length; i += 8192) bin += String.fromCharCode(...b.subarray(i, i + 8192)); // spread in chunks: a whole frame overflows the call stack
+  return decodeURIComponent(g.escape!(bin));
+}
 
 function concat(...parts: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
