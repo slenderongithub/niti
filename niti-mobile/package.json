@@ -7,7 +7,7 @@
     "start": "expo start",
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src"
+    "test": "bun test ./src"
   },
   "dependencies": {
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
