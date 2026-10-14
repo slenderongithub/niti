@@ -139,7 +139,7 @@ interface Attempt {
 // most misleading number this script could print. A run that never reached the model is reported
 // separately and left out of the score entirely.
 function isInfraError(outcome: string, calls: number): boolean {
-  return calls === 0 || /429|too many requests|quota|rate limit|no API key|not signed in|unknown provider/i.test(outcome);
+  return calls === 0 || /429|too many requests|quota|rate limit|50[234]|service unavailable|bad gateway|gateway timeout|overloaded|no API key|not signed in|unknown provider/i.test(outcome);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
