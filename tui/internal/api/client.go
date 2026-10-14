@@ -317,6 +317,12 @@ func (c *Client) MessageAgent(agentID, text string) error {
 	return c.do("POST", "/agents/"+url.PathEscape(agentID)+"/message", map[string]string{"text": text}, nil)
 }
 
+// InterruptAgent abandons what that agent is doing right now and has it carry on from text (empty:
+// the core's default "stop and reconsider"). The rest of the team keeps working.
+func (c *Client) InterruptAgent(agentID, text string) error {
+	return c.do("POST", "/agents/"+url.PathEscape(agentID)+"/interrupt", map[string]string{"text": text}, nil)
+}
+
 // Command mirrors one entry of the server-side slash-command registry (src/commands/registry.ts).
 // The TUI renders this list rather than hardcoding a switch, so the TUI and the web dashboard stay
 // in step as commands are added.

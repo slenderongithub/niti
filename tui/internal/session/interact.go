@@ -66,6 +66,42 @@ func (m *Model) interrupt() tea.Cmd {
 	return func() tea.Msg { return actionResultMsg{action: "interrupt", err: client.Cancel()} }
 }
 
+// startInterrupt arms an interrupt of the agent under the Agents-panel cursor; the next enter sends
+// it, with whatever was typed as what to do instead.
+func (m *Model) startInterrupt() tea.Cmd {
+	if m.agentCursor >= len(m.order) {
+		return nil
+	}
+	id := m.order[m.agentCursor]
+	role := id
+	if st := m.agents[id]; st != nil {
+		role = st.cfg.Role
+		if st.status != "working" {
+			m.status = role + " isn't working — nothing to interrupt"
+			return nil
+		}
+	}
+	m.interruptTo = id
+	m.region = regionPrompt
+	m.status = "interrupt " + role + ": type what it should do instead, then enter (enter alone: stop and reconsider)"
+	return nil
+}
+
+func (m *Model) sendInterrupt(text string) tea.Cmd {
+	id := m.interruptTo
+	m.interruptTo = ""
+	m.input.SetValue("")
+	role := id
+	if st := m.agents[id]; st != nil {
+		role = st.cfg.Role
+	}
+	m.status = "interrupting " + role
+	client := m.client
+	return func() tea.Msg {
+		return actionResultMsg{action: "interrupt " + role, err: client.InterruptAgent(id, text)}
+	}
+}
+
 // denyAndTell refuses the approval on screen, then waits for the user to say what to do instead;
 // the next thing they send goes to that agent.
 func (m *Model) denyAndTell() tea.Cmd {

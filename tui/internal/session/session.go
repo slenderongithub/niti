@@ -147,6 +147,7 @@ type Model struct {
 	suggestions []string        // next prompts the lead suggested; the first is the prompt's ghost text
 	notify      string          // a notification to send once this batch of events is applied (notifyCmd)
 	steerTo     string          // after "deny & tell": the agent the next message goes to
+	interruptTo string          // after x in the Agents panel: the agent the next message interrupts
 	history     []string        // sent prompts, oldest first (.niti/history)
 	histPos     int             // ↑/↓ browsing: steps back from the newest; 0 = not browsing
 	active      bool            // a run is going (session started, not yet ended or cancelled)
@@ -960,7 +961,7 @@ func (m *Model) resetSession() {
 	m.tasks, m.messages, m.feed, m.approvals = nil, nil, nil, nil
 	m.card, m.suggestions = nil, nil
 	m.touched, m.changed = nil, nil
-	m.goal, m.progress, m.active, m.steerTo = "", 0, false, ""
+	m.goal, m.progress, m.active, m.steerTo, m.interruptTo = "", 0, false, "", ""
 	m.totals, m.cost, m.costKnown = api.Totals{}, 0, true
 	m.scrollBack, m.unseen = 0, 0
 	m.status = "session cleared"

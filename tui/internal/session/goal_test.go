@@ -39,3 +39,29 @@ func TestGoalChipAndNotes(t *testing.T) {
 		t.Fatal("a finished goal must not capture the composer")
 	}
 }
+
+// x in the Agents panel interrupts that agent alone; what is typed next is what it does instead.
+func TestInterruptOneAgentFromTheAgentsPanel(t *testing.T) {
+	m := sized(2, 120, 30)
+	client, calls := fakeCore(t)
+	m.client = client
+	m.apply(api.Event{Kind: "session", State: "started", Goal: "build it"})
+	m.agents["b"].status = "working"
+	m.region = regionAgents
+	m.agentCursor = 1
+	next, _ := m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = next.(Model)
+	if m.interruptTo != "b" || m.region != regionPrompt {
+		t.Fatalf("x should arm an interrupt of b and return to the prompt: to=%q region=%q", m.interruptTo, m.region)
+	}
+	m = typing(m, "use approach B")
+	next, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	run(cmd)
+	if len(*calls) != 1 || !strings.HasPrefix((*calls)[0], "/agents/b/interrupt") || !strings.Contains((*calls)[0], "approach B") {
+		t.Fatalf("enter should interrupt b with the text, calls=%v", *calls)
+	}
+	if m.interruptTo != "" {
+		t.Fatal("the interrupt is one-shot")
+	}
+}

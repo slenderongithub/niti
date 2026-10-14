@@ -127,6 +127,7 @@ func (m Model) keymap() []binding {
 			{keys: []string{"up", "k"}, label: "↑↓", desc: "Move", help: "move between agents", footer: true, run: func(m *Model) tea.Cmd { m.agentCursor = wrap(m.agentCursor-1, len(m.order)); return nil }},
 			{keys: []string{"down", "j"}, run: func(m *Model) tea.Cmd { m.agentCursor = wrap(m.agentCursor+1, len(m.order)); return nil }},
 			{keys: []string{"enter"}, label: "enter", desc: "Open", help: "show only this agent's transcript (enter again: all agents)", footer: true, run: (*Model).openAgentAtCursor},
+			{keys: []string{"x"}, label: "x", desc: "Interrupt", help: "interrupt this agent only: type what it should do instead (enter alone: just stop and reconsider)", footer: true, run: (*Model).startInterrupt},
 			escToPrompt,
 		}
 	default: // the prompt
@@ -368,6 +369,10 @@ func (m *Model) enter() tea.Cmd {
 	if cmd, ok := strings.CutPrefix(text, "!"); ok {
 		m.input.SetValue("")
 		return m.bang(cmd)
+	}
+	// After x in the Agents panel: this message interrupts that agent (empty: the core's default).
+	if m.interruptTo != "" && !strings.HasPrefix(text, "/") {
+		return m.sendInterrupt(text)
 	}
 	// After "deny & tell": this message is the what-to-do-instead, for that agent.
 	if m.steerTo != "" && text != "" && !strings.HasPrefix(text, "/") {
