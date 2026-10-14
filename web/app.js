@@ -27,6 +27,7 @@ let pulses = []; // {from,to,kind,born}
 let totals = { inputTokens: 0, outputTokens: 0, calls: 0 };
 const usageByAgent = new Map();
 let running = false; // session state — gates the "new goal" prompt bar
+let goal = null; // /goal's status; while it is live the prompt bar sends notes to it
 let openAgentId = null; // which node's detail panel is open, if any
 let pendingApprovals = []; // the FIFO queue's current snapshot — same one the TUI answers from
 
@@ -100,6 +101,10 @@ function handle(e) {
       running = e.state === "started";
       setPromptEnabled();
       if (e.state === "cancelled") $("conn").textContent = "cancelled";
+      break;
+    case "goal":
+      goal = e.status;
+      setPromptEnabled();
       break;
     case "approval_request":
       pendingApprovals = e.requests || [];
@@ -382,15 +387,21 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---------- prompt bar: submit a whole-team goal (POST /prompt) ----------
+const PROMPT_HINT = $("prompt-input").placeholder;
+const goalLive = () => !!goal && (goal.state === "running" || goal.state === "paused");
 function setPromptEnabled() {
-  $("prompt-send").disabled = running;
-  $("prompt-input").disabled = running;
-  $("goal").textContent = running ? "working…" : "waiting for a task…";
+  const live = goalLive();
+  $("prompt-send").disabled = running && !live;
+  $("prompt-input").disabled = running && !live;
+  $("prompt-input").placeholder = live ? "a note for the goal — sent to whoever is working, and kept for its next round" : PROMPT_HINT;
+  $("goal").textContent = live
+    ? `goal ${goal.round}/${goal.maxRounds}${goal.state === "paused" ? " (paused)" : ""}: ${goal.objective}`
+    : running ? "working…" : "waiting for a task…";
 }
 async function submitPrompt() {
   const text = $("prompt-input").value.trim();
-  if (!text || running) return;
-  const res = await authedFetch("/prompt", { text, mode: "build" });
+  if (!text || (running && !goalLive())) return;
+  const res = goalLive() ? await authedFetch("/commands/goal", { args: `note ${text}` }) : await authedFetch("/prompt", { text, mode: "build" });
   if (!res.ok) {
     const e = await res.json().catch(() => ({}));
     $("prompt-status").textContent = e.error || "failed";
@@ -587,6 +598,7 @@ async function boot() {
       for (const a of s.agents || []) ensureNode(a.id, a.role, a.lead);
       if (s.tasks && s.tasks.length) { tasks = s.tasks.map((t) => ({ id: t.id, description: t.description, role: t.assignedTo || t.role, dependsOn: t.dependsOn || [], status: t.status })); renderTasks(); }
       running = !!s.running;
+      goal = s.goal ?? null;
     }
   } catch { /* server not reachable yet — SSE will retry */ }
   setPromptEnabled();

@@ -63,6 +63,7 @@ type SessionInfo struct {
 	Prefs         map[string]bool `json:"prefs"`         // Config-tab flags from agents.yaml (lightMode, reduceMotion, …); nil from an older core
 	Auto          bool            `json:"auto"`          // default permission mode: true = auto-approve
 	Awake         string          `json:"awake"`         // /awake: "off" | "lid" | "open"; "" from an older core
+	Goal          *GoalStatus     `json:"goal"`          // /goal: the persistent objective; nil when there is none
 	Settings      *Settings       `json:"settings"`      // live toggles; nil from an older core
 }
 
@@ -181,6 +182,27 @@ type Lock struct {
 	Holder string `json:"holder"`
 }
 
+// GoalStatus is /goal's state: on POST /session and on every `goal` event (as Event.Status).
+type GoalStatus struct {
+	Objective string `json:"objective"`
+	State     string `json:"state"` // running | paused | done | blocked | budget | rounds | stopped
+	Reason    string `json:"reason"`
+	Round     int    `json:"round"`
+	MaxRounds int    `json:"maxRounds"`
+	Used      struct {
+		Tokens int     `json:"tokens"`
+		Cost   float64 `json:"cost"`
+	} `json:"used"`
+	Budget struct {
+		Tokens int     `json:"tokens"`
+		Usd    float64 `json:"usd"`
+	} `json:"budget"`
+	Error bool `json:"error"`
+}
+
+// Live reports whether the goal still holds the session: running, or paused waiting to resume.
+func (g *GoalStatus) Live() bool { return g != nil && (g.State == "running" || g.State == "paused") }
+
 // Event is one item of the SSE ServerEvent union. `Event` (raw) holds either an AgentEvent
 // (kind=agent_event) or an OrchestrationEvent (kind=orchestration); decode with the helpers.
 type Event struct {
@@ -197,6 +219,7 @@ type Event struct {
 	Goal     string          `json:"goal"`
 	Theme    string          `json:"theme"`  // theme events: the palette another client just picked
 	Missed   int             `json:"missed"` // resync events: how many events were lost while disconnected
+	Status   *GoalStatus     `json:"status"` // goal events: the goal's state, nil once it is cleared
 
 	// turn_summary events: the end-of-run card.
 	Summary    string       `json:"summary"`

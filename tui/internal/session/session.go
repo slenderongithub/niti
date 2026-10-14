@@ -139,18 +139,19 @@ type Model struct {
 	// Keyboard focus on the main screen: "" or regionPrompt (typing), regionTranscript (scrolling),
 	// regionAgents (picking an agent). Distinct from `focus` above, which is which agent is shown.
 	region      string
-	agentCursor int          // highlighted row in the Agents panel while it has focus
-	scrollBack  int          // transcript lines scrolled up from the newest; 0 = following the output
-	vm          *viewMetrics // what the last frame measured; View has a value receiver, so it reports through this
-	expanded    bool         // ctrl+o: show full command output and whole diffs instead of their folded form
-	card        *api.Event   // the last run's summary card (turn_summary), shown until the next goal
-	suggestions []string     // next prompts the lead suggested; the first is the prompt's ghost text
-	notify      string       // a notification to send once this batch of events is applied (notifyCmd)
-	steerTo     string       // after "deny & tell": the agent the next message goes to
-	history     []string     // sent prompts, oldest first (.niti/history)
-	histPos     int          // ↑/↓ browsing: steps back from the newest; 0 = not browsing
-	active      bool         // a run is going (session started, not yet ended or cancelled)
-	awake       string       // /awake: "off" | "lid" | "open" — the header chip
+	agentCursor int             // highlighted row in the Agents panel while it has focus
+	scrollBack  int             // transcript lines scrolled up from the newest; 0 = following the output
+	vm          *viewMetrics    // what the last frame measured; View has a value receiver, so it reports through this
+	expanded    bool            // ctrl+o: show full command output and whole diffs instead of their folded form
+	card        *api.Event      // the last run's summary card (turn_summary), shown until the next goal
+	suggestions []string        // next prompts the lead suggested; the first is the prompt's ghost text
+	notify      string          // a notification to send once this batch of events is applied (notifyCmd)
+	steerTo     string          // after "deny & tell": the agent the next message goes to
+	history     []string        // sent prompts, oldest first (.niti/history)
+	histPos     int             // ↑/↓ browsing: steps back from the newest; 0 = not browsing
+	active      bool            // a run is going (session started, not yet ended or cancelled)
+	awake       string          // /awake: "off" | "lid" | "open" — the header chip
+	goalState   *api.GoalStatus // /goal: the header chip, and where the composer sends text while one is live
 	// The Files panel (files.go).
 	files       []string                // project files, sorted, from GET /files
 	touched     map[string]byte         // what agents did this session: 'M' edited, 'A' created, 'R' read
@@ -207,7 +208,7 @@ func New(client *api.Client, sess api.SessionInfo, events <-chan api.Event, canc
 	m := Model{
 		client: client, events: events, cancel: cancel,
 		agents: map[string]*agentState{}, input: ti, view: "panes", status: "connected", vm: &viewMetrics{},
-		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), prefs: map[string]bool{"projectInstructions": true}, autoApprove: sess.Auto, awake: sess.Awake,
+		tasks: sess.Tasks, root: sess.Root, lsp: sess.Lsp, mcp: sess.Mcp, mode: "build", costKnown: true, sid: newSessionID(), prefs: map[string]bool{"projectInstructions": true}, autoApprove: sess.Auto, awake: sess.Awake, goalState: sess.Goal,
 		autoCompact: true, thinkingMode: true, // the core's defaults, kept when an older core sends none
 	}
 	if sess.Settings != nil {
@@ -858,7 +859,8 @@ func (m *Model) apply(e api.Event) {
 		m.card = &e
 		m.suggestions = e.Next
 		m.refreshPlaceholder()
-		if m.prefs["notifyOnDone"] && e.DurationMs >= 20_000 {
+		// One goal is many runs: the notification waits for the goal itself to end.
+		if m.prefs["notifyOnDone"] && e.DurationMs >= 20_000 && !m.goalState.Live() {
 			m.notify = "done: " + truncate(m.goal, 60)
 		}
 	case "theme":
@@ -867,6 +869,17 @@ func (m *Model) apply(e api.Event) {
 		}
 	case "awake":
 		m.awake = e.State
+	case "goal":
+		was := m.goalState.Live()
+		m.goalState = e.Status
+		if g := e.Status; g != nil && was && !g.Live() {
+			m.status = "goal " + g.State + ": " + g.Reason
+			if m.prefs["notifyOnDone"] {
+				m.notify = "goal " + g.State + ": " + truncate(g.Objective, 50)
+			}
+		} else if g != nil && g.State == "paused" {
+			m.status = "goal paused: " + g.Reason + " — /goal resume to continue"
+		}
 	// Synthesized client-side by streamWithReconnect — the core never sends these. Without them a
 	// dead core looked exactly like an idle one: agents "working", progress frozen, status stale.
 	// The core's replay buffer no longer held everything since our last event: say so, rather than
@@ -896,6 +909,9 @@ func (m *Model) apply(e api.Event) {
 		} else if e.State == "ended" {
 			m.progress = 100
 			m.status = "done"
+			if g := m.goalState; g != nil && g.State == "running" {
+				m.status = fmt.Sprintf("goal round %d done — starting the next", g.Round)
+			}
 		} else if e.State == "cancelled" {
 			m.status = "cancelled"
 		}

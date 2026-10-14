@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
 )
@@ -210,6 +211,9 @@ func (m Model) header(w int) string {
 		mode, mc = "Plan", theme.Alt
 	}
 	chip := lipgloss.NewStyle().Foreground(mc).Background(theme.Tint(mc)).Bold(true).Render(" " + mode + " ")
+	if g := goalLabel(m.goalState); g != "" {
+		chip = lipgloss.NewStyle().Foreground(theme.Alt).Background(theme.Tint(theme.Alt)).Bold(true).Render(" "+g+" ") + txt(theme.Muted, bg).Render(" ") + chip
+	}
 	if a := awakeLabel(m.awake); a != "" {
 		chip = lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.Tint(theme.Amber)).Bold(true).Render(" "+a+" ") + txt(theme.Muted, bg).Render(" ") + chip
 	}
@@ -236,6 +240,19 @@ func awakeLabel(state string) string {
 		return "awake · lid open"
 	}
 	return ""
+}
+
+// goalLabel is the header chip for /goal: its round while it runs, its state once it doesn't.
+func goalLabel(g *api.GoalStatus) string {
+	switch {
+	case g == nil:
+		return ""
+	case g.State == "running":
+		return fmt.Sprintf("goal %d/%d", g.Round, g.MaxRounds)
+	case g.State == "paused":
+		return "goal paused"
+	}
+	return "goal " + g.State
 }
 
 // shownAgent is the agent the screen is about: the one maximized, else the lead, else the first.

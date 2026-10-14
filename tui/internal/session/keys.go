@@ -376,6 +376,17 @@ func (m *Model) enter() tea.Cmd {
 		m.input.SetValue("")
 		return m.steer(to, text)
 	}
+	// While a goal is live (running or paused), a message is a note to it: sent now to whoever is
+	// working and carried into its next round. A plain prompt would be refused while it runs.
+	if m.goalState.Live() && text != "" && !strings.HasPrefix(text, "/") {
+		m.input.SetValue("")
+		m.status = "note → goal: " + truncate(text, 60)
+		client := m.client
+		return func() tea.Msg {
+			res, err := client.RunCommand("goal", "note "+text)
+			return commandResultMsg{name: "goal note", result: res, err: err}
+		}
+	}
 	// Mid-run, a message steers the agent that's working instead of replacing the whole plan.
 	if m.running() && text != "" && !strings.HasPrefix(text, "/") {
 		m.input.SetValue("")
