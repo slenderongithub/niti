@@ -7,12 +7,22 @@ niti ships **one product in two packagings** from this repository:
 | **CLI** | `src/`, `tui/`, `web/`, `scripts/`, `bin/` | `niti` (Go TUI) + `niti-core` (Bun engine). **The main product.** |
 | **Desktop app** | `niti-app/` | The same product as an Electron + React app over the same engine — see `niti-app/README.md`. |
 
+Two companions control that product remotely. They are not packagings of it:
+
+| Companion | Lives in | What it is |
+|---|---|---|
+| **Relay** | `niti-relay/` | Cloudflare Worker + Durable Objects: email-code sign-in, forwards end-to-end encrypted frames between a Mac's core and a phone, sends pushes. Never sees content. |
+| **Mobile app** | `niti-mobile/` | Expo (iOS-first) remote control for a running core: watch, steer, approve, pause. All work still runs on the Mac. It imports `niti-app/src/renderer/src/lib/{reducer,types,humanize,identity}.ts` directly, so a change there is checked against the mobile app too. |
+
+The wire protocol all three share is `src/remote/protocol.ts`.
+
 (The archived v1 Ink TUI in `old-tech/`, a VS Code fork in `ide/` and an earlier Electron app in
 `desktop/` were deleted in October 2026; none of them exists.)
 
 **Rules, in order of how easy they are to break by accident:**
 
-1. **Never put changes to two products in one commit** — a mirrored change is two commits. If a file you need to edit already has
+1. **Never put changes to two products in one commit** — a mirrored change is two commits. The relay
+   and the mobile app count as products here: their changes get their own commits too. If a file you need to edit already has
    uncommitted changes belonging to the other product, say so and ask — do not sweep them in. Check
    `git status` before you start, not after.
 2. **Keep the two uniform.** They are the same product bundled differently, so a change on one side
@@ -30,7 +40,9 @@ niti ships **one product in two packagings** from this repository:
    that lists project files must honour that same set — `filegraph.test.ts` asserts it, so if you
    are about to make that test pass by editing the test, you have it backwards. IGNORE matches any
    path segment, so only add names a user's own project won't use (`niti-app`, not `app`).
-4. **`niti-app/node_modules` is ~630MB and `niti-app/release` holds packaged apps.** Never
+   `niti-relay/` and `niti-mobile/` are in that set for the same reason.
+4. **`niti-app/node_modules` is ~630MB and `niti-app/release` holds packaged apps** (`niti-mobile/` and
+   `niti-relay/` have their own `node_modules` too). Never
    `git add -A` at the repo root. Never point a directory walk at the repo root without a boundary.
 
 # UI & Design System Rules
