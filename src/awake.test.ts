@@ -29,3 +29,17 @@ test.skipIf(process.platform !== "darwin")("/awake starts a root watchdog and re
   expect(awakeMode()).toBe("off");
   expect(states).toEqual(["lid", "off", "lid", "off"]); // what the TUI/app indicators follow
 });
+
+test.skipIf(process.platform !== "darwin")("/awake holds across a goal's rounds and lets go when the goal ends", async () => {
+  const hub = new EventHub();
+  let goalRunning = true;
+  let script = "";
+  await arm(hub, async (s) => ((script = s), true), () => goalRunning);
+  const flag = script.match(/-e "([^"]+)"/)![1]!;
+  hub.publish({ kind: "session", state: "ended" }); // round 1 ends
+  expect(existsSync(flag)).toBe(true);
+  goalRunning = false;
+  hub.publish({ kind: "goal", status: null }); // the goal ends
+  expect(existsSync(flag)).toBe(false);
+  expect(awakeMode()).toBe("off");
+});

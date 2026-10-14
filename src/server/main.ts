@@ -83,6 +83,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   });
   notify = (payload) => engine.bus.publish({ agentId: "orchestrator", type: "error", payload, time: Date.now() });
   engine.orch.load(loadTasks()); // show any prior tasks on connect
+  engine.goal.load(); // a goal the last core left behind comes back paused
 
   const server = startServer(engine, { port: opts.port, theme: options.theme, prefs: options });
   // Handshake — the ONLY thing on stdout, first line, machine-readable for the Go TUI.

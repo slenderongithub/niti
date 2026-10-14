@@ -33,7 +33,9 @@ export function release(): void {
   hub.publish({ kind: "awake", state: "off" });
 }
 
-export async function arm(hub: EventHub, elevate: Elevate = osascript): Promise<{ ok: boolean; message: string }> {
+// `keep`: while it says true, a run ending doesn't release — /goal holds sleep off across all its
+// rounds and lets go when the goal itself ends (its `goal` event).
+export async function arm(hub: EventHub, elevate: Elevate = osascript, keep: () => boolean = () => false): Promise<{ ok: boolean; message: string }> {
   if (process.platform !== "darwin") return { ok: false, message: "/awake is macOS only" };
   if (armed) return { ok: true, message: "already awake — sleep comes back when the run finishes" };
   const flag = join(tmpdir(), `niti-awake-${process.pid}`);
@@ -42,7 +44,8 @@ export async function arm(hub: EventHub, elevate: Elevate = osascript): Promise<
   // The redirect + & matter: without them `do shell script` waits for the watchdog to exit.
   const root = await elevate(`pmset -a disablesleep 1 || exit 1; nohup sh -c '${watch}' >/dev/null 2>&1 &`);
   const unsub = hub.subscribe((e) => {
-    if (e.kind === "session" && (e.state === "ended" || e.state === "cancelled")) release();
+    if (keep()) return;
+    if ((e.kind === "session" && (e.state === "ended" || e.state === "cancelled")) || e.kind === "goal") release();
   });
   if (root) {
     armed = { hub, flag, unsub };

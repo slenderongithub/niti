@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const DEFAULT_DB = ".niti/niti.db";
@@ -112,7 +112,7 @@ const USER_VERSION = 2;
 
 // Everything niti generates under .niti/. agents.yaml is meant to be shared and committed; the rest
 // is per-machine state, and niti.db holds full transcripts, every written file and the audit log.
-const GITIGNORE = "# niti's own state: per machine, and it holds transcripts. agents.yaml is meant to be committed.\nniti.db*\nsession.json\ncore.log*\nlogs/\nreports/\nworktrees/\n*.tmp\n";
+const GITIGNORE = "# niti's own state: per machine, and it holds transcripts. agents.yaml is meant to be committed.\nniti.db*\nsession.json\ngoal.json\ncore.log*\nlogs/\nreports/\nworktrees/\n*.tmp\n";
 
 // Open (creating if needed) and migrate. ":memory:" is honoured for tests.
 export function openDb(path: string = DEFAULT_DB): Database {
@@ -120,6 +120,8 @@ export function openDb(path: string = DEFAULT_DB): Database {
     mkdirSync(dirname(path), { recursive: true });
     const ignore = join(dirname(path), ".gitignore");
     if (!existsSync(ignore)) writeFileSync(ignore, GITIGNORE);
+    // goal.json came later than the file did: add it to one an older niti wrote.
+    else if (!readFileSync(ignore, "utf8").includes("goal.json")) appendFileSync(ignore, "goal.json\n");
   }
   const db = new Database(path, { create: true });
   // WAL keeps *readers* unblocked, but two writers still collide — and two niti processes on one

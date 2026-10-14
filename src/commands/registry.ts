@@ -8,6 +8,7 @@ import { loadSkills, frontmatter } from "../skills/skills.ts";
 import { isGitRepo, snapshotBranch } from "../orchestrator/worktree.ts";
 import { buildExportReport } from "./export.ts";
 import { arm, release } from "../awake.ts";
+import { parseGoalArgs } from "../goal.ts";
 
 // Slash commands live here, on the server, rather than in the Go TUI's key handler — otherwise the
 // web dashboard needs an identical second implementation of every one of them. Clients fetch the
@@ -69,7 +70,41 @@ export const BUILTIN_COMMANDS: Command[] = [
         release();
         return { ok: true, message: "awake off — normal sleep restored" };
       }
-      return arm(engine.hub);
+      // Held for a whole /goal, not just the round that happens to be running.
+      return arm(engine.hub, undefined, () => engine.goal.holdsAwake);
+    },
+  },
+  {
+    name: "goal",
+    description: "Keep working toward an objective, round after round, until it's met: /goal <objective> [--rounds N] [--tokens N] [--usd N] · pause|resume|stop|status|note <text>",
+    async run(engine, args) {
+      const [sub = "", ...rest] = args.trim().split(/\s+/);
+      const text = rest.join(" ");
+      switch (sub) {
+        case "":
+        case "status":
+          return { ok: true, message: engine.goal.describe() };
+        case "pause":
+          return { ok: true, message: engine.goal.pause() };
+        case "resume":
+          return { ok: true, message: engine.goal.resume() };
+        case "stop":
+          return { ok: true, message: engine.goal.stop() };
+        case "note":
+          if (!text) return { ok: false, message: "usage: /goal note <text>" };
+          return { ok: true, message: engine.goal.note(text) };
+        case "more": {
+          const more = parseGoalArgs(`x ${text}`);
+          if (typeof more === "string") return { ok: false, message: "usage: /goal more [--rounds N] [--tokens N] [--usd N]" };
+          return { ok: true, message: engine.goal.extend({ rounds: /--rounds/.test(text) ? more.rounds : undefined, tokens: more.tokens, usd: more.usd }) };
+        }
+      }
+      const parsed = parseGoalArgs(args);
+      if (typeof parsed === "string") return { ok: false, message: parsed };
+      const err = engine.goal.start(parsed.objective, parsed);
+      if (err) return { ok: false, message: err };
+      const limits = [`${parsed.rounds} rounds`, ...(parsed.tokens ? [`${parsed.tokens} tokens`] : []), ...(parsed.usd ? [`$${parsed.usd}`] : [])];
+      return { ok: true, message: `goal set (at most ${limits.join(", ")}) — /goal note steers it, /goal pause or esc pauses it, /goal stop ends it` };
     },
   },
   {
@@ -273,7 +308,9 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: "Wipe this session — board, conversation context, usage and screen — and start clean",
     async run(engine) {
       if (engine.running) return { ok: false, message: "cancel the running task first" };
+      if (engine.goal.exists) return { ok: false, message: "a goal is still active — /goal stop it first" };
       const n = engine.resetSession();
+      engine.goal.clear();
       saveTasks([]); // otherwise a restart resurrects the board this just cleared
       return { ok: true, message: n ? `session cleared (${n} task${n === 1 ? "" : "s"} dropped)` : "session cleared" };
     },

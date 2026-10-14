@@ -1,8 +1,10 @@
 // A scripted OpenAI-compatible chat server for end-to-end tests of niti. No network, no cost.
 // Behaviour: planner prompts get a 2-task plan; a worker with no tool result yet writes a file;
-// after a tool result it finishes; anything else gets a short text answer.
+// after a tool result it finishes; /goal's judge says "not yet" once, then "done"; anything else
+// gets a short text answer.
 const port = Number(process.argv[2] ?? 47990);
 const log: string[] = [];
+let judged = 0; // /goal's judge: "not yet" the first time, "done" after that
 
 function reply(body: any): { text?: string; tool?: { name: string; args: unknown } } {
   const msgs: any[] = body.messages ?? [];
@@ -20,6 +22,10 @@ function reply(body: any): { text?: string; tool?: { name: string; args: unknown
       { id: "t1", description: "create index.html with a heading" + (goal.includes("SLOW") ? " SLOW" : ""), role: "backend" },
       { id: "t2", description: "create style.css", role: "frontend", dependsOn: ["t1"] },
     ]) };
+  }
+  if (lastText.includes("NITI-GOAL-JUDGE")) {
+    log.push("JUDGE");
+    return { text: JSON.stringify(judged++ === 0 ? { done: false, reason: "only half there", next: "finish the styling" } : { done: true, reason: "both files exist" }) };
   }
   const texts = msgs.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
   const directive = texts.match(/CALL:(\{.*?\})END/s);

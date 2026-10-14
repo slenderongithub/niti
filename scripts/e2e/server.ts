@@ -104,7 +104,7 @@ try {
 
   // --- commands list
   const list = ((await (await get("/commands")).json()) as any).commands.map((c: any) => c.name);
-  for (const n of ["auto", "manual", "cancel", "rewind", "branch", "model", "sessions", "agents", "tasks", "skills", "mcp", "lsp", "permissions", "cost", "status", "debate", "export", "resume", "clear", "init", "help", "usage"]) {
+  for (const n of ["auto", "manual", "cancel", "goal", "rewind", "branch", "model", "sessions", "agents", "tasks", "skills", "mcp", "lsp", "permissions", "cost", "status", "debate", "export", "resume", "clear", "init", "help", "usage"]) {
     check(`command listed: /${n}`, list.includes(n), list.join(","));
   }
 
@@ -248,6 +248,20 @@ try {
   check("/debate starts", db.ok, JSON.stringify(db));
   await idle(60_000);
   check("debate produced a synthesis", transcript().includes("[debate synthesis]"));
+
+  // --- /goal: rounds until the judge says done (fakellm: "not yet" once, then "done")
+  await cmd("clear");
+  const g = await cmd("goal", "make a page --rounds 4");
+  check("/goal starts", g.ok, JSON.stringify(g));
+  check("/prompt refused while a goal runs", (await post("/prompt", { text: "something else" })).status === 409);
+  check("/goal note while running", (await cmd("goal", "note keep it simple")).ok);
+  await idle(60_000);
+  const gs = ((await (await post("/session")).json()) as any).goal;
+  check("goal reached done in 2 rounds", gs?.state === "done" && gs?.round === 2, JSON.stringify(gs));
+  check("goal events streamed", events.some((e) => e.kind === "goal" && e.status?.state === "running"));
+  check("a summary card per round", events.filter((e) => e.kind === "turn_summary").length >= 2);
+  check("goal.json saved", JSON.parse(readFileSync(join(P, ".niti/goal.json"), "utf8")).status?.state === "done");
+  check("/clear after a finished goal", (await cmd("clear")).ok && ((await (await post("/session")).json()) as any).goal === null);
 
   // --- export, branch, init, cancel, clear
   const ex = await cmd("export");

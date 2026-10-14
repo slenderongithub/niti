@@ -29,6 +29,7 @@ import { watchProject, type ProjectWatcher } from "./watch.ts";
 import { TOOL_GUIDANCE, HASHLINE_GUIDANCE } from "./tools/tools.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
 import { release as releaseAwake } from "./awake.ts";
+import { GoalLoop, type GoalHost, type RoundResult } from "./goal.ts";
 import { isGitRepo, createWorktree, diffStat, diffPatchZeroContext, commitPending, mergeBack, mergeFiles, removeWorktree, discardWorktree, abortMerge, type WorktreeHandle } from "./orchestrator/worktree.ts";
 
 interface EngineOptions {
@@ -99,6 +100,8 @@ export class Engine {
   private readonly permissionLayers: PermissionRules[];
   private busy = false;
   private cancelled = false;
+  // Files the run in flight has edited (path → lines added/removed), for its summary and /goal.
+  private runFiles = new Map<string, { added: number; removed: number }>();
   private watcher?: ProjectWatcher;
   private readonly worktreeEnabled: boolean;
 
@@ -251,6 +254,68 @@ export class Engine {
     this.approvals.onChange(() => this.hub.publish({ kind: "approval_request", requests: this.pendingApprovals() }));
     // Resume: reseed the notes board from disk so a note written before a restart is still visible.
     if (this.store) this.messageBus.hydrateNotes(this.store.listNotes());
+    this.goal = new GoalLoop(this.goalHost());
+  }
+
+  // /goal — see goal.ts. Loaded from .niti/goal.json by the server at boot (GoalLoop.load), not
+  // here, so an engine built in a test never picks up whatever a real session left behind.
+  readonly goal: GoalLoop;
+
+  private goalHost(): GoalHost {
+    const engine = this;
+    return {
+      root: this.root,
+      hub: this.hub,
+      history: this.history,
+      get worktreeHandle() {
+        return engine.worktreeHandle;
+      },
+      set worktreeHandle(h) {
+        engine.worktreeHandle = h;
+      },
+      get busy() {
+        return engine.busy;
+      },
+      spent: () => ({ tokens: this.totalTokens(), cost: this.cost().cost }),
+      runRound: async (prompt, label, judge) => {
+        let verdict: Awaited<ReturnType<typeof judge>> | undefined;
+        const r = await this.submit(prompt, {
+          goalRound: true,
+          label,
+          // Inside the run: covered by `busy` and the abort controller, so /cancel stops it too.
+          after: async (round) => {
+            verdict = await judge(round);
+          },
+        });
+        return { ...r, verdict };
+      },
+      // Read-only tools, so the judge can check the work rather than take the summary's word for it.
+      ask: (prompt) => this.lead().answer(prompt),
+      stopRun: () => this.cancel(),
+      tellTeam: (text) => this.tellTeam(text),
+      commitRound: async (message) => {
+        if (this.worktreeHandle) await commitPending(this.worktreeHandle, message);
+      },
+    };
+  }
+
+  private lead(): Agent {
+    const lead = this.agents.find((a) => a.config.lead) ?? this.agents[0];
+    if (!lead) throw new Error("no agents configured");
+    return lead;
+  }
+
+  // An operator note for whoever is working right now. While the lead is still planning it goes to
+  // the whole team once (the work may land on anyone); otherwise to each agent mid-task. False when
+  // nobody is working — the caller keeps it for the next round instead.
+  tellTeam(text: string): boolean {
+    const working = this.agents.filter((a) => a.busy).map((a) => a.config.id);
+    if (!this.busy || !working.length) return false;
+    const planning = !this.orch.all.some((t) => t.status === "in_progress");
+    const targets = planning ? ["*"] : working;
+    for (const to of targets) this.messageBus.post({ from: USER, to, kind: to === "*" ? "broadcast" : "handoff", subject: text.slice(0, 70), body: text });
+    for (const id of working) this.bus.publish({ agentId: id, type: "message", payload: `[from user] ${text}`, time: Date.now() });
+    return true;
   }
 
   // The *declared* prompt, not the augmented one. Agents run with systemPrompt + skills text +
@@ -264,8 +329,9 @@ export class Engine {
     });
   }
 
+  // A run is in flight, or a goal holds the floor between its rounds.
   get running(): boolean {
-    return this.busy;
+    return this.busy || this.goal.active;
   }
 
   pendingApprovals(): { id: number; agentId: string; tool: string; input: Record<string, unknown>; dangerous: boolean }[] {
@@ -275,21 +341,37 @@ export class Engine {
   // Run a goal end-to-end: plan → schedule → integrate. Emits session start/end and persists tasks.
   // planOnly stops after the DAG is built, so you can read the plan (and edit agents.yaml, or say
   // it differently) before any agent writes a file — the TUI's PLAN mode.
-  async submit(goal: string, opts: { planOnly?: boolean } = {}): Promise<void> {
+  //
+  // For /goal: `label` is what clients and the planner's memory see instead of the long round
+  // prompt, `goalRound` lets the goal's own rounds through while it holds the floor (and continues
+  // in its worktree), and `after` runs inside the run once
+  // the work is done (the goal's judge) — so it holds the run and /cancel stops it.
+  async submit(
+    goal: string,
+    opts: { planOnly?: boolean; goalRound?: boolean; label?: string; after?: (r: RoundResult) => Promise<void> } = {},
+  ): Promise<RoundResult> {
     // A fresh goal gets no priorTurns (nothing from an earlier run's task transcripts bleeds in), but
     // it does get the recent exchanges, so "now add tests" knows what "it" was.
     this.lastSummary = undefined;
     let result: RunResult | undefined;
+    const label = opts.label ?? goal;
     await this.runSession(
-      goal,
+      label,
       async (deps) => {
         result = await runProject(goal, this.agents, this.orch, this.bus, { ...deps, planOnly: opts.planOnly, history: this.history });
+        if (opts.after && !this.cancelled) await opts.after(this.roundResult(result));
       },
       () => result?.kind === "work" && !opts.planOnly, // a chat reply or an answer gets no summary card
+      opts.goalRound,
     );
     const outcome = result?.text ?? this.lastSummary ?? `${this.orch.all.filter((t) => t.status === "done").length} of ${this.orch.all.length} tasks done`;
-    this.history.push({ goal, outcome });
+    this.history.push({ goal: label, outcome });
     if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
+    return this.roundResult(result);
+  }
+
+  private roundResult(result: RunResult | undefined): RoundResult {
+    return { kind: result?.kind, cancelled: this.cancelled, summary: this.lastSummary ?? result?.text ?? "", files: [...this.runFiles.keys()] };
   }
 
   // Conversation memory for the planner (see Exchange). /clear empties it along with the board.
@@ -318,13 +400,16 @@ export class Engine {
     );
   }
 
-  private async runSession(goal: string, run: (deps: RunnerDeps) => Promise<unknown>, summarize: () => boolean = () => true): Promise<void> {
-    if (this.busy) throw new Error("a task is already running");
+  private async runSession(goal: string, run: (deps: RunnerDeps) => Promise<unknown>, summarize: () => boolean = () => true, goalRound = false): Promise<void> {
+    if (this.busy || (this.goal.active && !goalRound)) throw new Error("a task is already running");
     // Claimed before the first await below: worktree setup is async, and a second submit arriving
     // during it used to pass the check above and start a second run beside the first.
     this.busy = true;
     try {
-      if (this.worktreeEnabled) {
+      if (this.worktreeEnabled && goalRound && this.worktreeHandle) {
+        // A goal's later rounds continue in the worktree its first round made.
+        for (const a of this.agents) a.setRoot(this.worktreeHandle.workDir);
+      } else if (this.worktreeEnabled) {
         if (this.worktreeHandle) {
           throw new Error(`a previous run's worktree (${this.worktreeHandle.branch}) hasn't been merged yet — merge or discard it first`);
         }
@@ -348,6 +433,7 @@ export class Engine {
     const started = Date.now();
     const before = { tokens: this.totalTokens(), cost: this.cost().cost };
     const files = new Map<string, { added: number; removed: number }>();
+    this.runFiles = files;
     const stopWatching = this.bus.subscribe((e) => {
       if (e.type !== "file_edit" || !e.path || e.phase !== "end") return;
       const f = files.get(e.path) ?? { added: 0, removed: 0 };
@@ -405,7 +491,7 @@ export class Engine {
   async discardWorktree(): Promise<{ ok: boolean; message: string }> {
     const handle = this.worktreeHandle;
     if (!handle) return { ok: false, message: "no pending worktree" };
-    if (this.busy) return RUNNING;
+    if (this.running) return RUNNING;
     try {
       await discardWorktree(this.root, handle);
     } catch (err) {
@@ -438,7 +524,7 @@ export class Engine {
   async mergeWorktree(files?: string[]): Promise<{ ok: boolean; message: string }> {
     const handle = this.worktreeHandle;
     if (!handle) return { ok: false, message: "no active worktree" };
-    if (this.busy) return RUNNING;
+    if (this.running) return RUNNING;
     await commitPending(handle); // agents write files directly, never commit as they go
     const result = files ? await mergeFiles(this.root, handle.branch, files) : await mergeBack(this.root, handle.branch);
     if (result.ok) {
@@ -475,6 +561,7 @@ export class Engine {
 
   cancel(): void {
     this.cancelled = true;
+    this.goal.onCancel(); // esc or /cancel during a goal stops the round and pauses the goal
     this.abortCtl?.abort(); // and stop the model calls in flight, not just the next turn
     // An agent parked on an approval is not "in flight" in any useful sense — it is waiting on a
     // human who has just said stop. Without this the promise never settles: the agent never
@@ -493,7 +580,7 @@ export class Engine {
   // agent that made the write, so the TUI's Files panel and that agent's transcript follow it.
   rewind(n: number): string {
     if (!this.store) return "rewind needs a session store (run through the CLI or server)";
-    if (this.busy) return "a task is running — cancel it first, or wait for it to finish";
+    if (this.running) return "a task is running — cancel it first, or wait for it to finish";
     const results = this.store.rewindN(n, undefined, this.sessionStart);
     if (results.length === 0) return "nothing to rewind";
     const shown = results.map((r) => ({ ...r, rel: relative(this.root, r.path) || r.path }));
@@ -551,7 +638,7 @@ export class Engine {
     const b = this.byId.get(agentBId);
     if (!a || !b) return `no such agent: ${!a ? agentAId : agentBId}`;
     if (a === b) return "debate needs two different agents";
-    if (this.busy) return "a task is running — cancel it first, or wait for it to finish";
+    if (this.running) return "a task is running — cancel it first, or wait for it to finish";
 
     this.busy = true;
     this.cancelled = false;
