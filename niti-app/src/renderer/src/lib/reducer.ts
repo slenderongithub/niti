@@ -8,6 +8,7 @@ import type {
   ApprovalRequest,
   AwakeState,
   GoalStatus,
+  RemoteState,
   HunkLine,
   OrchestrationEvent,
   RateLimitSnapshot,
@@ -102,6 +103,7 @@ export interface SessionState {
   active: boolean;
   awake: AwakeState; // /awake — the status-bar chip
   goalStatus: GoalStatus | null; // /goal — the status-bar chip, and where the composer sends text while it is live
+  remote: RemoteState | null; // remote control — the status-bar chip
   progress: number;
   status: string;
   plannedGoal: string; // the goal last planned in Plan mode: sending it in Build runs that plan
@@ -142,6 +144,7 @@ export function emptyState(): SessionState {
     active: false,
     awake: "off",
     goalStatus: null,
+    remote: null,
     progress: 0,
     status: "",
     plannedGoal: "",
@@ -175,6 +178,7 @@ export function fromSession(info: SessionInfo, prev?: SessionState): SessionStat
   s.active = info.running;
   s.awake = info.awake ?? "off";
   s.goalStatus = info.goal ?? null;
+  s.remote = info.remote ?? null;
   s.tasks = info.tasks ?? [];
   info.agents.forEach((cfg, i) => {
     const old = prev?.agents[cfg.id];
@@ -515,7 +519,7 @@ function resetSession(d: Draft) {
     agents[id] = { ...a, status: "idle", activity: "", usage: zeroUsage(), items: [], todos: null };
   }
   const keep = d.s;
-  d.s = { ...emptyState(), ready: true, root: keep.root, agents, order: keep.order, leadId: keep.leadId, lastSeq: keep.lastSeq, nextId: keep.nextId, fileEpoch: keep.fileEpoch + 1, awake: keep.awake, goalStatus: keep.goalStatus, status: "session cleared" }; // /clear wipes the transcript, not the Mac's sleep state
+  d.s = { ...emptyState(), ready: true, root: keep.root, agents, order: keep.order, leadId: keep.leadId, lastSeq: keep.lastSeq, nextId: keep.nextId, fileEpoch: keep.fileEpoch + 1, awake: keep.awake, goalStatus: keep.goalStatus, remote: keep.remote, status: "session cleared" }; // /clear wipes the transcript, not the Mac's sleep state
 }
 
 function applyEvent(d: Draft, e: ServerEvent) {
@@ -601,6 +605,9 @@ function applyEvent(d: Draft, e: ServerEvent) {
       break;
     case "goal":
       d.s.goalStatus = e.status;
+      break;
+    case "remote":
+      d.s.remote = e.remote;
       break;
     case "theme":
       break;

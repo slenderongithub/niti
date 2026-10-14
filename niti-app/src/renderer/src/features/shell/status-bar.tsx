@@ -1,4 +1,4 @@
-import { ShieldCheck, Zap, Gauge, WifiOff, Coins, Cpu, Coffee, Target } from "lucide-react";
+import { ShieldCheck, Zap, Gauge, WifiOff, Coins, Cpu, Coffee, Target, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -26,6 +26,12 @@ export function StatusBar() {
     return g ? [g.state, g.round, g.maxRounds, g.objective, g.reason].join("\u0001") : "";
   });
   const [goalState, goalRound, goalMax, goalObjective, goalReason] = goalKey.split("\u0001");
+  // Remote control, once this Mac is signed in: "" when off, else "<link>\u0001<phones watching>".
+  const remoteKey = useApp((x) => {
+    const r = x.session.remote;
+    return r?.signedIn && r.enabled && r.link !== "off" ? `${r.link}\u0001${r.phones.filter((p) => p.online).length}` : "";
+  });
+  const [remoteLink, remoteWatching] = remoteKey.split("\u0001");
   const info = useApp((x) => x.sessionInfo);
   const api = useApp((x) => x.api);
   const setAuto = useApp((x) => x.setAutoLocal);
@@ -91,6 +97,19 @@ export function StatusBar() {
               {goalObjective}
               {goalReason ? ` — ${goalReason}` : ""}. While it is live, what you type is a note to it. Click for details.
             </TooltipContent>
+          </Tooltip>
+        )}
+      </span>
+      <span role="status" aria-atomic="true" className="contents">
+        {remoteKey && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className={cn("flex items-center gap-1 px-1.5", remoteLink === "up" ? "text-success" : "text-muted-foreground")}>
+                <Smartphone className="size-3" aria-hidden />
+                {remoteLink === "up" ? (Number(remoteWatching) > 0 ? `${remoteWatching} watching` : "remote") : "remote · connecting"}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">Phones signed in to your niti account can control this project. /remote lists them; /remote revoke signs one out.</TooltipContent>
           </Tooltip>
         )}
       </span>

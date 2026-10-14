@@ -201,3 +201,12 @@ test("/goal: the snapshot seeds it, events move it, /clear keeps it, and a round
   expect(s.goalStatus).toBeNull();
   expect(fromSession(info()).goalStatus).toBeNull(); // an older core sends no field
 });
+
+test("remote control: the snapshot seeds it, events move it, /clear keeps it", () => {
+  const r = { signedIn: true, enabled: true, link: "up", phones: [{ id: "p", name: "iPhone", online: true }] } as const;
+  let s = fromSession(info({ remote: { ...r, phones: [...r.phones] } }));
+  expect(s.remote?.link).toBe("up");
+  s = applyEvents(s, [ev({ kind: "session_reset" }), ev({ kind: "remote", remote: { ...r, link: "connecting", phones: [] } })]);
+  expect(s.remote?.link).toBe("connecting");
+  expect(fromSession(info()).remote).toBeNull();
+});

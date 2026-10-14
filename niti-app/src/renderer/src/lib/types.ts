@@ -63,6 +63,17 @@ export interface SessionInfo {
   theme?: string;
   awake?: AwakeState; // absent from an older core
   goal?: GoalStatus | null; // /goal; absent from an older core
+  remote?: RemoteState | null; // remote control; absent from an older core
+}
+
+// Remote control (src/remote/bridge.ts RemoteState).
+export interface RemoteState {
+  signedIn: boolean;
+  email?: string;
+  relay?: string;
+  enabled: boolean;
+  link: "up" | "connecting" | "off";
+  phones: { id: string; name: string; online: boolean }[];
 }
 
 // /goal: the persistent objective (src/goal.ts GoalStatus).
@@ -219,6 +230,7 @@ type ServerEventBody =
   | { kind: "theme"; theme: string }
   | { kind: "awake"; state: AwakeState }
   | { kind: "goal"; status: GoalStatus | null }
+  | { kind: "remote"; remote: RemoteState }
   | { kind: "session_reset" }
   | ({ kind: "turn_summary" } & TurnSummary)
   | { kind: "resync"; missed: number }
