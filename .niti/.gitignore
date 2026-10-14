@@ -1,0 +1,8 @@
+# niti's own state: per machine, and it holds transcripts. agents.yaml is meant to be committed.
+niti.db*
+session.json
+core.log*
+logs/
+reports/
+worktrees/
+*.tmp
