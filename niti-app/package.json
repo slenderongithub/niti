@@ -1,7 +1,7 @@
 {
   "name": "niti-app",
   "productName": "niti",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "The niti desktop app: a team of AI coding agents on one project.",
   "author": "Shubhadeep Datta <slenderisincollege@gmail.com>",
   "license": "MIT",
