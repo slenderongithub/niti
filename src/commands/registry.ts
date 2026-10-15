@@ -96,7 +96,7 @@ export const BUILTIN_COMMANDS: Command[] = [
           // `--relay <url>` is for a relay of your own (or a local one while developing).
           const relayAt = rest.indexOf("--relay");
           const relay = relayAt >= 0 ? rest[relayAt + 1] : undefined;
-          const email = rest.filter((_, i) => i !== relayAt && i !== relayAt + 1)[0];
+          const email = rest.find((_, i) => relayAt < 0 || (i !== relayAt && i !== relayAt + 1));
           setOption("remote", true); // saved first, like /auto
           r.setEnabled(true);
           if (email) return r.signIn(email, relay);

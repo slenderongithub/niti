@@ -10,8 +10,9 @@ import { deviceId, newDeviceKeys, newStatusKey, type DeviceKeys } from "./protoc
 // and the desktop app's alike), so signing in from either signs the Mac in. A 0600 file next to
 // auth.json; NITI_REMOTE_FILE points tests elsewhere so a test core never dials a real relay.
 
-// The hosted relay. Empty until one is deployed (niti-relay/): until then, sign in with --relay.
-export const DEFAULT_RELAY = process.env.NITI_RELAY_URL ?? "";
+// The relay every niti uses unless told otherwise (`/remote on <email> --relay`, or NITI_RELAY_URL):
+// niti-relay/ on Cloudflare's free plan.
+export const DEFAULT_RELAY = process.env.NITI_RELAY_URL ?? "https://niti-relay.niti-relay.workers.dev";
 
 export interface Phone {
   id: string;
