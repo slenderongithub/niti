@@ -1,13 +1,17 @@
 import { useState } from "react";
 import { KeyboardAvoidingView, ScrollView, View } from "react-native";
 import { router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Animated, { FadeInDown } from "react-native-reanimated";
+import { ArrowRight, Mail } from "lucide-react-native";
 import { useStore } from "@/lib/store";
-import { space } from "@/lib/theme";
-import { Button, Field, Text } from "@/components/ui";
+import { space, type } from "@/lib/theme";
+import { Button, Card, CardContent, CardHeader, Field, Text, Wordmark } from "@/components/ui";
 
-// Sign in once: the same email as on the Mac, then the code from the inbox. The Mac then asks to
-// allow this phone, showing a code to compare with the one on the next screen.
+// Sign in once: the same email as on the Mac, then the code from the inbox. Laid out like the
+// desktop app's launch screen: the wordmark large and left, one line under it, then a card.
 export default function SignIn() {
+  const insets = useSafeAreaInsets();
   const relay = useStore((s) => s.relay);
   const setRelay = useStore((s) => s.setRelay);
   const [email, setEmail] = useState("");
@@ -35,46 +39,63 @@ export default function SignIn() {
 
   return (
     <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
-      <ScrollView contentInsetAdjustmentBehavior="automatic" keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: space(5), gap: space(5) }}>
-        <Text tone="muted">Control niti on your Mac from here. Use the email you signed in with there (/remote login).</Text>
-        {step === "email" ? (
-          <>
-            <Field
-              label="Email"
-              value={email}
-              onChangeText={setEmail}
-              autoCapitalize="none"
-              autoComplete="email"
-              keyboardType="email-address"
-              textContentType="emailAddress"
-              returnKeyType="send"
-              onSubmitEditing={() => void sendCode()}
-              error={error}
-            />
-            <Field label="Relay" value={relay} onChangeText={setRelay} autoCapitalize="none" autoCorrect={false} keyboardType="url" hint="The same relay your Mac uses." />
-            <Button title="Send code" onPress={() => void sendCode()} busy={busy} disabled={!email.includes("@") || !relay} />
-          </>
-        ) : (
-          <>
-            <Text>We sent a 6-digit code to {email}.</Text>
-            <Field
-              label="Code"
-              value={code}
-              onChangeText={(v) => setCode(v.replace(/\D/g, "").slice(0, 6))}
-              keyboardType="number-pad"
-              textContentType="oneTimeCode"
-              autoComplete="one-time-code"
-              autoFocus
-              error={error}
-              style={{ fontSize: 24, letterSpacing: 6 }}
-            />
-            <Button title="Sign in" onPress={() => void verify()} busy={busy} disabled={code.length !== 6} />
-            <View style={{ flexDirection: "row", gap: space(2) }}>
-              <Button kind="ghost" title="Send again" onPress={() => void sendCode()} />
-              <Button kind="ghost" title="Change email" onPress={() => (setStep("email"), setCode(""), setError(undefined))} />
-            </View>
-          </>
-        )}
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: space(5), paddingTop: insets.top + space(16), paddingBottom: insets.bottom + space(8), gap: space(10) }}>
+        <Animated.View entering={FadeInDown.duration(500)} style={{ gap: space(4) }}>
+          <Wordmark size={44} />
+          <Text size={type.base} tone="mutedForeground" style={{ maxWidth: 320 }}>
+            Watch and steer the team running on your Mac, from here.
+          </Text>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(80).duration(500)}>
+          <Card>
+            {step === "email" ? (
+              <>
+                <CardHeader title="Sign in" description="Use the email you signed in with on your Mac (/remote login)." />
+                <CardContent style={{ gap: space(4) }}>
+                  <Field
+                    label="Email"
+                    value={email}
+                    onChangeText={setEmail}
+                    placeholder="you@example.com"
+                    autoCapitalize="none"
+                    autoComplete="email"
+                    keyboardType="email-address"
+                    textContentType="emailAddress"
+                    returnKeyType="send"
+                    onSubmitEditing={() => void sendCode()}
+                    error={error}
+                  />
+                  <Field label="Relay" mono value={relay} onChangeText={setRelay} placeholder="https://" autoCapitalize="none" autoCorrect={false} keyboardType="url" hint="The same relay your Mac uses." style={{ fontSize: 14 }} />
+                  <Button title="Send code" icon={Mail} onPress={() => void sendCode()} busy={busy} disabled={!email.includes("@") || !relay} />
+                </CardContent>
+              </>
+            ) : (
+              <>
+                <CardHeader title="Check your inbox" description={`We sent a 6-digit code to ${email}.`} />
+                <CardContent style={{ gap: space(4) }}>
+                  <Field
+                    label="Code"
+                    mono
+                    value={code}
+                    onChangeText={(v) => setCode(v.replace(/\D/g, "").slice(0, 6))}
+                    keyboardType="number-pad"
+                    textContentType="oneTimeCode"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    error={error}
+                    style={{ fontSize: 24, letterSpacing: 8, minHeight: 56 }}
+                  />
+                  <Button title="Sign in" icon={ArrowRight} onPress={() => void verify()} busy={busy} disabled={code.length !== 6} />
+                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                    <Button variant="ghost" size="sm" title="Send again" onPress={() => void sendCode()} tone="mutedForeground" />
+                    <Button variant="ghost" size="sm" title="Change email" onPress={() => (setStep("email"), setCode(""), setError(undefined))} tone="mutedForeground" />
+                  </View>
+                </CardContent>
+              </>
+            )}
+          </Card>
+        </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
   );

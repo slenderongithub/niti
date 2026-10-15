@@ -6,16 +6,19 @@ import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
 import * as LocalAuthentication from "expo-local-authentication";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useFonts, JetBrainsMono_400Regular } from "@expo-google-fonts/jetbrains-mono";
+import { useFonts } from "expo-font";
+import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
+import { JetBrainsMono_400Regular, JetBrainsMono_500Medium, JetBrainsMono_600SemiBold } from "@expo-google-fonts/jetbrains-mono";
+import { Lock } from "lucide-react-native";
 import { useStore } from "@/lib/store";
 import { registerForPush } from "@/lib/push";
 import { loadPrefs } from "@/lib/prefs";
-import { useTheme } from "@/lib/theme";
-import { Button, Text } from "@/components/ui";
+import { fonts as F, space, type, useTheme } from "@/lib/theme";
+import { Button, Text, Wordmark } from "@/components/ui";
 
 export default function RootLayout() {
   const t = useTheme();
-  const [fonts] = useFonts({ JetBrainsMono_400Regular });
+  const [fonts] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, JetBrainsMono_400Regular, JetBrainsMono_500Medium, JetBrainsMono_600SemiBold });
   const ready = useStore((s) => s.ready);
   const link = useStore((s) => s.snap.link);
   const locked = useLock();
@@ -51,16 +54,19 @@ export default function RootLayout() {
         screenOptions={{
           headerStyle: { backgroundColor: t.background },
           headerTintColor: t.primary,
-          headerTitleStyle: { color: t.foreground },
+          headerTitleStyle: { color: t.foreground, fontFamily: F.sans.semibold, fontSize: 16 },
+          headerLargeTitleStyle: { color: t.foreground, fontFamily: F.sans.semibold },
+          headerBackTitleStyle: { fontFamily: F.sans.regular },
           headerShadowVisible: false,
           contentStyle: { backgroundColor: t.background },
         }}
       >
         <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="sign-in" options={{ title: "Sign in", headerLargeTitle: true }} />
-        <Stack.Screen name="macs" options={{ title: "Your Macs", headerLargeTitle: true, headerBackVisible: false }} />
-        <Stack.Screen name="session/[mac]/[session]" options={{ title: "" }} />
-        <Stack.Screen name="approval" options={{ presentation: "formSheet", sheetAllowedDetents: [0.6, 1], sheetGrabberVisible: true, headerShown: false }} />
+        <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+        <Stack.Screen name="macs" options={{ title: "Projects", headerLargeTitle: true, headerBackVisible: false }} />
+        <Stack.Screen name="session/[mac]/[session]/index" options={{ title: "" }} />
+        <Stack.Screen name="session/[mac]/[session]/agent/[id]" options={{ title: "" }} />
+        <Stack.Screen name="approval" options={{ presentation: "formSheet", sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true, headerShown: false, contentStyle: { backgroundColor: t.background } }} />
         <Stack.Screen name="settings" options={{ presentation: "modal", title: "Settings" }} />
       </Stack>
     </>
@@ -88,11 +94,12 @@ function LockScreen({ onUnlock }: { onUnlock: () => Promise<void> }) {
   const t = useTheme();
   useEffect(() => void onUnlock(), []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <View style={{ flex: 1, backgroundColor: t.background, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 }}>
-      <Text size={20} weight="600">
-        niti is locked
+    <View style={{ flex: 1, backgroundColor: t.background, alignItems: "center", justifyContent: "center", gap: space(6), padding: space(6) }}>
+      <Wordmark size={type.display} align="center" />
+      <Text size={type.sm} tone="mutedForeground">
+        Locked. Face ID opens it.
       </Text>
-      <Button title="Unlock" onPress={() => void onUnlock()} />
+      <Button title="Unlock" icon={Lock} onPress={() => void onUnlock()} style={{ alignSelf: "stretch" }} />
     </View>
   );
 }

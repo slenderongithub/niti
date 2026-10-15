@@ -9,8 +9,18 @@ It shares code with the rest of the repo rather than copying it:
 
 - `../src/remote/protocol.ts`: the wire protocol and encryption.
 - `../niti-app/src/renderer/src/lib/`: the desktop app's session reducer and types.
+- `../niti-app/src/renderer/src/assets/avatars/`: the agents' pixel avatars.
 
 A change to either is checked against this app too (`npm run typecheck`).
+
+## Design
+
+It wears the desktop app's design language, redrawn for a phone: the same colour tokens
+(`src/lib/colors.ts`, checked against `niti-app/.../styles/globals.css` by `colors.test.ts`), Inter
+and JetBrains Mono, the same radii, the shadcn variants as React Native components
+(`src/components/ui.tsx`), the agents rail and transcript rows (`src/components/items.tsx`), the
+braille spinner and the `niti.` wordmark. Type runs two points above the desktop's, and every control
+reaches 44pt. A design change on the desktop gets its matching change here.
 
 ## Run it
 
