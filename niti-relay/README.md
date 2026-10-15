@@ -6,13 +6,15 @@ The relay between niti on a Mac and the niti phone app. It does three things:
   then on the key is the credential: a device proves itself by signing a challenge on every
   connect. There are no bearer tokens to steal.
 - **Routing.** One WebSocket per device. A phone's frames reach a Mac session only after that Mac
-  has allowed the phone (once, with a matching code shown on both screens). Each frame is
+  has allowed the phone (once, with a matching code shown on both screens). Before that, only the
+  small cleartext pairing exchange behind that code passes between them. Each frame is
   end-to-end encrypted with keys made fresh on every connection, so the relay only ever sees
   ciphertext, device names, emails and push tokens.
 - **Push.** Content-light notifications through Expo (approval needed, goal finished, Mac went
   offline), sent only to allowed phones that aren't connected right now.
 
-The protocol lives in `../src/remote/protocol.ts`, shared with the core and the app.
+The protocol lives in `../src/remote/protocol.ts`, shared with the core and the app. How it all fits:
+`../project_context.md`.
 
 ## Run it
 
