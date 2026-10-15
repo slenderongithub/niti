@@ -87,7 +87,16 @@ test("sign in on both sides, allow the phone once with matching codes, then driv
   expect(s0.allowed).toBe(false);
   await expect(w.phone.open(s0.mac, s0.session, 500)).rejects.toThrow();
 
-  w.engine.approvals.answer(true, undefined, undefined, ask.id);
+  // The app restarts mid-way: it pairs again, and the Mac's request is replaced by one with the new code.
+  w.phone.stop();
+  w.phone.connect();
+  await until(() => w.engine.pendingApprovals().some((r) => r.agentId === "remote" && r.id !== ask.id), "the replaced allow request");
+  expect(w.engine.pendingApprovals().filter((r) => r.agentId === "remote")).toHaveLength(1);
+  const again = w.engine.pendingApprovals().find((r) => r.agentId === "remote")!;
+  expect(again.input.code).toBe(w.phone.codeFor(mac.id)!);
+  expect(w.phone.snap.sessions[0]?.denied).toBe(false); // replaced, not refused
+
+  w.engine.approvals.answer(true, undefined, undefined, again.id);
   await until(() => w.phone.snap.sessions[0]?.allowed === true, "the phone to be allowed");
   expect(w.bridge.state().phones.map((p) => p.name)).toEqual(["iPhone"]);
 
@@ -103,6 +112,7 @@ test("sign in on both sides, allow the phone once with matching codes, then driv
   expect((await s.request("POST", "/commands/remote", { args: "logout" })).status).toBe(403);
   expect((await s.request("POST", "/complete", { provider: "x", model: "y", prompt: "z" })).status).toBe(403);
   expect((await s.request("POST", "/commands/status")).status).toBe(200);
+  expect((await s.request("POST", "/commands/%zz")).status).toBe(403); // malformed, and not on the list
 
   // The event stream, and an approval answered from the phone.
   const events: any[] = [];

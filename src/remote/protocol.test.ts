@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { b64, unb64, Channel, newDeviceKeys, deviceId, pairingCode, sign, verify, sealStatus, openStatus, newStatusKey, utf8, type ChannelMessage } from "./protocol.ts";
+import { b64, unb64, Channel, newDeviceKeys, deviceId, pairingCode, pairCommit, pairNonce, isPairFrame, sign, verify, sealStatus, openStatus, newStatusKey, utf8, type ChannelMessage } from "./protocol.ts";
 
 test("base64url round-trips every length", () => {
   for (let n = 0; n < 40; n++) {
@@ -19,11 +19,20 @@ test("device ids follow the key, signatures check out, and the pairing code is t
   expect(verify(mac.signPub, "hello", sig)).toBe(true);
   expect(verify(mac.signPub, "hellO", sig)).toBe(false);
   expect(verify(phone.signPub, "hello", sig)).toBe(false);
-  const code = pairingCode(mac.signPub, phone.signPub);
+  const [np, nm] = [pairNonce(), pairNonce()];
+  const code = pairingCode(mac.signPub, phone.signPub, np, nm);
   expect(code).toMatch(/^\d{6}$/);
-  expect(pairingCode(mac.signPub, phone.signPub)).toBe(code);
+  expect(pairingCode(mac.signPub, phone.signPub, np, nm)).toBe(code);
   // A relay that swapped the phone's key shows the Mac a different number.
-  expect(pairingCode(mac.signPub, newDeviceKeys().signPub)).not.toBe(code);
+  expect(pairingCode(mac.signPub, newDeviceKeys().signPub, np, nm)).not.toBe(code);
+  // Either side's fresh nonce changes it, so it can't be worked out from the keys ahead of time.
+  expect(pairingCode(mac.signPub, phone.signPub, pairNonce(), nm)).not.toBe(code);
+  expect(pairingCode(mac.signPub, phone.signPub, np, pairNonce())).not.toBe(code);
+  // The commitment binds the phone to its nonce before it sees the Mac's.
+  expect(pairCommit(np)).toBe(pairCommit(np));
+  expect(pairCommit(np)).not.toBe(pairCommit(pairNonce()));
+  for (const m of [{ p: "commit", c: pairCommit(np) }, { p: "nonce", n: nm }, { p: "reveal", n: np }]) expect(isPairFrame(JSON.stringify(m))).toBe(true);
+  expect(isPairFrame(JSON.stringify({ h: "hello" }))).toBe(false);
 });
 
 function pair() {

@@ -97,11 +97,26 @@ export function verify(pub: string, msg: string, sig: string): boolean {
   }
 }
 
-// The 6 digits a person compares on the Mac and the phone when the phone is first allowed. Both
-// derive it from the two signing keys as each side received them, so a relay that swapped either
-// key shows two different numbers.
-export function pairingCode(macSignPub: string, phoneSignPub: string): string {
-  const h = nacl.hash(concat(utf8("niti-pair-v1"), unb64(macSignPub), unb64(phoneSignPub)));
+// Pairing: the 6 digits a person compares on the Mac and the phone when the phone is first allowed.
+// Commit, then reveal (the numeric comparison Bluetooth pairing uses): the phone commits to a nonce,
+// the Mac answers with its own, the phone reveals. The code covers both signing keys and both
+// nonces, and each side fixed its nonce before seeing the other's, so no one in the middle (the
+// relay, or anyone else signed in to the account) can pick a key that lands on the code a person is
+// about to compare. Without the nonces, a million tries finds such a key in seconds.
+export type PairMessage = { p: "commit"; c: string } | { p: "nonce"; n: string } | { p: "reveal"; n: string };
+
+// Pairing frames travel in the clear through the relay, the only thing it forwards between a Mac
+// and a phone the Mac hasn't allowed.
+export const isPairFrame = (data: string): boolean => data.length <= 200 && data.startsWith('{"p":');
+
+export const pairNonce = () => randomId(32);
+
+export function pairCommit(nonce: string): string {
+  return b64(nacl.hash(concat(utf8("niti-pair-commit-v2"), unb64(nonce))));
+}
+
+export function pairingCode(macSignPub: string, phoneSignPub: string, phoneNonce: string, macNonce: string): string {
+  const h = nacl.hash(concat(utf8("niti-pair-v2"), unb64(macSignPub), unb64(phoneSignPub), unb64(phoneNonce), unb64(macNonce)));
   const n = ((h[0]! << 24) | (h[1]! << 16) | (h[2]! << 8) | h[3]!) >>> 0;
   return String(n % 1_000_000).padStart(6, "0");
 }

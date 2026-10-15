@@ -4,7 +4,7 @@ import pkg from "../../package.json";
 import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "../server/events.ts";
 import type { GoalStatus } from "../goal.ts";
-import { authMessage, Channel, PROTOCOL, pairingCode, sealStatus, sign, type ChannelMessage, type DeviceInfo, type Hello, type PushCategory, type ServerFrame } from "./protocol.ts";
+import { authMessage, Channel, deviceId, isPairFrame, newStatusKey, pairCommit, pairingCode, pairNonce, PROTOCOL, sealStatus, sign, type ChannelMessage, type DeviceInfo, type Hello, type PairMessage, type PushCategory, type ServerFrame } from "./protocol.ts";
 import { DEFAULT_RELAY, keysFor, loadIdentity, macId, macName, mtime, newIdentity, remoteFile, saveIdentity, sessionFor, type RemoteIdentity } from "./identity.ts";
 
 // Remote control, on the Mac's side. The core keeps one outbound WebSocket to the relay; phones the
@@ -29,8 +29,10 @@ const ROUTES: [string, RegExp][] = [
   ["POST", /^\/commands\/[^/]+$/],
   ["GET", /^\/(files|file|stats|sessions|checkpoints|commands|agents|models|worktree|worktree\/hunks)$/],
 ];
-// Commands a phone can't run: these would raise its own privileges or let another device in.
-const BLOCKED_COMMANDS = new Set(["auto", "manual", "remote"]);
+// Commands a phone can run. An allowlist, so a command added later stays Mac-only until it's put
+// here. Left out on purpose: auto and manual (a phone can't change how much is asked) and remote
+// (or let another device in).
+const PHONE_COMMANDS = new Set(["cancel", "awake", "goal", "rewind", "branch", "model", "sessions", "agents", "tasks", "skills", "mcp", "lsp", "permissions", "cost", "status", "debate", "export", "resume", "clear", "init", "help"]);
 // What a phone may change in a tool call before approving it: the content of a file write, never
 // the path, the command, or its arguments.
 const EDITABLE: Record<string, string[]> = { write_file: ["content"], edit: ["new_string", "new_text", "content"] };
@@ -50,7 +52,9 @@ export class RemoteBridge {
   private devices: DeviceInfo[] = [];
   private online = new Set<string>();
   private channels = new Map<string, { ch: Channel; name: string; sub: boolean }>();
-  private asking = new Set<string>(); // phones with an allow request on screen
+  private asking = new Map<string, number>(); // phone → the generation of its allow request on screen
+  private askGen = 0;
+  private pairing = new Map<string, { c: string; n: string }>(); // phone → its commitment and our nonce
   private denied = new Set<string>(); // refused this boot (not saved: an esc that denied by accident shouldn't be forever)
   private queue: ServerEvent[] = [];
   private flushTimer?: ReturnType<typeof setTimeout>;
@@ -148,6 +152,7 @@ export class RemoteBridge {
     if (!phone || !this.id) return `no phone called ${name} — /remote devices lists them`;
     this.send({ t: "revoke", device: phone.id });
     this.id.phones = this.id.phones.filter((p) => p.id !== phone.id);
+    this.id.statusKey = newStatusKey(); // what it kept can't open the status this Mac leaves from now on
     saveIdentity(this.id, this.file);
     this.channels.delete(phone.id);
     this.sendAllow();
@@ -226,7 +231,6 @@ export class RemoteBridge {
         this.setLink("up");
         this.prunePhones();
         this.sendAllow();
-        this.askNewPhones();
         this.sendStatus();
         clearInterval(this.statusTimer);
         this.statusTimer = setInterval(() => this.engine.goal.active && this.sendStatus(), STATUS_EVERY_MS);
@@ -234,7 +238,6 @@ export class RemoteBridge {
       case "devices":
         this.devices = f.devices;
         this.prunePhones();
-        this.askNewPhones();
         return this.publish();
       case "phones":
         this.online = new Set(f.online);
@@ -260,29 +263,58 @@ export class RemoteBridge {
     }
   }
 
-  // A phone on the account this Mac hasn't decided about: ask, once, with the code both screens show.
-  private askNewPhones(): void {
+  // A phone on the account this Mac hasn't allowed, pairing: it commits to a nonce, we answer with
+  // ours, it reveals, and only then is there a code to show (protocol.ts, pairingCode).
+  private onPairing(phoneId: string, data: string): void {
     const id = this.id;
-    if (!id) return;
-    for (const d of this.devices) {
-      if (d.kind !== "phone" || id.phones.some((p) => p.id === d.id) || this.denied.has(d.id) || this.asking.has(d.id)) continue;
-      this.asking.add(d.id);
-      const code = pairingCode(id.keys.signPub, d.signPub);
-      // forceAsk: an "always allow" grant must never let the next phone in unasked.
-      void this.engine.approvals.request("remote", "allow_device", { phone: d.name, code, device: d.id }, true).then((ok) => {
-        this.asking.delete(d.id);
-        const now = loadIdentity(this.file); // another niti on this Mac may have decided first
-        if (!now) return;
-        this.id = now;
-        if (ok && !now.phones.some((p) => p.id === d.id)) {
-          now.phones.push({ id: d.id, name: d.name, signPub: d.signPub, allowedAt: Date.now() });
-          saveIdentity(now, this.file);
-          this.idMtime = mtime(this.file);
-        } else if (!ok) this.denied.add(d.id);
-        this.sendAllow();
-        this.publish();
-      });
+    const d = this.devices.find((x) => x.id === phoneId && x.kind === "phone");
+    if (!id || !d || deviceId(d.signPub) !== phoneId || this.denied.has(phoneId) || !isPairFrame(data)) return;
+    let m: PairMessage;
+    try {
+      m = JSON.parse(data) as PairMessage;
+    } catch {
+      return;
     }
+    if (m.p === "commit") {
+      const n = pairNonce();
+      this.pairing.set(phoneId, { c: String(m.c), n });
+      return this.send({ t: "to", device: phoneId, data: JSON.stringify({ p: "nonce", n } satisfies PairMessage) });
+    }
+    const st = this.pairing.get(phoneId);
+    if (m.p !== "reveal" || !st) return;
+    this.pairing.delete(phoneId);
+    let code: string;
+    try {
+      if (pairCommit(String(m.n)) !== st.c) return; // not the nonce it committed to
+      code = pairingCode(id.keys.signPub, d.signPub, String(m.n), st.n);
+    } catch {
+      return; // not base64
+    }
+    this.ask(d, code);
+  }
+
+  // Ask, with the code both screens show. A phone that paired again (the app restarted) replaces its
+  // earlier request rather than leaving a code on screen that no longer matches the phone.
+  private ask(d: DeviceInfo, code: string): void {
+    const gen = ++this.askGen;
+    const stale = this.asking.has(d.id) ? this.engine.pendingApprovals().find((r) => r.agentId === "remote" && r.input.device === d.id) : undefined;
+    this.asking.set(d.id, gen);
+    if (stale) this.engine.approvals.answer(false, undefined, undefined, stale.id);
+    // forceAsk: an "always allow" grant must never let the next phone in unasked.
+    void this.engine.approvals.request("remote", "allow_device", { phone: d.name, code, device: d.id }, true).then((ok) => {
+      if (this.asking.get(d.id) !== gen) return; // replaced by a newer pairing
+      this.asking.delete(d.id);
+      const now = loadIdentity(this.file); // another niti on this Mac may have decided first
+      if (!now) return;
+      this.id = now;
+      if (ok && !now.phones.some((p) => p.id === d.id)) {
+        now.phones.push({ id: d.id, name: d.name, signPub: d.signPub, allowedAt: Date.now() });
+        saveIdentity(now, this.file);
+        this.idMtime = mtime(this.file);
+      } else if (!ok && !now.phones.some((p) => p.id === d.id)) this.denied.add(d.id);
+      this.sendAllow();
+      this.publish();
+    });
   }
 
   private sendAllow(): void {
@@ -315,7 +347,8 @@ export class RemoteBridge {
   private async onPhone(phoneId: string, data: string): Promise<void> {
     const id = this.id;
     const phone = id?.phones.find((p) => p.id === phoneId);
-    if (!id || !phone) return; // not allowed (the relay checks too)
+    if (!id) return;
+    if (!phone) return this.onPairing(phoneId, data); // not allowed (the relay checks too): pairing is all it can do
     if (data.startsWith("{")) {
       let hello: Hello;
       try {
@@ -352,8 +385,13 @@ export class RemoteBridge {
     const path = String(rawPath).split("?")[0]!;
     if (!ROUTES.some(([m, re]) => m === method && re.test(path))) return { status: 403, body: { error: `${method} ${path} isn't available from a phone` } };
     if (path.startsWith("/commands/")) {
-      const name = decodeURIComponent(path.slice("/commands/".length));
-      if (BLOCKED_COMMANDS.has(name)) return { status: 403, body: { error: `/${name} can only be run on the Mac` } };
+      let name = "";
+      try {
+        name = decodeURIComponent(path.slice("/commands/".length));
+      } catch {
+        /* malformed: not on the list */
+      }
+      if (!PHONE_COMMANDS.has(name)) return { status: 403, body: { error: `/${name} can only be run on the Mac` } };
     }
     if (path === "/approval") {
       const a = (body ?? {}) as { id?: number; edited?: Record<string, unknown> };
