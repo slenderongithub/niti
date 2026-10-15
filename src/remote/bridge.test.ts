@@ -28,9 +28,8 @@ const until = async (pred: () => boolean, what: string, ms = 4000) => {
 };
 
 async function world() {
-  const codes = new Map<string, string>();
   const pushes: PushMessage[] = [];
-  const relay = await startRelay({ mail: async (e, c) => void codes.set(e, c), push: async (m) => void pushes.push(...m) });
+  const relay = await startRelay({ push: async (m) => void pushes.push(...m) });
   cleanup.push(relay.stop);
 
   // A worker that writes a file (so there is an approval to answer) and then finishes.
@@ -61,44 +60,43 @@ async function world() {
   let saved: PhoneIdentity | undefined;
   const phone = new RemoteClient({ relay: relay.url, name: "iPhone", store: { load: async () => saved, save: async (id) => void (saved = id) } });
   cleanup.push(() => phone.stop());
-  return { relay, codes, pushes, engine, server, bridge, phone, root };
+  return { relay, pushes, engine, server, bridge, phone, root };
 }
 
-test("sign in on both sides, allow the phone once with matching codes, then drive the Mac from it", async () => {
+// What /remote on <email> shows: the code to type on the phone.
+const codeIn = (message: string) => message.match(/code\s+(\d{3}) (\d{3})/)!.slice(1).join("");
+const other = (code: string) => String((Number(code) + 1) % 1_000_000).padStart(6, "0");
+
+function stranger(w: Awaited<ReturnType<typeof world>>) {
+  let saved: PhoneIdentity | undefined;
+  const p = new RemoteClient({ relay: w.relay.url, name: "Stranger", store: { load: async () => saved, save: async (id) => void (saved = id) } });
+  cleanup.push(() => p.stop());
+  return p;
+}
+
+test("pair by typing the Mac's code on the phone, then drive the Mac from it", async () => {
   const w = await world();
-  // The Mac signs in.
-  expect(await w.bridge.loginStart("ada@x.dev", w.relay.url)).toContain("code is on its way");
-  expect((await w.bridge.loginVerify(w.codes.get("ada@x.dev")!)).ok).toBe(true);
+  // The Mac signs in: the email is only a name, and it shows a code.
+  const on = await w.bridge.signIn("Ada@x.dev", w.relay.url);
+  expect(on.ok).toBe(true);
+  expect(on.message).toContain("ada@x.dev");
+  const code = codeIn(on.message);
   await until(() => w.bridge.state().link === "up", "the Mac's link");
 
-  // The phone signs in with the same email; the Mac asks, once, showing the code the phone shows.
-  expect((await w.phone.loginStart("ada@x.dev")).ok).toBe(true);
-  expect((await w.phone.loginVerify(w.codes.get("ada@x.dev")!)).ok).toBe(true);
-  w.phone.connect();
-  await until(() => w.phone.snap.link === "up", "the phone's link");
-  await until(() => w.engine.pendingApprovals().some((r) => r.agentId === "remote"), "the allow request on the Mac");
-  const ask = w.engine.pendingApprovals().find((r) => r.agentId === "remote")!;
-  const mac = w.phone.snap.devices.find((d) => d.kind === "mac")!;
-  expect(ask.input.code).toBe(w.phone.codeFor(mac.id)!);
-  expect(ask.dangerous).toBe(true); // never covered by an "always allow"
-
-  // Before it is allowed, the phone gets nowhere.
+  // A wrong code gets nowhere, and the phone can't open the Mac.
+  expect(await w.phone.pair("ada@x.dev", other(code))).toEqual({ ok: false, error: "that code doesn't match the one on your Mac" });
   const s0 = w.phone.snap.sessions[0]!;
   expect(s0.allowed).toBe(false);
-  await expect(w.phone.open(s0.mac, s0.session, 500)).rejects.toThrow();
+  await expect(w.phone.open(s0.mac, s0.session, 500)).rejects.toThrow("isn't paired");
 
-  // The app restarts mid-way: it pairs again, and the Mac's request is replaced by one with the new code.
-  w.phone.stop();
-  w.phone.connect();
-  await until(() => w.engine.pendingApprovals().some((r) => r.agentId === "remote" && r.id !== ask.id), "the replaced allow request");
-  expect(w.engine.pendingApprovals().filter((r) => r.agentId === "remote")).toHaveLength(1);
-  const again = w.engine.pendingApprovals().find((r) => r.agentId === "remote")!;
-  expect(again.input.code).toBe(w.phone.codeFor(mac.id)!);
-  expect(w.phone.snap.sessions[0]?.denied).toBe(false); // replaced, not refused
-
-  w.engine.approvals.answer(true, undefined, undefined, again.id);
-  await until(() => w.phone.snap.sessions[0]?.allowed === true, "the phone to be allowed");
+  // The right one pairs it: the Mac allows it, the phone pins the Mac.
+  expect(await w.phone.pair("ada@x.dev", code)).toEqual({ ok: true });
+  await until(() => w.phone.paired.length === 1, "the phone to be allowed");
   expect(w.bridge.state().phones.map((p) => p.name)).toEqual(["iPhone"]);
+  expect(Object.keys(w.phone.id!.macs)).toEqual([s0.mac]);
+
+  // A code is good for one phone.
+  expect((await stranger(w).pair("ada@x.dev", code, 1000)).ok).toBe(false);
 
   const s = await w.phone.open(s0.mac, s0.session);
   expect(s.welcome?.bootId).toBe(w.engine.bootId);
@@ -143,32 +141,27 @@ test("sign in on both sides, allow the phone once with matching codes, then driv
   expect(w.phone.id).toBeUndefined();
 });
 
-test("a phone can't let another device in, and a phone that isn't connected is pushed approvals", async () => {
+test("guessing is capped, a stranger who knows the email gets nowhere, and a phone that isn't connected is pushed approvals", async () => {
   const w = await world();
-  await w.bridge.loginStart("bo@x.dev", w.relay.url);
-  await w.bridge.loginVerify(w.codes.get("bo@x.dev")!);
-  await w.phone.loginStart("bo@x.dev");
-  await w.phone.loginVerify(w.codes.get("bo@x.dev")!);
-  w.phone.connect();
-  await until(() => w.engine.pendingApprovals().some((r) => r.agentId === "remote"), "the allow request");
-  w.engine.approvals.answer(true, undefined, undefined, w.engine.pendingApprovals()[0]!.id);
-  await until(() => w.phone.snap.sessions[0]?.allowed === true, "allowed");
-  const s0 = w.phone.snap.sessions[0]!;
+  const code = codeIn((await w.bridge.signIn("bo@x.dev", w.relay.url)).message);
+  await until(() => w.bridge.state().link === "up", "the Mac's link");
+  // Five wrong tries and the code stops working, even the right one.
+  const phone2 = stranger(w);
+  for (let i = 0; i < 5; i++) expect((await phone2.pair("bo@x.dev", other(code))).ok).toBe(false);
+  expect((await phone2.pair("bo@x.dev", code, 1000)).ok).toBe(false);
+  expect(w.bridge.state().phones).toEqual([]);
+  // Registered under the email, it still can't reach the Mac.
+  const ss = phone2.snap.sessions[0]!;
+  await expect(phone2.open(ss.mac, ss.session, 500)).rejects.toThrow();
+
+  // A new code pairs the real phone.
+  const fresh = codeIn(w.bridge.pairCode());
+  expect(await w.phone.pair("bo@x.dev", fresh)).toEqual({ ok: true });
+  await until(() => w.phone.paired.length === 1, "allowed");
+  const s0 = w.phone.paired[0]!;
   const s = await w.phone.open(s0.mac, s0.session);
   w.phone.setPush("ExponentPushToken[bo]", ["approval", "goal"]);
-
-  // A second phone signs in: the first can't answer the Mac's allow request for it.
-  let other: PhoneIdentity | undefined;
-  const phone2 = new RemoteClient({ relay: w.relay.url, name: "Stranger", store: { load: async () => other, save: async (id) => void (other = id) } });
-  cleanup.push(() => phone2.stop());
-  await phone2.loginStart("bo@x.dev");
-  await phone2.loginVerify(w.codes.get("bo@x.dev")!);
-  phone2.connect();
-  await until(() => w.engine.pendingApprovals().some((r) => r.agentId === "remote"), "the second allow request");
-  const ask = w.engine.pendingApprovals().find((r) => r.agentId === "remote")!;
-  expect((await s.request("POST", "/approval", { ok: true, id: ask.id })).status).toBe(403);
-  w.engine.approvals.answer(false, undefined, undefined, ask.id);
-  await until(() => phone2.snap.sessions[0]?.denied === true, "the denial to reach the second phone");
+  expect((await s.request("POST", "/commands/remote", { args: "pair" })).status).toBe(403); // a phone can't let another in
 
   // The first phone goes away; an approval on the Mac is pushed to it.
   phone2.stop();
@@ -183,8 +176,7 @@ test("a phone can't let another device in, and a phone that isn't connected is p
 
 test("a second niti on the same project takes the phone link, and the first stays off instead of fighting for it", async () => {
   const w = await world();
-  expect(await w.bridge.loginStart("ada@x.dev", w.relay.url)).toContain("code is on its way");
-  expect((await w.bridge.loginVerify(w.codes.get("ada@x.dev")!)).ok).toBe(true);
+  expect((await w.bridge.signIn("ada@x.dev", w.relay.url)).ok).toBe(true);
   await until(() => w.bridge.state().link === "up", "the first link");
   const second = new RemoteBridge(w.engine, w.server, { enabled: true, file: join(w.root, "remote.json") });
   cleanup.push(() => second.stop());

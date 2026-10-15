@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { b64, unb64, Channel, newDeviceKeys, deviceId, pairingCode, pairCommit, pairNonce, isPairFrame, sign, verify, sealStatus, openStatus, newStatusKey, utf8, type ChannelMessage } from "./protocol.ts";
+import { b64, unb64, Channel, newDeviceKeys, deviceId, Pake, pairTag, newPairCode, isPairFrame, sign, verify, sealStatus, openStatus, newStatusKey, utf8, type ChannelMessage } from "./protocol.ts";
 
 test("base64url round-trips every length", () => {
   for (let n = 0; n < 40; n++) {
@@ -10,7 +10,7 @@ test("base64url round-trips every length", () => {
   expect(() => unb64("a!b")).toThrow();
 });
 
-test("device ids follow the key, signatures check out, and the pairing code is the same on both sides", () => {
+test("device ids follow the key, and signatures check out", () => {
   const mac = newDeviceKeys();
   const phone = newDeviceKeys();
   expect(deviceId(mac.signPub)).toHaveLength(22);
@@ -19,19 +19,37 @@ test("device ids follow the key, signatures check out, and the pairing code is t
   expect(verify(mac.signPub, "hello", sig)).toBe(true);
   expect(verify(mac.signPub, "hellO", sig)).toBe(false);
   expect(verify(phone.signPub, "hello", sig)).toBe(false);
-  const [np, nm] = [pairNonce(), pairNonce()];
-  const code = pairingCode(mac.signPub, phone.signPub, np, nm);
+});
+
+test("pairing: the same code gives both sides the same key and tags; any other code, or other devices, don't", () => {
+  const mac = newDeviceKeys();
+  const phone = newDeviceKeys();
+  const ctx = `${deviceId(mac.signPub)}:${deviceId(phone.signPub)}`;
+  const code = newPairCode();
   expect(code).toMatch(/^\d{6}$/);
-  expect(pairingCode(mac.signPub, phone.signPub, np, nm)).toBe(code);
-  // A relay that swapped the phone's key shows the Mac a different number.
-  expect(pairingCode(mac.signPub, newDeviceKeys().signPub, np, nm)).not.toBe(code);
-  // Either side's fresh nonce changes it, so it can't be worked out from the keys ahead of time.
-  expect(pairingCode(mac.signPub, phone.signPub, pairNonce(), nm)).not.toBe(code);
-  expect(pairingCode(mac.signPub, phone.signPub, np, pairNonce())).not.toBe(code);
-  // The commitment binds the phone to its nonce before it sees the Mac's.
-  expect(pairCommit(np)).toBe(pairCommit(np));
-  expect(pairCommit(np)).not.toBe(pairCommit(pairNonce()));
-  for (const m of [{ p: "commit", c: pairCommit(np) }, { p: "nonce", n: nm }, { p: "reveal", n: np }]) expect(isPairFrame(JSON.stringify(m))).toBe(true);
+  const run = (phoneCode: string, macCode: string, macCtx = ctx) => {
+    const p = new Pake(phoneCode, ctx);
+    const m = new Pake(macCode, macCtx);
+    expect(p.y).not.toBe(m.y);
+    const kp = p.key(m.y, p.y, m.y)!;
+    const km = m.key(p.y, p.y, m.y)!;
+    return { same: b64(kp) === b64(km), tags: [pairTag(kp, "mac", phone.signPub, mac.signPub), pairTag(km, "mac", phone.signPub, mac.signPub)] };
+  };
+  const ok = run(code, code);
+  expect(ok.same).toBe(true);
+  expect(ok.tags[0]).toBe(ok.tags[1]!);
+  const wrong = String((Number(code) + 1) % 1_000_000).padStart(6, "0");
+  expect(run(wrong, code).same).toBe(false);
+  expect(run(code, code, `${deviceId(mac.signPub)}:${deviceId(newDeviceKeys().signPub)}`).same).toBe(false); // a code is for one phone and one Mac
+  // A tag binds both signing keys: one swapped in by a relay doesn't match.
+  const k = new Pake(code, ctx);
+  const key = k.key(new Pake(code, ctx).y, k.y, k.y)!;
+  expect(pairTag(key, "phone", phone.signPub, mac.signPub)).not.toBe(pairTag(key, "phone", newDeviceKeys().signPub, mac.signPub));
+  expect(pairTag(key, "phone", phone.signPub, mac.signPub)).not.toBe(pairTag(key, "mac", phone.signPub, mac.signPub));
+  // A degenerate share (all zeros) gives no key.
+  expect(k.key(b64(new Uint8Array(32)), k.y, k.y)).toBeUndefined();
+  const frame = JSON.stringify({ p: "pake", y: k.y, pub: phone.signPub, t: pairTag(key, "mac", phone.signPub, mac.signPub) });
+  expect(isPairFrame(frame)).toBe(true);
   expect(isPairFrame(JSON.stringify({ h: "hello" }))).toBe(false);
 });
 

@@ -81,7 +81,7 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: "remote",
-    description: "Control this Mac's niti from your phone: /remote login <email> · code <digits> · devices · revoke <name> · on|off · logout",
+    description: "Control this Mac's niti from your phone: /remote on <email> shows a code to type there · pair · devices · revoke <name> · off · logout",
     async run(engine, args, ctx) {
       if (ctx?.origin === "remote") return { ok: false, message: "/remote can only be run on the Mac" };
       const r = engine.remote;
@@ -92,27 +92,30 @@ export const BUILTIN_COMMANDS: Command[] = [
         case "status":
         case "devices":
           return { ok: true, message: r.describe() };
-        case "login": {
+        case "on": {
+          // `--relay <url>` is for a relay of your own (or a local one while developing).
           const relayAt = rest.indexOf("--relay");
           const relay = relayAt >= 0 ? rest[relayAt + 1] : undefined;
           const email = rest.filter((_, i) => i !== relayAt && i !== relayAt + 1)[0];
-          if (!email) return { ok: false, message: "usage: /remote login <email> [--relay <url>]" };
-          return { ok: true, message: await r.loginStart(email, relay) };
+          setOption("remote", true); // saved first, like /auto
+          r.setEnabled(true);
+          if (email) return r.signIn(email, relay);
+          if (!r.state().signedIn) return { ok: false, message: "usage: /remote on <your email> — then type the code it shows into niti on your phone" };
+          return { ok: true, message: r.state().phones.length ? "remote control on for this project" : `remote control on for this project — ${r.pairCode()}` };
         }
-        case "code":
-          return r.loginVerify(rest.join(""));
+        case "pair":
+          return { ok: r.state().signedIn, message: r.pairCode() };
         case "logout":
           return { ok: true, message: r.logout() };
         case "revoke":
           if (!rest.length) return { ok: false, message: "usage: /remote revoke <phone name>" };
           return { ok: true, message: r.revoke(rest.join(" ")) };
-        case "on":
         case "off":
-          setOption("remote", sub === "on"); // saved first, like /auto
-          r.setEnabled(sub === "on");
-          return { ok: true, message: sub === "on" ? "remote control on for this project" : "remote control off for this project — phones won't see it" };
+          setOption("remote", false);
+          r.setEnabled(false);
+          return { ok: true, message: "remote control off for this project — phones won't see it" };
       }
-      return { ok: false, message: "usage: /remote [status|login <email>|code <digits>|devices|revoke <name>|on|off|logout]" };
+      return { ok: false, message: "usage: /remote [on <email>|pair|status|devices|revoke <name>|off|logout]" };
     },
   },
   {

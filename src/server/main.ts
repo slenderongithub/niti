@@ -88,7 +88,7 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
 
   const server = startServer(engine, { port: opts.port, theme: options.theme, prefs: options });
   // Remote control: only here, never in startServer, so a test server never dials a relay. Idle
-  // unless this Mac is signed in (/remote login) and the project hasn't opted out.
+  // unless this Mac is signed in (/remote on <email>) and the project hasn't opted out.
   engine.remote = new RemoteBridge(engine, server, { enabled: options.remote !== false });
   engine.remote.start();
   exitWithParent();

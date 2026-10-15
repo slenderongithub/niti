@@ -4,14 +4,15 @@ import pkg from "../../package.json";
 import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "../server/events.ts";
 import type { GoalStatus } from "../goal.ts";
-import { authMessage, Channel, CHANNEL_RESET, deviceId, isPairFrame, newStatusKey, pairCommit, pairingCode, pairNonce, PROTOCOL, sealStatus, sign, type ChannelMessage, type DeviceInfo, type Hello, type PairMessage, type PushCategory, type ServerFrame } from "./protocol.ts";
+import { authMessage, Channel, CHANNEL_RESET, deviceId, isPairFrame, newPairCode, newStatusKey, Pake, pairTag, PROTOCOL, registerMessage, sealStatus, sign, type ChannelMessage, type DeviceInfo, type Hello, type PairMessage, type PushCategory, type ServerFrame } from "./protocol.ts";
 import { DEFAULT_RELAY, keysFor, loadIdentity, macId, macName, mtime, newIdentity, remoteFile, saveIdentity, sessionFor, type RemoteIdentity } from "./identity.ts";
 
 // Remote control, on the Mac's side. The core keeps one outbound WebSocket to the relay; phones the
 // Mac has allowed open an end-to-end encrypted channel through it and drive this core's own HTTP API
 // (a loopback fetch with the local token — which never leaves the Mac), restricted to an allowlist:
 // a phone can watch, prompt, steer, interrupt, approve, pause and merge, but never touch credentials,
-// turn auto-approve on, change the team, or let another device in.
+// turn auto-approve on, change the team, or let another device in. A phone gets in by typing the
+// code this Mac shows (/remote on <email>), checked by a key exchange that never sends the code.
 
 export interface RemoteState {
   signedIn: boolean;
@@ -40,6 +41,8 @@ const MAX_FILE = 256 * 1024;
 const MAX_TEXT = 20_000; // a diff or file body in an approval, as the phone gets it
 const FLUSH_MS = 120;
 const STATUS_EVERY_MS = 30_000;
+const CODE_MS = 10 * 60_000;
+const CODE_TRIES = 5; // wrong codes before this one stops working: a 1 in 200,000 chance for a guesser
 
 export class RemoteBridge {
   private id?: RemoteIdentity;
@@ -52,16 +55,13 @@ export class RemoteBridge {
   private devices: DeviceInfo[] = [];
   private online = new Set<string>();
   private channels = new Map<string, { ch: Channel; name: string; sub: boolean }>();
-  private asking = new Map<string, number>(); // phone → the generation of its allow request on screen
-  private askGen = 0;
-  private pairing = new Map<string, { c: string; n: string }>(); // phone → its commitment and our nonce
-  private denied = new Set<string>(); // refused this boot (not saved: an esc that denied by accident shouldn't be forever)
+  private code?: { code: string; expires: number; tries: number }; // on screen here, for a phone to type
+  private pakes = new Map<string, { key: Uint8Array; pub: string }>(); // phone → its exchange, awaiting its confirm
   private queue: ServerEvent[] = [];
   private flushTimer?: ReturnType<typeof setTimeout>;
   private statusTimer?: ReturnType<typeof setInterval>;
   private seenApprovals = new Set<number>();
   private lastGoal?: GoalStatus | null;
-  private pendingLogin?: { email: string; relay: string };
   private unsub?: () => void;
 
   constructor(
@@ -114,29 +114,29 @@ export class RemoteBridge {
     };
   }
 
-  // ---- sign-in (/remote login, /remote code) ----
+  // ---- signing in and pairing (/remote on <email>, /remote pair) ----
 
-  async loginStart(email: string, relay = this.id?.relay || DEFAULT_RELAY): Promise<string> {
-    if (!relay) return "no relay is configured yet — deploy niti-relay, then /remote login <email> --relay https://your-relay";
-    const r = await relayPost(relay, "/v1/login/start", { email });
-    if (!r.ok) return r.error ?? "could not send the code";
-    this.pendingLogin = { email, relay };
-    return `a code is on its way to ${email} — then /remote code <the 6 digits>`;
+  // Register this Mac under the email (just a name: nothing is sent to it), then show a code.
+  async signIn(email: string, relay = this.id?.relay || DEFAULT_RELAY): Promise<{ ok: boolean; message: string }> {
+    if (!relay) return { ok: false, message: "this build of niti has no relay — /remote on <email> --relay https://your-relay" };
+    const keys = keysFor(this.file);
+    const clean = email.trim().toLowerCase();
+    const r = await relayPost(relay, "/v1/register", { email: clean, device: { name: macName(), kind: "mac", signPub: keys.signPub, sig: sign(keys.signSecret, registerMessage(clean, "mac", keys.signPub)) } });
+    if (!r.ok) return { ok: false, message: r.error ?? "couldn't sign in" };
+    const prev = loadIdentity(this.file);
+    // Same Mac, same relay, same email: keep the phones it already allowed.
+    const id = prev && prev.relay === relay && prev.email === clean ? { ...prev, keys } : newIdentity(relay, clean, keys);
+    saveIdentity(id, this.file);
+    this.reloadIdentity();
+    return { ok: true, message: this.pairCode() };
   }
 
-  async loginVerify(code: string): Promise<{ ok: boolean; message: string }> {
-    const p = this.pendingLogin;
-    if (!p) return { ok: false, message: "start with /remote login <email>" };
-    const keys = keysFor(this.file);
-    const r = await relayPost(p.relay, "/v1/login/verify", { email: p.email, code, device: { name: macName(), kind: "mac", signPub: keys.signPub } });
-    if (!r.ok) return { ok: false, message: r.error ?? "sign-in failed" };
-    const prev = loadIdentity(this.file);
-    // Same Mac, same relay, same account: keep the phones it already allowed.
-    const id = prev && prev.relay === p.relay && prev.email === p.email ? { ...prev, keys } : newIdentity(p.relay, p.email, keys);
-    saveIdentity(id, this.file);
-    this.pendingLogin = undefined;
-    this.reloadIdentity();
-    return { ok: true, message: `signed in as ${p.email} — open the niti app on your phone and sign in with the same email${this.o.enabled ? "" : " (this project has remote control off: /remote on)"}` };
+  // A fresh code for a phone to type, good for ten minutes and five tries.
+  pairCode(): string {
+    if (!this.id) return "not signed in — /remote on <your email>";
+    const code = newPairCode();
+    this.code = { code, expires: Date.now() + CODE_MS, tries: 0 };
+    return `to pair a phone, open niti on it and enter\n  email  ${this.id.email}\n  code   ${code.slice(0, 3)} ${code.slice(3)}   (for 10 minutes)`;
   }
 
   logout(): string {
@@ -157,7 +157,7 @@ export class RemoteBridge {
     this.channels.delete(phone.id);
     this.sendAllow();
     this.publish();
-    return `${phone.name} is signed out — it has to sign in again, and be allowed again, to come back`;
+    return `${phone.name} is signed out — it needs a new code from /remote pair to come back`;
   }
 
   setEnabled(on: boolean): void {
@@ -172,8 +172,8 @@ export class RemoteBridge {
 
   describe(): string {
     const s = this.state();
-    if (!s.signedIn) return "remote control is off — /remote login <email> to control this Mac from your phone";
-    const phones = s.phones.length ? s.phones.map((p) => `${p.online ? "●" : "○"} ${p.name}`).join("\n          ") : "none yet — sign in on the niti app with the same email";
+    if (!s.signedIn) return "remote control is off — /remote on <your email> to control this Mac from your phone";
+    const phones = s.phones.length ? s.phones.map((p) => `${p.online ? "●" : "○"} ${p.name}`).join("\n          ") : "none yet — /remote pair shows a code to type on your phone";
     return [`account   ${s.email}`, `relay     ${s.relay} (${s.enabled ? s.link : "off for this project — /remote on"})`, `phones    ${phones}`].join("\n");
   }
 
@@ -272,63 +272,50 @@ export class RemoteBridge {
     }
   }
 
-  // A phone on the account this Mac hasn't allowed, pairing: it commits to a nonce, we answer with
-  // ours, it reveals, and only then is there a code to show (protocol.ts, pairingCode).
+  // A phone this Mac hasn't allowed, pairing with the code on screen here (protocol.ts, Pake). Every
+  // try counts against the code, right or wrong, so guessing needs a live try per guess.
   private onPairing(phoneId: string, data: string): void {
     const id = this.id;
-    const d = this.devices.find((x) => x.id === phoneId && x.kind === "phone");
-    if (!id || !d || deviceId(d.signPub) !== phoneId || this.denied.has(phoneId) || !isPairFrame(data)) return;
+    const c = this.code;
+    if (!id || !c || !isPairFrame(data)) return;
+    if (Date.now() > c.expires) return void (this.code = undefined);
     let m: PairMessage;
     try {
       m = JSON.parse(data) as PairMessage;
     } catch {
       return;
     }
-    if (m.p === "commit") {
-      const n = pairNonce();
-      this.pairing.set(phoneId, { c: String(m.c), n });
-      return this.send({ t: "to", device: phoneId, data: JSON.stringify({ p: "nonce", n } satisfies PairMessage) });
+    if (m.p === "pake") {
+      if (typeof m.y !== "string" || typeof m.pub !== "string" || deviceId(m.pub) !== phoneId) return;
+      if (++c.tries > CODE_TRIES) {
+        this.code = undefined;
+        return this.engine.bus.publish({ agentId: "orchestrator", type: "warning", payload: "too many wrong pairing codes — /remote pair for a new one", time: Date.now() });
+      }
+      const me = new Pake(c.code, `${macId(id)}:${phoneId}`);
+      const key = me.key(m.y, m.y, me.y);
+      if (!key) return;
+      this.pakes.set(phoneId, { key, pub: m.pub });
+      const reply: PairMessage = { p: "pake", y: me.y, pub: id.keys.signPub, t: pairTag(key, "mac", m.pub, id.keys.signPub) };
+      return this.send({ t: "to", device: phoneId, data: JSON.stringify(reply) });
     }
-    const st = this.pairing.get(phoneId);
-    if (m.p !== "reveal" || !st) return;
-    this.pairing.delete(phoneId);
-    let code: string;
-    try {
-      if (pairCommit(String(m.n)) !== st.c) return; // not the nonce it committed to
-      code = pairingCode(id.keys.signPub, d.signPub, String(m.n), st.n);
-    } catch {
-      return; // not base64
-    }
-    this.ask(d, code);
-  }
-
-  // Ask, with the code both screens show. A phone that paired again (the app restarted) replaces its
-  // earlier request rather than leaving a code on screen that no longer matches the phone.
-  private ask(d: DeviceInfo, code: string): void {
-    const gen = ++this.askGen;
-    const stale = this.asking.has(d.id) ? this.engine.pendingApprovals().find((r) => r.agentId === "remote" && r.input.device === d.id) : undefined;
-    this.asking.set(d.id, gen);
-    if (stale) this.engine.approvals.answer(false, undefined, undefined, stale.id);
-    // forceAsk: an "always allow" grant must never let the next phone in unasked.
-    void this.engine.approvals.request("remote", "allow_device", { phone: d.name, code, device: d.id }, true).then((ok) => {
-      if (this.asking.get(d.id) !== gen) return; // replaced by a newer pairing
-      this.asking.delete(d.id);
-      const now = loadIdentity(this.file); // another niti on this Mac may have decided first
-      if (!now) return;
-      this.id = now;
-      if (ok && !now.phones.some((p) => p.id === d.id)) {
-        now.phones.push({ id: d.id, name: d.name, signPub: d.signPub, allowedAt: Date.now() });
-        saveIdentity(now, this.file);
-        this.idMtime = mtime(this.file);
-      } else if (!ok && !now.phones.some((p) => p.id === d.id)) this.denied.add(d.id);
-      this.sendAllow();
-      this.publish();
-    });
+    const st = this.pakes.get(phoneId);
+    this.pakes.delete(phoneId);
+    if (m.p !== "confirm" || !st || m.t !== pairTag(st.key, "phone", st.pub, id.keys.signPub)) return;
+    this.code = undefined; // one phone per code
+    const now = loadIdentity(this.file) ?? id; // another niti on this Mac may have saved since
+    const name = this.devices.find((d) => d.id === phoneId)?.name ?? "Phone";
+    if (!now.phones.some((p) => p.id === phoneId)) now.phones.push({ id: phoneId, name, signPub: st.pub, allowedAt: Date.now() });
+    saveIdentity(now, this.file);
+    this.idMtime = mtime(this.file);
+    this.id = now;
+    this.sendAllow();
+    this.publish();
+    this.engine.bus.publish({ agentId: "orchestrator", type: "thought", payload: `📱 ${name} is paired with this Mac`, time: Date.now() });
   }
 
   private sendAllow(): void {
     if (!this.id) return;
-    this.send({ t: "allow", phones: this.id.phones.map((p) => p.id), denied: [...this.denied] });
+    this.send({ t: "allow", phones: this.id.phones.map((p) => p.id) });
   }
 
   private reloadIdentity(): void {
@@ -337,10 +324,6 @@ export class RemoteBridge {
     this.idMtime = t;
     const before = this.id;
     this.id = loadIdentity(this.file);
-    // Answered elsewhere: settle our copy of any allow request for a phone now on the list.
-    for (const r of this.engine.pendingApprovals()) {
-      if (r.agentId === "remote" && this.id?.phones.some((p) => p.id === r.input.device)) this.engine.approvals.answer(true, undefined, undefined, r.id);
-    }
     const sameAccount = before && this.id && macId(before) === macId(this.id) && before.relay === this.id.relay;
     if (!sameAccount) {
       this.ws?.close(1000, "identity changed");
@@ -406,7 +389,6 @@ export class RemoteBridge {
     if (path === "/approval") {
       const a = (body ?? {}) as { id?: number; edited?: Record<string, unknown> };
       const req = this.engine.pendingApprovals().find((r) => r.id === a.id);
-      if (req?.agentId === "remote" || (a.id === undefined && this.engine.pendingApprovals()[0]?.agentId === "remote")) return { status: 403, body: { error: "a new device can only be allowed on the Mac" } };
       if (a.edited && !(req && Object.keys(a.edited).every((k) => EDITABLE[req.tool]?.includes(k)))) delete a.edited;
     }
     const res = await fetch(this.server.url + rawPath, {
@@ -471,7 +453,7 @@ export class RemoteBridge {
     if (this.link !== "up") return;
     if (e.kind === "approval_request") {
       for (const r of e.requests) {
-        if (this.seenApprovals.has(r.id) || r.agentId === "remote") continue;
+        if (this.seenApprovals.has(r.id)) continue;
         this.seenApprovals.add(r.id);
         this.push("approval", r.dangerous ? "Approval needed (risky)" : "Approval needed", `${r.agentId} wants to ${TOOL_VERBS[r.tool] ?? `use ${r.tool}`}`, "approval");
       }
@@ -501,7 +483,7 @@ export class RemoteBridge {
     const status = {
       project: basename(this.engine.root),
       running: this.engine.running,
-      approvals: this.engine.pendingApprovals().filter((r) => r.agentId !== "remote").length,
+      approvals: this.engine.pendingApprovals().length,
       goal: g ? { objective: g.objective, state: g.state, reason: g.reason, round: g.round, maxRounds: g.maxRounds } : null,
       at: Date.now(),
     };
@@ -533,12 +515,11 @@ function coalesce(events: ServerEvent[]): ServerEvent[] {
   return out;
 }
 
-// What a phone needs, and no more: long diffs and file bodies in an approval are cut, and a request
-// to allow a new device isn't shown at all — only the Mac can answer it.
+// What a phone needs, and no more: long diffs and file bodies in an approval are cut.
 function forPhone(e: ServerEvent): ServerEvent {
   if (e.kind !== "approval_request") return e;
   const cut = (v: unknown) => (typeof v === "string" && v.length > MAX_TEXT ? `${v.slice(0, MAX_TEXT)}\n… (${v.length - MAX_TEXT} more characters — open it on the Mac)` : v);
-  return { ...e, requests: e.requests.filter((r) => r.agentId !== "remote").map((r) => ({ ...r, input: Object.fromEntries(Object.entries(r.input).map(([k, v]) => [k, cut(v)])) })) };
+  return { ...e, requests: e.requests.map((r) => ({ ...r, input: Object.fromEntries(Object.entries(r.input).map(([k, v]) => [k, cut(v)])) })) };
 }
 
 async function relayPost(relay: string, path: string, body: unknown): Promise<{ ok: boolean; error?: string }> {

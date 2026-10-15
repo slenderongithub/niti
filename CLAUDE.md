@@ -7,7 +7,7 @@ from this repository:
 |---|---|---|---|
 | **CLI** (the main product) | `src/`, `tui/`, `web/`, `scripts/`, `bin/` | `niti` (Go TUI) + `niti-core` (Bun engine) + the web dashboard. | `tui/README.md` |
 | **Desktop app** | `niti-app/` | The same product as an Electron + React app over the same engine. | `niti-app/README.md` |
-| **Relay** (companion) | `niti-relay/` | Cloudflare Worker + Durable Objects (or Bun): email-code sign-in, forwards end-to-end encrypted frames between a Mac's core and a phone, sends pushes. Never sees content. | `niti-relay/README.md` |
+| **Relay** (companion) | `niti-relay/` | Cloudflare Worker + Durable Objects (or Bun): devices register under an email (only a name), forwards end-to-end encrypted frames between a Mac's core and a phone, sends pushes. Never sees content. | `niti-relay/README.md` |
 | **Mobile app** (companion) | `niti-mobile/` | Expo, iOS-first remote control for a running core: watch, steer, approve, pause. All work still runs on the Mac. | `niti-mobile/README.md` |
 
 Shared code is imported, never copied:
@@ -64,9 +64,11 @@ A doc change belongs in the same commit as the change it describes. `README.md`,
    `niti-app/scripts/fixture.ts` both.
 6. **Remote control's security holds.** Phones reach the core only through the bridge's route and
    command **allowlists** (`src/remote/bridge.ts`): add to them deliberately, never to anything that
-   touches keys, auto-approve, settings, the team, `/remote` or allowing devices. Pairing stays
-   commit-then-reveal; the relay forwards nothing but the pairing exchange between a Mac and a phone
-   it hasn't allowed; pushes carry no code or commands. A protocol change bumps `PROTOCOL`.
+   touches keys, auto-approve, settings, the team, `/remote` or allowing devices. Pairing stays a
+   code typed on the phone and checked by CPace (`protocol.ts` `Pake`): the code never crosses the
+   relay, every try counts against it, registering is signed by the device's key, and the phone opens
+   only Macs it pinned when pairing. The relay forwards nothing but the pairing exchange between a Mac
+   and a phone it hasn't allowed; pushes carry no code or commands. A protocol change bumps `PROTOCOL`.
 7. **Measure agent-loop changes.** Before and after any change to the agent loop, its prompts or its
    tools, run `bun run scripts/eval/run.ts --repeat 3` and compare.
 8. **Big trees.** `niti-app/node_modules` is ~630MB and `niti-app/release` holds packaged apps;
