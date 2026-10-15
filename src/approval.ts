@@ -105,10 +105,11 @@ export class ApprovalQueue {
     return true;
   }
 
-  // /cancel: everything waiting is refused at once — the human just said stop.
-  denyAll(): void {
-    const batch = this.pending;
-    this.pending = [];
+  // /cancel: everything waiting is refused at once — the human just said stop. With an agent id, only
+  // that agent's requests (interrupting one agent).
+  denyAll(agentId?: string): void {
+    const batch = agentId ? this.pending.filter((r) => r.agentId === agentId) : this.pending;
+    this.pending = agentId ? this.pending.filter((r) => r.agentId !== agentId) : [];
     for (const r of batch) {
       this.logDecision(r, false);
       r.resolve(false);

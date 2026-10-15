@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/niti/tui/internal/api"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/niti/tui/internal/api"
 )
 
 func sized(agents, w, h int) Model {

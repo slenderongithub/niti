@@ -275,6 +275,9 @@ export function startServer(
           auto: engine.auto, // default permission mode: true = auto-approve
           theme: currentTheme, // `theme:` from agents.yaml, or whatever POST /theme last set
           awake: awakeMode(), // /awake: "off" | "lid" | "open"
+          goal: engine.goal.status ?? null, // /goal: the persistent objective, or null
+          remote: engine.remote?.state() ?? null, // remote control: account, relay link, phones
+          bootId: engine.bootId,
         });
       }
 
@@ -344,6 +347,7 @@ export function startServer(
       if (p === "/prompt" && method === "POST") {
         const { text, mode } = (await readBody(req)) as { text?: string; mode?: string };
         if (!text?.trim()) return json({ error: "empty prompt" }, 400);
+        if (engine.goal.active) return json({ error: "a goal is running — /goal note <text> steers it" }, 409);
         if (engine.running) return json({ error: "a task is already running" }, 409);
         // fire-and-forget; progress via SSE
         // POST /prompt has already returned 200 by the time this can fail, so console.error was the
@@ -375,9 +379,12 @@ export function startServer(
         const name = safeDecode(p.slice("/commands/".length));
         if (name === undefined) return json({ error: "malformed command name" }, 400);
         const { args } = (await readBody(req)) as { args?: string };
+        // Set by the remote bridge on what it forwards from a phone. A local caller could set it too,
+        // but it only ever takes privileges away (see /awake).
+        const origin = req.headers.get("x-niti-origin")?.startsWith("remote") ? "remote" : "local";
         // Always 200: the command was dispatched, and its own `ok` says how it went. A non-2xx
         // would strand that message in the client's generic error path.
-        return json(await commands.run(engine, name, args ?? ""));
+        return json(await commands.run(engine, name, args ?? "", { origin }));
       }
 
       if (p === "/graph" && method === "GET") {
@@ -550,6 +557,14 @@ export function startServer(
         const { text } = (await readBody(req)) as { text?: string };
         if (!text?.trim()) return json({ error: "empty message" }, 400);
         const err = engine.messageAgent(agentId, text);
+        return err ? json({ error: err }, 409) : json({ ok: true });
+      }
+
+      if (p.startsWith("/agents/") && p.endsWith("/interrupt") && method === "POST") {
+        const agentId = safeDecode(p.slice("/agents/".length, -"/interrupt".length));
+        if (agentId === undefined) return json({ error: "malformed agent id" }, 400);
+        const { text } = (await readBody(req)) as { text?: string };
+        const err = engine.interruptAgent(agentId, text);
         return err ? json({ error: err }, 409) : json({ ok: true });
       }
 

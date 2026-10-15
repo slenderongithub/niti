@@ -12,6 +12,7 @@ import { SessionStore } from "../store/session-store.ts";
 import { AuditLog } from "../store/audit-log.ts";
 import { startServer, type ServerHandle } from "./server.ts";
 import { startModelRefresh, isDeprecated } from "../providers/live-catalog.ts";
+import { RemoteBridge } from "../remote/bridge.ts";
 
 interface ServeResult {
   engine: Engine;
@@ -83,8 +84,14 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   });
   notify = (payload) => engine.bus.publish({ agentId: "orchestrator", type: "error", payload, time: Date.now() });
   engine.orch.load(loadTasks()); // show any prior tasks on connect
+  engine.goal.load(); // a goal the last core left behind comes back paused
 
   const server = startServer(engine, { port: opts.port, theme: options.theme, prefs: options });
+  // Remote control: only here, never in startServer, so a test server never dials a relay. Idle
+  // unless this Mac is signed in (/remote login) and the project hasn't opted out.
+  engine.remote = new RemoteBridge(engine, server, { enabled: options.remote !== false });
+  engine.remote.start();
+  exitWithParent();
   // Handshake — the ONLY thing on stdout, first line, machine-readable for the Go TUI.
   process.stdout.write(JSON.stringify({ nitiServer: { url: server.url, token: server.token } }) + "\n");
   // Model lists: the cached copy applies at once, a fresh one is fetched in the background at most
@@ -98,6 +105,23 @@ export async function serveMain(opts: { port?: number; interactive?: boolean; au
   };
   void startModelRefresh().then(warnDeprecated);
   return { engine, server };
+}
+
+// The TUI runs its core in a process group of its own, so a closed terminal never signals the core,
+// and a TUI killed outright can't stop it. Such an orphan kept serving its project, and its remote
+// link fought the next core's for the same session, so the phone's requests got lost and the TUI's
+// remote chip flickered. When whoever started this core is gone, it goes too, through the same
+// SIGTERM path as a normal stop. (Bun caches process.ppid, so ask whether that process still exists.)
+function exitWithParent(): void {
+  const parent = process.ppid;
+  if (parent <= 1) return; // started by launchd/init itself: nothing to follow
+  setInterval(() => {
+    try {
+      process.kill(parent, 0);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") process.kill(process.pid, "SIGTERM");
+    }
+  }, 2000).unref();
 }
 
 // Allow `bun run src/server/main.ts` to launch the server standalone.

@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/niti/tui/internal/theme"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/niti/tui/internal/theme"
 )
 
 // Version is the niti release string. It lives here because both the setup screens and the live
@@ -110,11 +110,11 @@ func (l *List) Move(delta int) {
 	l.cursor = (l.cursor + delta + len(l.shown)) % len(l.shown)
 }
 
-func (l *List) Len() int    { return len(l.shown) }
+func (l *List) Len() int { return len(l.shown) }
 
 // At is the i-th visible (filtered) item — for callers that draw rows themselves.
 func (l *List) At(i int) Item { return l.items[l.shown[i]] }
-func (l *List) Cursor() int { return l.cursor }
+func (l *List) Cursor() int   { return l.cursor }
 
 func (l *List) Selected() (Item, bool) {
 	if l.cursor < 0 || l.cursor >= len(l.shown) {

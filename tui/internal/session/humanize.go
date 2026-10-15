@@ -22,7 +22,7 @@ var (
 	reKey  = reStr("key")
 	// An error that reads like a rejected credential; its line then points at /api.
 	reKeyError = regexp.MustCompile(`(?i)api[ _-]?key|\b(401|403)\b|unauthori[sz]ed|forbidden|invalid (x-api-key|credential|token)|authentication|no API key`)
-	reTask = regexp.MustCompile(`^(starting|queued) (\S+?)(?: → (\S+))?: (.*)$`)
+	reTask     = regexp.MustCompile(`^(starting|queued) (\S+?)(?: → (\S+))?: (.*)$`)
 )
 
 var toolVerbs = map[string]string{

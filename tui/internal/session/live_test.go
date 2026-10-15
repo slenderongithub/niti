@@ -7,11 +7,11 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/niti/tui/internal/api"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+	"github.com/niti/tui/internal/api"
 )
 
 func ev(t *testing.T, raw string) api.AgentEvent {

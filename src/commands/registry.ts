@@ -3,11 +3,12 @@ import { join } from "node:path";
 import type { Engine } from "../engine.ts";
 import { splitModelId } from "../providers/catalog.ts";
 import { saveTasks } from "../session.ts";
-import { setAuto } from "../config/config.ts";
+import { setAuto, setOption } from "../config/config.ts";
 import { loadSkills, frontmatter } from "../skills/skills.ts";
 import { isGitRepo, snapshotBranch } from "../orchestrator/worktree.ts";
 import { buildExportReport } from "./export.ts";
-import { arm, release } from "../awake.ts";
+import { arm, off } from "../awake.ts";
+import { parseGoalArgs } from "../goal.ts";
 
 // Slash commands live here, on the server, rather than in the Go TUI's key handler — otherwise the
 // web dashboard needs an identical second implementation of every one of them. Clients fetch the
@@ -19,10 +20,15 @@ interface CommandResult {
   view?: string; // a pure client-side view switch ("panes" | "graph" | "usage")
 }
 
+// Where a command came from: a phone through the remote bridge, or a client on this Mac.
+export interface CommandContext {
+  origin: "local" | "remote";
+}
+
 interface Command {
   name: string; // without the leading slash
   description: string;
-  run: (engine: Engine, args: string) => Promise<CommandResult>;
+  run: (engine: Engine, args: string, ctx?: CommandContext) => Promise<CommandResult>;
 }
 
 const view = (name: string): Command => ({
@@ -64,12 +70,82 @@ export const BUILTIN_COMMANDS: Command[] = [
   {
     name: "awake",
     description: "Keep the Mac awake, lid closed too, until the current or next run finishes (/awake off to stop)",
-    async run(engine, args) {
-      if (args.trim() === "off") {
-        release();
-        return { ok: true, message: "awake off — normal sleep restored" };
+    async run(engine, args, ctx) {
+      if (args.trim() === "off") return off(ctx?.origin === "remote" ? null : undefined);
+      // From a phone, never the admin dialog: nobody is at the Mac to answer it, and it would wait
+      // forever. That means lid-open only, which the reply says.
+      const elevate = ctx?.origin === "remote" ? async () => false : undefined;
+      // Held for a whole /goal, not just the round that happens to be running.
+      return arm(engine.hub, elevate, () => engine.goal.holdsAwake);
+    },
+  },
+  {
+    name: "remote",
+    description: "Control this Mac's niti from your phone: /remote login <email> · code <digits> · devices · revoke <name> · on|off · logout",
+    async run(engine, args, ctx) {
+      if (ctx?.origin === "remote") return { ok: false, message: "/remote can only be run on the Mac" };
+      const r = engine.remote;
+      if (!r) return { ok: false, message: "remote control needs the niti server (it isn't available in a headless run)" };
+      const [sub = "", ...rest] = args.trim().split(/\s+/);
+      switch (sub) {
+        case "":
+        case "status":
+        case "devices":
+          return { ok: true, message: r.describe() };
+        case "login": {
+          const relayAt = rest.indexOf("--relay");
+          const relay = relayAt >= 0 ? rest[relayAt + 1] : undefined;
+          const email = rest.filter((_, i) => i !== relayAt && i !== relayAt + 1)[0];
+          if (!email) return { ok: false, message: "usage: /remote login <email> [--relay <url>]" };
+          return { ok: true, message: await r.loginStart(email, relay) };
+        }
+        case "code":
+          return r.loginVerify(rest.join(""));
+        case "logout":
+          return { ok: true, message: r.logout() };
+        case "revoke":
+          if (!rest.length) return { ok: false, message: "usage: /remote revoke <phone name>" };
+          return { ok: true, message: r.revoke(rest.join(" ")) };
+        case "on":
+        case "off":
+          setOption("remote", sub === "on"); // saved first, like /auto
+          r.setEnabled(sub === "on");
+          return { ok: true, message: sub === "on" ? "remote control on for this project" : "remote control off for this project — phones won't see it" };
       }
-      return arm(engine.hub);
+      return { ok: false, message: "usage: /remote [status|login <email>|code <digits>|devices|revoke <name>|on|off|logout]" };
+    },
+  },
+  {
+    name: "goal",
+    description: "Keep working toward an objective, round after round, until it's met: /goal <objective> [--rounds N] [--tokens N] [--usd N] · pause|resume|stop|status|note <text>",
+    async run(engine, args) {
+      const [sub = "", ...rest] = args.trim().split(/\s+/);
+      const text = rest.join(" ");
+      switch (sub) {
+        case "":
+        case "status":
+          return { ok: true, message: engine.goal.describe() };
+        case "pause":
+          return { ok: true, message: engine.goal.pause() };
+        case "resume":
+          return { ok: true, message: engine.goal.resume() };
+        case "stop":
+          return { ok: true, message: engine.goal.stop() };
+        case "note":
+          if (!text) return { ok: false, message: "usage: /goal note <text>" };
+          return { ok: true, message: engine.goal.note(text) };
+        case "more": {
+          const more = parseGoalArgs(`x ${text}`);
+          if (typeof more === "string") return { ok: false, message: "usage: /goal more [--rounds N] [--tokens N] [--usd N]" };
+          return { ok: true, message: engine.goal.extend({ rounds: /--rounds/.test(text) ? more.rounds : undefined, tokens: more.tokens, usd: more.usd }) };
+        }
+      }
+      const parsed = parseGoalArgs(args);
+      if (typeof parsed === "string") return { ok: false, message: parsed };
+      const err = engine.goal.start(parsed.objective, parsed);
+      if (err) return { ok: false, message: err };
+      const limits = [`${parsed.rounds} rounds`, ...(parsed.tokens ? [`${parsed.tokens} tokens`] : []), ...(parsed.usd ? [`$${parsed.usd}`] : [])];
+      return { ok: true, message: `goal set (at most ${limits.join(", ")}) — /goal note steers it, /goal pause or esc pauses it, /goal stop ends it` };
     },
   },
   {
@@ -273,7 +349,9 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: "Wipe this session — board, conversation context, usage and screen — and start clean",
     async run(engine) {
       if (engine.running) return { ok: false, message: "cancel the running task first" };
+      if (engine.goal.exists) return { ok: false, message: "a goal is still active — /goal stop it first" };
       const n = engine.resetSession();
+      engine.goal.clear();
       saveTasks([]); // otherwise a restart resurrects the board this just cleared
       return { ok: true, message: n ? `session cleared (${n} task${n === 1 ? "" : "s"} dropped)` : "session cleared" };
     },
@@ -367,11 +445,11 @@ export class CommandRegistry {
     return this.byName.has(name);
   }
 
-  async run(engine: Engine, name: string, args = ""): Promise<CommandResult> {
+  async run(engine: Engine, name: string, args = "", ctx: CommandContext = { origin: "local" }): Promise<CommandResult> {
     const cmd = this.byName.get(name);
     if (!cmd) return { ok: false, message: `unknown command: /${name}` };
     try {
-      return await cmd.run(engine, args);
+      return await cmd.run(engine, args, ctx);
     } catch (err) {
       return { ok: false, message: `/${name} failed: ${err instanceof Error ? err.message : err}` };
     }

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // The end of a run, the way Claude Code ends a turn: a short summary of what changed, the files it

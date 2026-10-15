@@ -76,6 +76,7 @@ export interface NitiOptions {
   projectInstructions?: boolean; // false → don't auto-read .niti.md / AGENTS.md (default true)
   repoMap?: boolean; // false → don't put a generated project map in the system prompt
   sandbox?: boolean; // false → run shell commands without the OS sandbox (src/sandbox.ts); default on
+  remote?: boolean; // false → this project stays out of remote control even when the Mac is signed in
 }
 
 export function loadOptions(path = CONFIG): NitiOptions {
@@ -101,6 +102,7 @@ export function loadOptions(path = CONFIG): NitiOptions {
     projectInstructions: raw.projectInstructions === false ? false : undefined,
     repoMap: raw.repoMap === false ? false : undefined,
     sandbox: raw.sandbox === false ? false : undefined,
+    remote: raw.remote === false ? false : undefined,
   };
 }
 

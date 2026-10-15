@@ -7,6 +7,8 @@ import type {
   AgentUsage,
   ApprovalRequest,
   AwakeState,
+  GoalStatus,
+  RemoteState,
   HunkLine,
   OrchestrationEvent,
   RateLimitSnapshot,
@@ -100,6 +102,8 @@ export interface SessionState {
   goal: string;
   active: boolean;
   awake: AwakeState; // /awake — the status-bar chip
+  goalStatus: GoalStatus | null; // /goal — the status-bar chip, and where the composer sends text while it is live
+  remote: RemoteState | null; // remote control — the status-bar chip
   progress: number;
   status: string;
   plannedGoal: string; // the goal last planned in Plan mode: sending it in Build runs that plan
@@ -139,6 +143,8 @@ export function emptyState(): SessionState {
     goal: "",
     active: false,
     awake: "off",
+    goalStatus: null,
+    remote: null,
     progress: 0,
     status: "",
     plannedGoal: "",
@@ -171,6 +177,8 @@ export function fromSession(info: SessionInfo, prev?: SessionState): SessionStat
   s.lastSeq = info.lastSeq;
   s.active = info.running;
   s.awake = info.awake ?? "off";
+  s.goalStatus = info.goal ?? null;
+  s.remote = info.remote ?? null;
   s.tasks = info.tasks ?? [];
   info.agents.forEach((cfg, i) => {
     const old = prev?.agents[cfg.id];
@@ -511,7 +519,7 @@ function resetSession(d: Draft) {
     agents[id] = { ...a, status: "idle", activity: "", usage: zeroUsage(), items: [], todos: null };
   }
   const keep = d.s;
-  d.s = { ...emptyState(), ready: true, root: keep.root, agents, order: keep.order, leadId: keep.leadId, lastSeq: keep.lastSeq, nextId: keep.nextId, fileEpoch: keep.fileEpoch + 1, awake: keep.awake, status: "session cleared" }; // /clear wipes the transcript, not the Mac's sleep state
+  d.s = { ...emptyState(), ready: true, root: keep.root, agents, order: keep.order, leadId: keep.leadId, lastSeq: keep.lastSeq, nextId: keep.nextId, fileEpoch: keep.fileEpoch + 1, awake: keep.awake, goalStatus: keep.goalStatus, remote: keep.remote, status: "session cleared" }; // /clear wipes the transcript, not the Mac's sleep state
 }
 
 function applyEvent(d: Draft, e: ServerEvent) {
@@ -554,6 +562,7 @@ function applyEvent(d: Draft, e: ServerEvent) {
       } else if (e.state === "ended") {
         d.s.progress = 100;
         d.s.status = d.s.status.startsWith("finished with") || d.s.status.startsWith("cancelled") ? d.s.status : "done";
+        if (d.s.goalStatus?.state === "running") d.s.status = `goal round ${d.s.goalStatus.round} done — starting the next`;
         for (const id of d.s.order) {
           const cur = d.s.agents[id]!;
           if (cur.status === "working" || cur.items.some((it) => it.kind === "tool" && it.status === "running") || cur.items[cur.items.length - 1]?.kind === "text") {
@@ -593,6 +602,12 @@ function applyEvent(d: Draft, e: ServerEvent) {
     }
     case "awake":
       d.s.awake = e.state;
+      break;
+    case "goal":
+      d.s.goalStatus = e.status;
+      break;
+    case "remote":
+      d.s.remote = e.remote;
       break;
     case "theme":
       break;

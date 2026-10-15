@@ -396,6 +396,10 @@ export class Agent {
   // (ask_agent lets a peer answer while its own task is still running) — a boolean would let one
   // finishing clear "busy" while the other is still active.
   private inFlightCount = 0;
+  // Engine.interruptAgent: aborting this abandons the step in flight on this agent only; the run's
+  // own signal (abortSignal) still stops everything. stepGen tells the loop it was this, not that.
+  private stepCtl = new AbortController();
+  private stepGen = 0;
   private lastNotesVersion = -1; // cursor into the shared notes board, so injectNotes only fires on change
 
   // /clear: back to the state of a freshly built agent. Everything else a loop needs lives in its own
@@ -434,6 +438,21 @@ export class Agent {
     this.sandbox = deps.sandbox ?? false;
     this.shouldStop = deps.shouldStop;
     this.abortSignal = deps.abortSignal;
+  }
+
+  // Abandon the model call or tool in flight on this agent and carry on with whatever is in its
+  // inbox — the operator's message, posted before this is called.
+  interrupt(): void {
+    this.stepGen++;
+    const old = this.stepCtl;
+    this.stepCtl = new AbortController();
+    old.abort();
+  }
+
+  // The run's signal and this agent's own step signal, as one.
+  private signal(): AbortSignal {
+    const run = this.abortSignal?.();
+    return run ? AbortSignal.any([run, this.stepCtl.signal]) : this.stepCtl.signal;
   }
 
   // True while run()/respond() has a model call in flight. reconfigure() checks this — swapping
@@ -490,126 +509,142 @@ export class Agent {
           this.bus.publish({ agentId: id, type: "warning", payload: "cancelled — stopping after this turn", time: Date.now() });
           return { outcome: "failed", text: finalText, error };
         }
-        this.injectInbox(turns, sessionId);
-        this.injectNotes(turns, sessionId);
-        this.restateTodos(turns, ctx);
-        this.maskOldObservations(turns, ctx);
-        const tools = this.buildTools(allowed, ctx);
-        const reply = await this.send(turns, tools, onDelta);
-        if (reply.text) {
-          finalText = reply.text;
-          this.bus.publish({ agentId: id, type: "message", payload: reply.text, time: Date.now() });
-        }
-        this.record(reply.usage, reply.rateLimit);
-        if (reply.truncated) {
-          this.cutOff(turns, reply, sessionId);
-          continue;
-        }
-
-        // Pre-emptive heads-up: fire once when the conversation nears the context window.
-        if (!warned && reply.usage && overContextThreshold(this.contextFill(reply.usage), context)) {
-          warned = true;
-          const fill = this.contextFill(reply.usage);
-          const pct = Math.round((fill / context) * 100);
-          this.bus.publish({ agentId: id, type: "warning", payload: `context ~${pct}% full (${fill}/${context} tokens)`, time: Date.now() });
-        }
-        // Account-quota heads-up: fire once when requests-remaining is about to hit zero.
-        const rr = reply.rateLimit?.remainingRequests;
-        if (!quotaWarned && rr != null && rr <= 1) {
-          quotaWarned = true;
-          this.bus.publish({ agentId: id, type: "warning", payload: `${this.config.provider} rate limit low — ${rr} requests remaining`, time: Date.now() });
-        }
-        const compacted = await this.compact(turns, ctx, reply, context, "context compacted automatically");
-        if (reply.toolCalls.length === 0) {
-          // No tools *and* no text is not a completion — it's a Gemini safety block, an OpenAI
-          // content filter, or an empty choices array. Every one of those used to present as a
-          // finished task, so the orchestrator released dependents on an empty output.
-          if (!reply.text) {
-            error = "the model returned neither text nor a tool call (safety filter, truncation, or an empty response)";
-            if (sessionId) this.store?.setStatus(sessionId, "failed");
-            this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
-            return { outcome: "failed", text: finalText, error };
+        // The operator can interrupt this agent alone (Engine.interruptAgent): the step in flight
+        // is abandoned, and the loop goes on with their message instead of failing the task.
+        const gen = this.stepGen;
+        try {
+          this.injectInbox(turns, sessionId);
+          this.injectNotes(turns, sessionId);
+          this.restateTodos(turns, ctx);
+          this.maskOldObservations(turns, ctx);
+          const tools = this.buildTools(allowed, ctx);
+          const reply = await this.send(turns, tools, onDelta);
+          if (reply.text) {
+            finalText = reply.text;
+            this.bus.publish({ agentId: id, type: "message", payload: reply.text, time: Date.now() });
           }
-          this.push(turns, { role: "assistant", text: reply.text, toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
-          // A message that arrived during this turn — a teammate's hand-off, or the user's nudge
-          // from the dashboard — would otherwise sit in the inbox until some later, unrelated run,
-          // while POST /agents/:id/message had already reported it delivered. Keep looping: the
-          // next iteration's injectInbox feeds it in as a user turn. Guarded on a turn being left,
-          // so a nudge landing on the final allowed turn can't downgrade a finished task to
-          // "exhausted" — there, the run ends and the message waits, as it did before.
-          if (i < this.maxTurns - 1 && this.pendingInbox() > 0) continue;
-          // Ground truth before "done". Only for a run that actually changed files — a review or
-          // research task cannot have broken the build, and running one for it would be a minute
-          // of latency for a foregone conclusion.
-          if (ctx.wrote && this.verify.length > 0) {
-            this.bus.publish({ agentId: id, type: "thought", payload: `verifying: ${this.verify.map((c) => c.name).join(", ")}`, time: Date.now() });
-            const v = await runChecks(this.root, this.verify, this.sandbox);
-            // A green result that arrived only because the checks themselves were edited is not
-            // evidence of anything. Measured by reverting them and asking again, not inferred —
-            // see tamperedChecks(). Only worth asking when the checks currently pass.
-            const gamedFiles = v.ok ? await this.tamperedChecks(ctx) : { enforcer: [], test: [] };
-            // A dual-use file (a manifest, a test that legitimately follows a rename) is reported,
-            // never refused: blocking those would derail ordinary refactoring. The reviewer and the
-            // human see it; the agent is not stopped by it.
-            if (gamedFiles.test.length > 0) {
-              this.bus.publish({
-                agentId: id,
-                type: "warning",
-                payload: `the checks would fail without this run's changes to ${gamedFiles.test.join(", ")} — worth a human's eye`,
-                time: Date.now(),
-              });
+          this.record(reply.usage, reply.rateLimit);
+          if (reply.truncated) {
+            this.cutOff(turns, reply, sessionId);
+            continue;
+          }
+
+          // Pre-emptive heads-up: fire once when the conversation nears the context window.
+          if (!warned && reply.usage && overContextThreshold(this.contextFill(reply.usage), context)) {
+            warned = true;
+            const fill = this.contextFill(reply.usage);
+            const pct = Math.round((fill / context) * 100);
+            this.bus.publish({ agentId: id, type: "warning", payload: `context ~${pct}% full (${fill}/${context} tokens)`, time: Date.now() });
+          }
+          // Account-quota heads-up: fire once when requests-remaining is about to hit zero.
+          const rr = reply.rateLimit?.remainingRequests;
+          if (!quotaWarned && rr != null && rr <= 1) {
+            quotaWarned = true;
+            this.bus.publish({ agentId: id, type: "warning", payload: `${this.config.provider} rate limit low — ${rr} requests remaining`, time: Date.now() });
+          }
+          const compacted = await this.compact(turns, ctx, reply, context, "context compacted automatically");
+          if (reply.toolCalls.length === 0) {
+            // No tools *and* no text is not a completion — it's a Gemini safety block, an OpenAI
+            // content filter, or an empty choices array. Every one of those used to present as a
+            // finished task, so the orchestrator released dependents on an empty output.
+            if (!reply.text) {
+              error = "the model returned neither text nor a tool call (safety filter, truncation, or an empty response)";
+              if (sessionId) this.store?.setStatus(sessionId, "failed");
+              this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+              return { outcome: "failed", text: finalText, error };
             }
-            if (!v.ok || gamedFiles.enforcer.length > 0) {
-              const gamed = gamedFiles.enforcer;
-              if (verifyRounds < MAX_VERIFY_ROUNDS && i < this.maxTurns - 1) {
-                verifyRounds++;
+            this.push(turns, { role: "assistant", text: reply.text, toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
+            // A message that arrived during this turn — a teammate's hand-off, or the user's nudge
+            // from the dashboard — would otherwise sit in the inbox until some later, unrelated run,
+            // while POST /agents/:id/message had already reported it delivered. Keep looping: the
+            // next iteration's injectInbox feeds it in as a user turn. Guarded on a turn being left,
+            // so a nudge landing on the final allowed turn can't downgrade a finished task to
+            // "exhausted" — there, the run ends and the message waits, as it did before.
+            if (i < this.maxTurns - 1 && this.pendingInbox() > 0) continue;
+            // Ground truth before "done". Only for a run that actually changed files — a review or
+            // research task cannot have broken the build, and running one for it would be a minute
+            // of latency for a foregone conclusion.
+            if (ctx.wrote && this.verify.length > 0) {
+              this.bus.publish({ agentId: id, type: "thought", payload: `verifying: ${this.verify.map((c) => c.name).join(", ")}`, time: Date.now() });
+              const v = await runChecks(this.root, this.verify, this.sandbox, this.signal());
+              // A green result that arrived only because the checks themselves were edited is not
+              // evidence of anything. Measured by reverting them and asking again, not inferred —
+              // see tamperedChecks(). Only worth asking when the checks currently pass.
+              const gamedFiles = v.ok ? await this.tamperedChecks(ctx) : { enforcer: [], test: [] };
+              // A dual-use file (a manifest, a test that legitimately follows a rename) is reported,
+              // never refused: blocking those would derail ordinary refactoring. The reviewer and the
+              // human see it; the agent is not stopped by it.
+              if (gamedFiles.test.length > 0) {
                 this.bus.publish({
                   agentId: id,
                   type: "warning",
-                  payload: gamed.length > 0
-                    ? `checks pass only because ${gamed.join(", ")} changed — asking for a real fix`
-                    : "verification failed — returning the errors to the agent",
+                  payload: `the checks would fail without this run's changes to ${gamedFiles.test.join(", ")} — worth a human's eye`,
                   time: Date.now(),
                 });
-                this.push(turns, { role: "user", text: gamed.length > 0 ? tamperMessage(gamed) : failureMessage(v.report) }, sessionId);
-                continue;
               }
-              // Out of rounds. Reporting "done" here is what released dependents onto a tree that
-              // does not build — the exact failure this whole pass exists to prevent, arriving one
-              // level up instead.
-              if (gamed.length > 0) await this.restoreChecks(ctx, gamed);
-              error = gamed.length > 0
-                ? `the checks pass only because the checks themselves were changed (${gamed.join(", ")}) — the work is unverified, and those files have been restored`
-                : `the project's checks still fail after ${verifyRounds} fix attempt(s):\n${v.report}`;
-              if (sessionId) this.store?.setStatus(sessionId, "failed");
-              this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
-              return { outcome: "unverified", text: finalText, error };
+              if (!v.ok || gamedFiles.enforcer.length > 0) {
+                const gamed = gamedFiles.enforcer;
+                if (verifyRounds < MAX_VERIFY_ROUNDS && i < this.maxTurns - 1) {
+                  verifyRounds++;
+                  this.bus.publish({
+                    agentId: id,
+                    type: "warning",
+                    payload: gamed.length > 0
+                      ? `checks pass only because ${gamed.join(", ")} changed — asking for a real fix`
+                      : "verification failed — returning the errors to the agent",
+                    time: Date.now(),
+                  });
+                  this.push(turns, { role: "user", text: gamed.length > 0 ? tamperMessage(gamed) : failureMessage(v.report) }, sessionId);
+                  continue;
+                }
+                // Out of rounds. Reporting "done" here is what released dependents onto a tree that
+                // does not build — the exact failure this whole pass exists to prevent, arriving one
+                // level up instead.
+                if (gamed.length > 0) await this.restoreChecks(ctx, gamed);
+                error = gamed.length > 0
+                  ? `the checks pass only because the checks themselves were changed (${gamed.join(", ")}) — the work is unverified, and those files have been restored`
+                  : `the project's checks still fail after ${verifyRounds} fix attempt(s):\n${v.report}`;
+                if (sessionId) this.store?.setStatus(sessionId, "failed");
+                this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+                return { outcome: "unverified", text: finalText, error };
+              }
+              this.bus.publish({ agentId: id, type: "thought", payload: "verification passed", time: Date.now() });
             }
-            this.bus.publish({ agentId: id, type: "thought", payload: "verification passed", time: Date.now() });
+            if (sessionId) this.store?.setStatus(sessionId, "done");
+            this.bus.publish({ agentId: id, type: "done", payload: "", time: Date.now() });
+            return { outcome: "done", text: finalText, error: "" };
           }
-          if (sessionId) this.store?.setStatus(sessionId, "done");
-          this.bus.publish({ agentId: id, type: "done", payload: "", time: Date.now() });
-          return { outcome: "done", text: finalText, error: "" };
-        }
-        ctx.resultBudget = this.resultBudgetFor(reply, context, compacted);
-        const results = await this.execCalls(reply.toolCalls, allowed, ctx);
-        // Pushed after execution (not before): execTool can mutate a call's input in place (e.g.
-        // attaching the approval-time diff) — persisting first would silently drop that from history.
-        this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
-        this.push(turns, { role: "tool", results: withBudgetNote(results, i, this.maxTurns) }, sessionId);
-        const verdict = stall.observe(reply.toolCalls, results, (c) => this.changesFiles(c));
-        if (verdict === "stop") {
-          error = stall.kind === "recurring"
-            ? `stalled: the same failure returned after ${stall.recurCount} separate fixes — ${stall.detail}`
-            : `stalled: ${stall.rounds} rounds of reads and failing commands with no file change, even after being told to act`;
-          if (sessionId) this.store?.setStatus(sessionId, "exhausted");
-          this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
-          return { outcome: "exhausted", text: finalText, error };
-        }
-        if (verdict === "nudge") {
-          const recurring = stall.kind === "recurring";
-          this.bus.publish({ agentId: id, type: "warning", payload: recurring ? `the same failure keeps coming back after edits — telling the agent to change approach` : `${stall.rounds} rounds without changing a file — telling the agent to act`, time: Date.now() });
-          this.push(turns, { role: "user", text: recurring ? recurringNudge(stall.detail, stall.recurCount) : stallNudge(stall.rounds) }, sessionId);
+          ctx.resultBudget = this.resultBudgetFor(reply, context, compacted);
+          let results = await this.execCalls(reply.toolCalls, allowed, ctx);
+          // Interrupted while its tools ran (a shell killed, an approval refused): the calls still
+          // happened, so they stay in the history, marked, and the operator's message comes next.
+          const interrupted = this.stepGen !== gen;
+          if (interrupted) results = results.map((r) => ({ ...r, output: `${r.output}\n[interrupted by the operator]` }));
+          // Pushed after execution (not before): execTool can mutate a call's input in place (e.g.
+          // attaching the approval-time diff) — persisting first would silently drop that from history.
+          this.push(turns, { role: "assistant", text: reply.text, toolCalls: reply.toolCalls, raw: reply.raw }, sessionId, reply.usage);
+          this.push(turns, { role: "tool", results: withBudgetNote(results, i, this.maxTurns) }, sessionId);
+          if (interrupted) {
+            this.bus.publish({ agentId: id, type: "warning", payload: "interrupted by the operator", time: Date.now() });
+            continue; // not a stall: the operator stopped it
+          }
+          const verdict = stall.observe(reply.toolCalls, results, (c) => this.changesFiles(c));
+          if (verdict === "stop") {
+            error = stall.kind === "recurring"
+              ? `stalled: the same failure returned after ${stall.recurCount} separate fixes — ${stall.detail}`
+              : `stalled: ${stall.rounds} rounds of reads and failing commands with no file change, even after being told to act`;
+            if (sessionId) this.store?.setStatus(sessionId, "exhausted");
+            this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+            return { outcome: "exhausted", text: finalText, error };
+          }
+          if (verdict === "nudge") {
+            const recurring = stall.kind === "recurring";
+            this.bus.publish({ agentId: id, type: "warning", payload: recurring ? `the same failure keeps coming back after edits — telling the agent to change approach` : `${stall.rounds} rounds without changing a file — telling the agent to act`, time: Date.now() });
+            this.push(turns, { role: "user", text: recurring ? recurringNudge(stall.detail, stall.recurCount) : stallNudge(stall.rounds) }, sessionId);
+          }
+        } catch (err) {
+          if (this.stepGen === gen || this.abortSignal?.()?.aborted) throw err;
+          this.bus.publish({ agentId: id, type: "warning", payload: "interrupted by the operator", time: Date.now() });
         }
       }
       // Falling out of the maxTurns loop means the agent never finished. Reporting "done" here
@@ -647,19 +682,18 @@ export class Agent {
   // `system` is overridden only by compaction, whose summarizer has its own prompt.
   private async send(turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, system = this.config.systemPrompt): Promise<ProviderReply> {
     for (let attempt = 0; ; attempt++) {
-      const signal = this.abortSignal?.();
-      if (signal?.aborted) throw new Error("interrupted");
+      const signal = this.signal();
+      if (signal.aborted) throw new Error("interrupted");
       try {
         // thinkingMode is read live, per call — POST /settings flips it mid-run.
         const call = this.provider.send(system, turns, tools, onDelta, signal, this.settings.thinkingMode);
-        if (!signal) return await call;
         return await Promise.race([
           call,
           new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("interrupted")), { once: true })),
         ]);
       } catch (err) {
         const wait = rateLimitWait(err, attempt);
-        if (wait === undefined || signal?.aborted) throw err;
+        if (wait === undefined || signal.aborted) throw err;
         this.bus.publish({ agentId: this.config.id, type: "warning", payload: `${this.config.provider} is rate-limiting — retrying in ${Math.round(wait / 1000)}s`, time: Date.now() });
         await abortableSleep(wait, signal);
       }
@@ -1424,7 +1458,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, hashline: this.config.editFormat === "hashline", signal: this.abortSignal?.() }); // allowOutside: only ever past a human's yes
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, hashline: this.config.editFormat === "hashline", signal: this.signal() }); // allowOutside: only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo

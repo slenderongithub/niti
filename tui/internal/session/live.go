@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // The live view: what the agents are doing, shown the way Claude Code shows it. A finished command

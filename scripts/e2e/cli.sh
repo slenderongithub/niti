@@ -4,7 +4,7 @@ NITI=${0:A:h:h:h}
 SP=${0:A:h}
 LLM=$((48600 + RANDOM % 300))
 P=$(mktemp -d); P=${P:A}; S=$(mktemp -d)
-export NITI_AUTH_FILE=$S/auth.json NITI_TRUST_FILE=$S/trust.json NITI_OFFLINE=1 NITI_MODELS_FILE=$S/models.json
+export NITI_AUTH_FILE=$S/auth.json NITI_TRUST_FILE=$S/trust.json NITI_REMOTE_FILE=$S/remote.json NITI_OFFLINE=1 NITI_MODELS_FILE=$S/models.json
 bun $SP/fakellm.ts $LLM $S >/dev/null 2>&1 &
 LPID=$!
 sleep 0.6

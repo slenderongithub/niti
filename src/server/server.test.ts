@@ -318,6 +318,16 @@ test("mid-task agent messaging: 400 on an empty body, 409 for an idle agent (not
   expect((await idle.json()).error).toContain("isn't running");
 });
 
+test("interrupting an agent: 409 for an idle one, 400 for a malformed id", async () => {
+  const { h } = setup();
+  track(h);
+  const post = (path: string) => fetch(`${h.url}${path}?token=${h.token}`, { method: "POST", body: "{}" });
+  const idle = await post("/agents/frontend/interrupt");
+  expect(idle.status).toBe(409);
+  expect((await idle.json()).error).toContain("isn't running");
+  expect((await post("/agents/%zz/interrupt")).status).toBe(400);
+});
+
 test("auth store round-trips through the API (redacted on read)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "niti-srv-"));
   process.env.NITI_AUTH_FILE = join(dir, "auth.json");

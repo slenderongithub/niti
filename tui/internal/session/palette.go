@@ -4,10 +4,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/niti/tui/internal/theme"
-	"github.com/niti/tui/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 )
 
 // The command palette (ctrl+p): every command, view, agent and theme in one fuzzy-searchable list,

@@ -81,13 +81,15 @@ test("a caller-supplied file list is held to the same boundary as the walk", () 
 });
 
 // The Files panel and @-mentions list project files too, so they are held to the same IGNORE set
-// (CLAUDE.md rule 3): niti-app/ and dependency trees never show — while a user's own
+// (CLAUDE.md rule 3): niti-app/, niti-relay/, niti-mobile/ and dependency trees never show — while a user's own
 // generically named folders (desktop/, ide/) do.
 test("projectFiles honours the same IGNORE boundary as the graph", () => {
   const root = scaffold({
     "src/a.ts": "",
     "README.md": "",
     "niti-app/src/x.ts": "",
+    "niti-relay/src/room.ts": "",
+    "niti-mobile/app/index.tsx": "",
     "desktop/main.js": "",
     "node_modules/z/index.js": "",
   });

@@ -4,6 +4,7 @@ import { useOutput } from "@/store/output";
 import { useUI, type Page } from "@/store/ui";
 import { ApiError } from "./api";
 import { steerTarget, workingAgents } from "./reducer";
+import { goalLive } from "./types";
 
 // Everything the composer, the palette and the menus can ask the core to do, in one place.
 
@@ -146,7 +147,9 @@ export type Target = "team" | "auto" | "broadcast" | string; // string = an agen
 // text steers one agent, or every working agent at once with Broadcast.
 export const isSlashCommand = (t: string) => /^\/[^\s/]*(\s|$)/.test(t);
 
-export async function send(text: string, target: Target): Promise<boolean> {
+// `interrupt`: for one agent, abandon what it is doing now and carry on from this message, instead
+// of waiting for its next step (the TUI's x in the Agents panel).
+export async function send(text: string, target: Target, interrupt = false): Promise<boolean> {
   const t = text.trim();
   if (!t) return false;
   // A command name never contains "/": "/Users/me/app.ts is broken" is a prompt, not a command.
@@ -157,6 +160,23 @@ export async function send(text: string, target: Target): Promise<boolean> {
   }
   const { session, mode } = useApp.getState();
   try {
+    // While a goal is live, text is a note to it: sent now to whoever is working and carried into
+    // its next round. Between rounds no run is active, and a plain prompt would be refused. Picking
+    // one agent mid-round still steers just that agent.
+    const oneAgent = target !== "team" && target !== "auto" && target !== "broadcast";
+    if (goalLive(session.goalStatus) && !(oneAgent && session.active)) {
+      const r = await api().runCommand("goal", `note ${t}`);
+      if (!r.ok) throw new Error(r.message);
+      toast.success("Note for the goal", { description: r.message });
+      return true;
+    }
+    if (session.active && interrupt && target !== "team" && target !== "broadcast") {
+      const id = target === "auto" ? steerTarget(session, useUI.getState().focusedAgent ?? undefined) : target;
+      if (!id) throw new Error("no agent is working right now");
+      await api().interruptAgent(id, t);
+      toast.success(`Interrupted ${session.agents[id]?.cfg.role ?? id}`, { description: "It stops what it's doing and carries on from your message." });
+      return true;
+    }
     if (session.active && target !== "team") {
       const ids = target === "broadcast" ? workingAgents(session) : [target === "auto" ? steerTarget(session, useUI.getState().focusedAgent ?? undefined) : target];
       const live = ids.filter((x): x is string => Boolean(x));

@@ -1,9 +1,9 @@
 package session
 
 import (
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // The agent picker is the ctrl+g "switch window" quick-picker: a popup listing every teammate (plus

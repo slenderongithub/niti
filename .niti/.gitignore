@@ -6,3 +6,4 @@ logs/
 reports/
 worktrees/
 *.tmp
+goal.json

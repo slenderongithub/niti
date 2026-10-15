@@ -62,7 +62,37 @@ export interface SessionInfo {
   auto: boolean;
   theme?: string;
   awake?: AwakeState; // absent from an older core
+  goal?: GoalStatus | null; // /goal; absent from an older core
+  remote?: RemoteState | null; // remote control; absent from an older core
 }
+
+// Remote control (src/remote/bridge.ts RemoteState).
+export interface RemoteState {
+  signedIn: boolean;
+  email?: string;
+  relay?: string;
+  enabled: boolean;
+  link: "up" | "connecting" | "off";
+  phones: { id: string; name: string; online: boolean }[];
+}
+
+// /goal: the persistent objective (src/goal.ts GoalStatus).
+export type GoalState = "running" | "paused" | "done" | "blocked" | "budget" | "rounds" | "stopped";
+export interface GoalStatus {
+  objective: string;
+  state: GoalState;
+  reason: string;
+  round: number;
+  maxRounds: number;
+  used: { tokens: number; cost: number };
+  budget: { tokens?: number; usd?: number };
+  verdicts: { round: number; done: boolean; reason: string; next: string; changed: boolean }[];
+  notes: string[];
+  error: boolean;
+}
+
+// Running, or paused waiting to be resumed: the goal still holds the session.
+export const goalLive = (g: GoalStatus | null | undefined): boolean => !!g && (g.state === "running" || g.state === "paused");
 
 // /awake: "lid" = awake with the lid closed too, "open" = lid-open only (admin prompt declined).
 export type AwakeState = "off" | "lid" | "open";
@@ -199,6 +229,8 @@ type ServerEventBody =
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
   | { kind: "theme"; theme: string }
   | { kind: "awake"; state: AwakeState }
+  | { kind: "goal"; status: GoalStatus | null }
+  | { kind: "remote"; remote: RemoteState }
   | { kind: "session_reset" }
   | ({ kind: "turn_summary" } & TurnSummary)
   | { kind: "resync"; missed: number }

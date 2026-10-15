@@ -9,11 +9,11 @@ import (
 	"sort"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // The Files panel: the project's tree under the Agents panel, marked with what the agents are doing

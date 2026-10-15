@@ -63,6 +63,8 @@ type SessionInfo struct {
 	Prefs         map[string]bool `json:"prefs"`         // Config-tab flags from agents.yaml (lightMode, reduceMotion, …); nil from an older core
 	Auto          bool            `json:"auto"`          // default permission mode: true = auto-approve
 	Awake         string          `json:"awake"`         // /awake: "off" | "lid" | "open"; "" from an older core
+	Goal          *GoalStatus     `json:"goal"`          // /goal: the persistent objective; nil when there is none
+	Remote        *RemoteState    `json:"remote"`        // remote control; nil from an older core
 	Settings      *Settings       `json:"settings"`      // live toggles; nil from an older core
 }
 
@@ -181,6 +183,38 @@ type Lock struct {
 	Holder string `json:"holder"`
 }
 
+// GoalStatus is /goal's state: on POST /session and on every `goal` event (as Event.Status).
+type GoalStatus struct {
+	Objective string `json:"objective"`
+	State     string `json:"state"` // running | paused | done | blocked | budget | rounds | stopped
+	Reason    string `json:"reason"`
+	Round     int    `json:"round"`
+	MaxRounds int    `json:"maxRounds"`
+	Used      struct {
+		Tokens int     `json:"tokens"`
+		Cost   float64 `json:"cost"`
+	} `json:"used"`
+	Budget struct {
+		Tokens int     `json:"tokens"`
+		Usd    float64 `json:"usd"`
+	} `json:"budget"`
+	Error bool `json:"error"`
+}
+
+// RemoteState is remote control as the core reports it: on POST /session and on `remote` events.
+type RemoteState struct {
+	SignedIn bool   `json:"signedIn"`
+	Enabled  bool   `json:"enabled"`
+	Link     string `json:"link"` // up | connecting | off
+	Phones   []struct {
+		Name   string `json:"name"`
+		Online bool   `json:"online"`
+	} `json:"phones"`
+}
+
+// Live reports whether the goal still holds the session: running, or paused waiting to resume.
+func (g *GoalStatus) Live() bool { return g != nil && (g.State == "running" || g.State == "paused") }
+
 // Event is one item of the SSE ServerEvent union. `Event` (raw) holds either an AgentEvent
 // (kind=agent_event) or an OrchestrationEvent (kind=orchestration); decode with the helpers.
 type Event struct {
@@ -197,6 +231,8 @@ type Event struct {
 	Goal     string          `json:"goal"`
 	Theme    string          `json:"theme"`  // theme events: the palette another client just picked
 	Missed   int             `json:"missed"` // resync events: how many events were lost while disconnected
+	Status   *GoalStatus     `json:"status"` // goal events: the goal's state, nil once it is cleared
+	Remote   *RemoteState    `json:"remote"` // remote events
 
 	// turn_summary events: the end-of-run card.
 	Summary    string       `json:"summary"`
@@ -292,6 +328,12 @@ func (c *Client) Cancel() error { return c.do("POST", "/cancel", nil, nil) }
 // work in progress instead of starting a new goal.
 func (c *Client) MessageAgent(agentID, text string) error {
 	return c.do("POST", "/agents/"+url.PathEscape(agentID)+"/message", map[string]string{"text": text}, nil)
+}
+
+// InterruptAgent abandons what that agent is doing right now and has it carry on from text (empty:
+// the core's default "stop and reconsider"). The rest of the team keeps working.
+func (c *Client) InterruptAgent(agentID, text string) error {
+	return c.do("POST", "/agents/"+url.PathEscape(agentID)+"/interrupt", map[string]string{"text": text}, nil)
 }
 
 // Command mirrors one entry of the server-side slash-command registry (src/commands/registry.ts).

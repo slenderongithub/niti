@@ -3,8 +3,8 @@ package ui
 import (
 	"strings"
 
-	"github.com/niti/tui/internal/theme"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/theme"
 )
 
 // Key is one footer entry: the key and what it does ("enter", "Confirm").

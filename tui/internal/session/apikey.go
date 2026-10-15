@@ -4,11 +4,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/niti/tui/internal/api"
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/ui"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // /api replaces a provider's API key without leaving the session. A mistyped or revoked key used to

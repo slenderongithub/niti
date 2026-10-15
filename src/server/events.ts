@@ -2,6 +2,8 @@ import type { AgentEvent } from "../events/bus.ts";
 import type { AgentMessage } from "../messaging/message-bus.ts";
 import type { OrchestrationEvent } from "../orchestrator/scheduler.ts";
 import type { AgentUsage, RateLimitSnapshot } from "../usage.ts";
+import type { GoalStatus } from "../goal.ts";
+import type { RemoteState } from "../remote/bridge.ts";
 
 // The single event contract the Go TUI and web dashboard both consume over SSE. A discriminated
 // union with a monotonic `seq` + `time` on every event, so a late-joining client can replay from
@@ -17,6 +19,12 @@ export type ServerEventBody =
   | { kind: "theme"; theme: string }
   // /awake: "lid" = the Mac stays awake lid-closed, "open" = lid-open only (admin prompt declined).
   | { kind: "awake"; state: "off" | "lid" | "open" }
+  // /goal: the persistent objective's state, published on every change. null = no goal (cleared).
+  // Nested under `status` because clients decode every event into one flat shape, and `goal` is
+  // already a string on session events.
+  | { kind: "goal"; status: GoalStatus | null }
+  // Remote control: signed in or not, the relay link, the allowed phones and which are online.
+  | { kind: "remote"; remote: RemoteState }
   // /clear: the session was wiped. A client drops everything it is showing (transcripts, board,
   // totals, files) — replay can't carry this, because clear() below also empties the buffer.
   | { kind: "session_reset" }

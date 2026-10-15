@@ -229,6 +229,20 @@ test("a cancelled run reports real progress, and review/replan events are surfac
   g.onOrch({ type: "review", reviewer: "orchestrator", taskId: "t1", phase: "approved" });
 });
 
+test("while a goal is live the header shows it and the prompt bar sends notes to it", async () => {
+  const g = load();
+  await settled();
+  g.handle({ kind: "goal", status: { objective: "ship it", state: "running", round: 2, maxRounds: 20 } });
+  g.handle({ kind: "session", state: "started", goal: "goal 2/20: ship it" });
+  expect(g.elFor("goal").textContent).toBe("goal 2/20: ship it");
+  g.elFor("prompt-input").value = "use sqlite";
+  await g.submitPrompt();
+  expect(g.calls.filter((c: any) => c.path.startsWith("/commands/goal")).at(-1).body).toEqual({ args: "note use sqlite" });
+  g.handle({ kind: "goal", status: { objective: "ship it", state: "done", round: 3, maxRounds: 20 } });
+  g.handle({ kind: "session", state: "ended" });
+  expect(g.elFor("goal").textContent).toBe("waiting for a task…");
+});
+
 test("the header says working… while a session runs, and prompts always go out as build", async () => {
   const g = load();
   await settled();

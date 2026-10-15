@@ -3,8 +3,8 @@ package ui
 import (
 	"strings"
 
-	"github.com/niti/tui/internal/theme"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/theme"
 )
 
 // Panel is a bordered region with its name in the top border and live detail in the bottom one —

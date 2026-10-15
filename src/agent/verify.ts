@@ -82,10 +82,12 @@ interface VerifyResult {
 // gives the model the whole picture instead of one error per round-trip.
 // `sandbox`: the same OS containment as the agent's own shell. A check runs project scripts the agent
 // can edit (package.json, check.js), unprompted, so running it unconfined was a way round the sandbox.
-export async function runChecks(root: string, checks: Check[], sandbox = false): Promise<VerifyResult> {
+// `signal`: an interrupt or cancel kills the check in flight rather than waiting out a long build.
+export async function runChecks(root: string, checks: Check[], sandbox = false, signal?: AbortSignal): Promise<VerifyResult> {
   const failures: string[] = [];
   for (const c of checks) {
-    const r = await shell(root, c.command, c.args, { timeoutMs: VERIFY_TIMEOUT_MS, sandbox });
+    const r = await shell(root, c.command, c.args, { timeoutMs: VERIFY_TIMEOUT_MS, sandbox, signal });
+    if (signal?.aborted) throw new Error("interrupted");
     if (r.code === 0) continue;
     // A missing tool is not a failing check. `cargo check` on a machine without cargo would
     // otherwise be reported to the model as "your code is broken", and it would set about fixing

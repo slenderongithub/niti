@@ -30,7 +30,7 @@ const SRC_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".
 export const IGNORE = new Set([
   "node_modules", ".git", "dist", "build", ".niti", "vendor", ".next", "out", "target", "coverage",
   ".nuxt", ".svelte-kit", "__pycache__", ".venv", "venv", ".cache", ".turbo", ".output", ".gradle", ".idea",
-  "niti-app",
+  "niti-app", "niti-relay", "niti-mobile",
 ]);
 
 // True when any segment of a project-relative path sits in IGNORE. The walk applies IGNORE as it

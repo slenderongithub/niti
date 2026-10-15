@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/niti/tui/internal/theme"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/niti/tui/internal/theme"
 )
 
 // One table drives three things: what a key does (onKey dispatches through it), what the footer
@@ -63,6 +63,13 @@ func (m Model) keymap() []binding {
 	var local []binding
 	switch m.context() {
 	case "approval":
+		if len(m.approvals) > 0 && isDeviceRequest(m.approvals[0]) {
+			return []binding{
+				{keys: []string{"y", "Y"}, label: "y", desc: "Allow", help: "let this phone control niti on this Mac (only if it shows the same code)", footer: true, run: answer(true, "")},
+				{keys: []string{"n", "N", "esc"}, label: "n", desc: "Deny", help: "refuse it; it will ask again next time niti starts", footer: true, run: answer(false, "")},
+				m.quitBinding(),
+			}
+		}
 		who := "this agent"
 		if len(m.approvals) > 0 {
 			who = m.approvals[0].AgentID
@@ -127,6 +134,7 @@ func (m Model) keymap() []binding {
 			{keys: []string{"up", "k"}, label: "↑↓", desc: "Move", help: "move between agents", footer: true, run: func(m *Model) tea.Cmd { m.agentCursor = wrap(m.agentCursor-1, len(m.order)); return nil }},
 			{keys: []string{"down", "j"}, run: func(m *Model) tea.Cmd { m.agentCursor = wrap(m.agentCursor+1, len(m.order)); return nil }},
 			{keys: []string{"enter"}, label: "enter", desc: "Open", help: "show only this agent's transcript (enter again: all agents)", footer: true, run: (*Model).openAgentAtCursor},
+			{keys: []string{"x"}, label: "x", desc: "Interrupt", help: "interrupt this agent only: type what it should do instead (enter alone: just stop and reconsider)", footer: true, run: (*Model).startInterrupt},
 			escToPrompt,
 		}
 	default: // the prompt
@@ -369,12 +377,27 @@ func (m *Model) enter() tea.Cmd {
 		m.input.SetValue("")
 		return m.bang(cmd)
 	}
+	// After x in the Agents panel: this message interrupts that agent (empty: the core's default).
+	if m.interruptTo != "" && !strings.HasPrefix(text, "/") {
+		return m.sendInterrupt(text)
+	}
 	// After "deny & tell": this message is the what-to-do-instead, for that agent.
 	if m.steerTo != "" && text != "" && !strings.HasPrefix(text, "/") {
 		to := m.steerTo
 		m.steerTo = ""
 		m.input.SetValue("")
 		return m.steer(to, text)
+	}
+	// While a goal is live (running or paused), a message is a note to it: sent now to whoever is
+	// working and carried into its next round. A plain prompt would be refused while it runs.
+	if m.goalState.Live() && text != "" && !strings.HasPrefix(text, "/") {
+		m.input.SetValue("")
+		m.status = "note → goal: " + truncate(text, 60)
+		client := m.client
+		return func() tea.Msg {
+			res, err := client.RunCommand("goal", "note "+text)
+			return commandResultMsg{name: "goal note", result: res, err: err}
+		}
 	}
 	// Mid-run, a message steers the agent that's working instead of replacing the whole plan.
 	if m.running() && text != "" && !strings.HasPrefix(text, "/") {

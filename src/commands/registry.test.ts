@@ -189,7 +189,10 @@ test("a .niti/commands/*.md file becomes a command that submits its body", async
 
   const e = engine();
   let submitted = "";
-  e.submit = async (goal: string) => { submitted = goal; };
+  e.submit = async (goal: string) => {
+    submitted = goal;
+    return { cancelled: false, summary: "", files: [] };
+  };
   expect((await cmd!.run(e, "src/agent")).ok).toBe(true);
   expect(submitted).toBe("Review the changes in src/agent and report problems.");
 });
@@ -213,7 +216,7 @@ test("list() is what a client renders for autocomplete", () => {
   const names = new CommandRegistry(BUILTIN_COMMANDS).list().map((c) => c.name);
   // Order matters: it's the order the TUI's "/" menu offers them in, and /help is appended last.
   expect(names).toEqual([
-    "usage", "auto", "manual", "cancel", "awake", "rewind", "branch", "model", "sessions",
+    "usage", "auto", "manual", "cancel", "awake", "remote", "goal", "rewind", "branch", "model", "sessions",
     "agents", "tasks", "skills", "mcp", "lsp", "permissions", "cost", "status", "debate", "export", "resume", "clear", "init",
     "help",
   ]);

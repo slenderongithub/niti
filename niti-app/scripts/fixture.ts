@@ -53,6 +53,7 @@ export async function fixture(opts: { agents?: string[]; chunked?: boolean } = {
   const env: Record<string, string> = {
     NITI_AUTH_FILE: join(state, "auth.json"),
     NITI_TRUST_FILE: join(state, "trust.json"),
+    NITI_REMOTE_FILE: join(state, "remote.json"), // a test core must never dial a real relay
     // The core refreshes model lists from models.dev; the checks stay offline, like scripts/e2e.
     NITI_OFFLINE: "1",
     NITI_MODELS_FILE: join(state, "models.json"),

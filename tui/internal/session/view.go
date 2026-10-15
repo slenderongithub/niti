@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/niti/tui/internal/theme"
-	"github.com/niti/tui/internal/ui"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/niti/tui/internal/api"
+	"github.com/niti/tui/internal/theme"
+	"github.com/niti/tui/internal/ui"
 )
 
 // Layout — posting's shape: titled panels whose borders carry the live detail, a prompt panel whose
@@ -210,6 +211,12 @@ func (m Model) header(w int) string {
 		mode, mc = "Plan", theme.Alt
 	}
 	chip := lipgloss.NewStyle().Foreground(mc).Background(theme.Tint(mc)).Bold(true).Render(" " + mode + " ")
+	if r, c := remoteLabel(m.remote); r != "" {
+		chip = lipgloss.NewStyle().Foreground(c).Background(theme.Tint(c)).Bold(true).Render(" "+r+" ") + txt(theme.Muted, bg).Render(" ") + chip
+	}
+	if g := goalLabel(m.goalState); g != "" {
+		chip = lipgloss.NewStyle().Foreground(theme.Alt).Background(theme.Tint(theme.Alt)).Bold(true).Render(" "+g+" ") + txt(theme.Muted, bg).Render(" ") + chip
+	}
 	if a := awakeLabel(m.awake); a != "" {
 		chip = lipgloss.NewStyle().Foreground(theme.Amber).Background(theme.Tint(theme.Amber)).Bold(true).Render(" "+a+" ") + txt(theme.Muted, bg).Render(" ") + chip
 	}
@@ -236,6 +243,43 @@ func awakeLabel(state string) string {
 		return "awake · lid open"
 	}
 	return ""
+}
+
+// remoteLabel is the header chip for remote control: shown once the Mac is signed in, with how many
+// phones are looking right now.
+func remoteLabel(r *api.RemoteState) (string, lipgloss.Color) {
+	if r == nil || !r.SignedIn || !r.Enabled {
+		return "", theme.Muted
+	}
+	switch r.Link {
+	case "up":
+		n := 0
+		for _, p := range r.Phones {
+			if p.Online {
+				n++
+			}
+		}
+		if n > 0 {
+			return fmt.Sprintf("remote · %d watching", n), theme.Green
+		}
+		return "remote", theme.Green
+	case "connecting":
+		return "remote · connecting", theme.Muted
+	}
+	return "", theme.Muted
+}
+
+// goalLabel is the header chip for /goal: its round while it runs, its state once it doesn't.
+func goalLabel(g *api.GoalStatus) string {
+	switch {
+	case g == nil:
+		return ""
+	case g.State == "running":
+		return fmt.Sprintf("goal %d/%d", g.Round, g.MaxRounds)
+	case g.State == "paused":
+		return "goal paused"
+	}
+	return "goal " + g.State
 }
 
 // shownAgent is the agent the screen is about: the one maximized, else the lead, else the first.
@@ -671,6 +715,18 @@ func (m Model) promptPanel(w, rows int, compact bool) string {
 func (m Model) approvalBanner(w, rows int, compact bool) string {
 	r := m.approvals[0]
 	bg := theme.BgDeep
+	if isDeviceRequest(r) {
+		phone, _ := r.Input["phone"].(string)
+		code, _ := r.Input["code"].(string)
+		if compact {
+			return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(theme.Tint(theme.Amber)).Render(" ⚠ " + truncate("allow "+phone+" to control niti? code "+spacedCode(code), w-3))
+		}
+		text := strings.Join([]string{
+			txt(theme.Fg, bg).Bold(true).Render(phone) + txt(theme.Fg, bg).Render(" wants to control niti on this Mac."),
+			txt(theme.Fg, bg).Render("Allow it only if the phone shows this code: ") + txt(theme.Amber, bg).Bold(true).Render(spacedCode(code)),
+		}, "\n")
+		return ui.Panel{Title: "New phone", Focused: true, TitleLeft: true, Color: theme.Amber}.Render(text, w, rows)
+	}
 	// The whole call, wrapped: a long command cut at the panel edge hid the part being approved.
 	lines := []string{txt(theme.Fg, bg).Bold(true).Render(r.AgentID) + txt(theme.Fg, bg).Render(" wants to run:")}
 	for _, l := range m.approvalCallLines(w) {
@@ -685,6 +741,17 @@ func (m Model) approvalBanner(w, rows int, compact bool) string {
 		sub = fmt.Sprintf("%d more waiting", n-1)
 	}
 	return ui.Panel{Title: "Approval needed", Subtitle: sub, Focused: true, TitleLeft: true, Color: theme.Amber}.Render(text, w, rows)
+}
+
+// isDeviceRequest: the core asking whether a phone may control this Mac (src/remote/bridge.ts) — a
+// yes/no about a device, not a tool call, so it has its own banner and no "always allow".
+func isDeviceRequest(r api.Approval) bool { return r.AgentID == "remote" && r.Tool == "allow_device" }
+
+func spacedCode(c string) string {
+	if len(c) == 6 {
+		return c[:3] + " " + c[3:]
+	}
+	return c
 }
 
 // approvalCallLines is the pending call wrapped to the banner's width, at most four lines; a longer

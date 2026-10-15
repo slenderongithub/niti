@@ -112,6 +112,20 @@ export async function diffPatch(handle: WorktreeHandle): Promise<string> {
   return await stagedDiff(handle, []);
 }
 
+// What the tree looks like right now — HEAD plus every uncommitted and untracked change — as one
+// hash, so /goal can tell whether a round changed anything, including through the shell (npm
+// install, a code generator, sed -i), which file_edit events never see. Undefined outside git.
+export async function treeFingerprint(dir: string): Promise<string | undefined> {
+  const head = await git(dir, ["rev-parse", "HEAD"]);
+  if (head.code !== 0) return undefined;
+  const status = await git(dir, ["status", "--porcelain=v1", "-uall"]);
+  const diff = await git(dir, ["diff", "HEAD"]);
+  // An untracked file shows in status by name only; hash its contents so editing it again counts.
+  const untracked = status.stdout.split("\n").filter((l) => l.startsWith("?? ")).map((l) => l.slice(3));
+  const blobs = untracked.length ? (await git(dir, ["hash-object", "--", ...untracked])).stdout : "";
+  return new Bun.CryptoHasher("sha256").update(head.stdout + status.stdout + diff.stdout + blobs).digest("hex");
+}
+
 // Commit whatever's pending in the worktree so mergeBack has something to bring across — a no-op
 // (not an error) when there's nothing staged, e.g. a task run that made no file changes.
 export async function commitPending(handle: WorktreeHandle, message = "niti: worktree changes"): Promise<void> {
