@@ -96,6 +96,9 @@ UI is a Go/Bubbletea terminal app (`tui/`) with none of this in it.
 - **Rule 5:** icons are lucide only (`lucide-react`, `lucide-react-native` on the phone).
 - **Rule 6 (phone):** every control reaches 44pt, motion stops under Reduce Motion, type runs two
   points above the desktop's; otherwise it matches the desktop.
+- **Rule 7 (phone):** no Liquid Glass. iOS draws its title bar, `Alert`, `ActionSheetIOS`, part-height
+  sheets and `Switch` in it, ignoring niti's colours; use the app's own `Header`, `alert()`
+  (`src/components/dialog.tsx`), `Switch` and full page sheets.
 
 # Checking
 
