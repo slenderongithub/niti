@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { router } from "expo-router";
-import { ChevronRight, CircleSlash, Folder, Laptop, Settings, ShieldAlert, Target, WifiOff } from "lucide-react-native";
+import { ChevronRight, Folder, Laptop, Link2, Settings, ShieldAlert, Target, WifiOff } from "lucide-react-native";
 import { useStore, remoteClient } from "@/lib/store";
 import { alpha, radius, space, TOUCH, type, useTheme } from "@/lib/theme";
 import { Badge, Button, Card, CardContent, Dot, EmptyState, Separator, Spinner, Text, Wordmark } from "@/components/ui";
@@ -21,7 +21,8 @@ interface MacStatus {
 export default function Macs() {
   const t = useTheme();
   const snap = useStore((s) => s.snap);
-  const macs = useMemo(() => snap.devices.filter((d) => d.kind === "mac"), [snap.devices]);
+  // Only the Macs this phone paired with: anyone can register a device under an email.
+  const macs = useMemo(() => snap.devices.filter((d) => d.kind === "mac" && remoteClient()?.id?.macs[d.id]), [snap.devices]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -44,23 +45,20 @@ export default function Macs() {
           </View>
         )}
         {snap.link === "up" && !macs.length && (
-          <EmptyState icon={Laptop} title="No Mac yet" description="On your Mac, run /remote login with the same email. It shows up here as soon as it signs in." />
+          <EmptyState icon={Laptop} title="No Mac yet" description="On your Mac, run /remote on with your email, then pair with the code it shows." />
         )}
         {macs.map((mac) => (
-          <MacCard key={mac.id} id={mac.id} name={mac.name} sessions={snap.sessions.filter((s) => s.mac === mac.id)} />
+          <MacCard key={mac.id} name={mac.name} sessions={snap.sessions.filter((s) => s.mac === mac.id && s.allowed)} />
         ))}
+        <Button variant="outline" icon={Link2} title="Pair another Mac" onPress={() => router.push("/sign-in")} />
       </ScrollView>
     </View>
   );
 }
 
-function MacCard({ id, name, sessions }: { id: string; name: string; sessions: SessionInfo[] }) {
+function MacCard({ name, sessions }: { name: string; sessions: SessionInfo[] }) {
   const t = useTheme();
-  const allowed = sessions.some((s) => s.allowed);
-  const denied = sessions.some((s) => s.denied);
   const online = sessions.some((s) => s.online);
-  const code = remoteClient()?.codeFor(id);
-  const live = sessions.filter((s) => s.allowed);
 
   return (
     <Card>
@@ -81,41 +79,8 @@ function MacCard({ id, name, sessions }: { id: string; name: string; sessions: S
             No niti running on this Mac. Start niti in a project there and it appears here.
           </Text>
         </CardContent>
-      ) : denied && !allowed ? (
-        <CardContent style={{ flexDirection: "row", gap: space(3) }}>
-          <CircleSlash color={t.destructive} size={16} style={{ marginTop: 2 }} />
-          <View style={{ flex: 1, gap: space(1) }}>
-            <Text size={type.sm} weight="medium">
-              Denied on the Mac
-            </Text>
-            <Text size={type.xs} tone="mutedForeground">
-              Restart niti there to be asked again.
-            </Text>
-          </View>
-        </CardContent>
-      ) : !allowed ? (
-        // The pairing code, as the Mac's own dialog shows it: large, mono, spaced out.
-        <CardContent style={{ alignItems: "center", paddingVertical: space(7), gap: space(3) }}>
-          <Text size={type.xs} tone="mutedForeground" center style={{ maxWidth: 300 }}>
-            {online
-              ? `niti on ${name} is asking whether to allow this phone. Allow it there only if it shows this code.`
-              : `Open niti on ${name}. It will ask whether to allow this phone, showing this code.`}
-          </Text>
-          {code ? (
-            <Text mono selectable size={36} weight="semibold" style={{ letterSpacing: 10, lineHeight: 46 }}>
-              {code}
-            </Text>
-          ) : (
-            <View style={{ height: 46, flexDirection: "row", alignItems: "center", gap: space(2) }}>
-              {online ? <Spinner size={type.sm} /> : null}
-              <Text size={type.xs} tone="mutedForeground">
-                {online ? "pairing…" : "waiting for the Mac"}
-              </Text>
-            </View>
-          )}
-        </CardContent>
       ) : (
-        live.map((s, i) => (
+        sessions.map((s, i) => (
           <View key={s.session}>
             {i > 0 && <Separator inset={space(4) + 36 + space(3)} />}
             <SessionRow s={s} />
