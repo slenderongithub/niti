@@ -10,7 +10,7 @@ compatibility_date = "2026-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "niti-relay"
-database_id = "REPLACE-WITH-YOUR-D1-ID"
+database_id = "8e44b8cc-8cf7-4afd-8054-05675a4da3f3"
 
 [[durable_objects.bindings]]
 name = "ROOMS"

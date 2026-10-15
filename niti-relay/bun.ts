@@ -21,7 +21,14 @@ interface Live {
   socks: Set<Sock>;
   kv: Map<string, unknown>;
   timer?: ReturnType<typeof setTimeout>;
+  queue: Promise<void>; // frames one at a time, in arrival order (as worker.ts does)
 }
+
+const inOrder = (l: Live, fn: () => Promise<void>): Promise<void> => {
+  const run = l.queue.then(fn);
+  l.queue = run.catch(() => {});
+  return run;
+};
 
 export async function startRelay(o: { port?: number; host?: string; db?: string; push: (m: PushMessage[]) => Promise<void>; now?: () => number }) {
   const accounts = new Accounts(sqlite(new Database(o.db ?? ":memory:")), o.now);
@@ -39,7 +46,7 @@ export async function startRelay(o: { port?: number; host?: string; db?: string;
       delete: async (k) => void kv.delete(k),
       list: async (prefix) => new Map([...kv].filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k, structuredClone(v)])) as never,
     };
-    const l: Live = { socks, kv, room: undefined as never };
+    const l: Live = { socks, kv, room: undefined as never, queue: Promise.resolve() };
     l.room = new Room({
       account,
       accounts,
@@ -89,12 +96,13 @@ export async function startRelay(o: { port?: number; host?: string; db?: string;
         live.room.open(sock);
       },
       async message(ws: ServerWebSocket<Data>, msg) {
-        await roomFor(ws.data.meta.device.account).room.message(ws.data.sock!, String(msg));
+        const live = roomFor(ws.data.meta.device.account);
+        await inOrder(live, () => live.room.message(ws.data.sock!, String(msg)));
       },
       async close(ws: ServerWebSocket<Data>) {
         const live = roomFor(ws.data.meta.device.account);
         live.socks.delete(ws.data.sock!);
-        await live.room.close(ws.data.sock!);
+        await inOrder(live, () => live.room.close(ws.data.sock!));
       },
     },
   });

@@ -52,6 +52,17 @@ export default {
 
 export class AccountRoom extends DurableObject<Env> {
   private socks = new WeakMap<WebSocket, Sock>(); // one Sock per socket, so per-socket rate state holds
+  // Frames are handled one at a time, in the order they arrived. A Durable Object lets the next event
+  // in while one waits on D1 (the allowed check on every frame), so a Mac's handshake answer and the
+  // welcome sealed right after it could reach the phone swapped, and the phone dropped the welcome.
+  // ponytail: one queue per account, and a D1 read per frame; cache allows here if a busy account
+  // ever needs more throughput.
+  private queue: Promise<void> = Promise.resolve();
+  private inOrder(fn: () => Promise<void>): Promise<void> {
+    const run = this.queue.then(fn);
+    this.queue = run.catch(() => {});
+    return run;
+  }
 
   private wrap(ws: WebSocket): Sock {
     let s = this.socks.get(ws);
@@ -112,15 +123,15 @@ export class AccountRoom extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, msg: string | ArrayBuffer): Promise<void> {
-    await (await this.room()).message(this.wrap(ws), typeof msg === "string" ? msg : new TextDecoder().decode(msg));
+    await this.inOrder(async () => (await this.room()).message(this.wrap(ws), typeof msg === "string" ? msg : new TextDecoder().decode(msg)));
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {
-    await (await this.room()).close(this.wrap(ws));
+    await this.inOrder(async () => (await this.room()).close(this.wrap(ws)));
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
-    await (await this.room()).close(this.wrap(ws));
+    await this.inOrder(async () => (await this.room()).close(this.wrap(ws)));
   }
 
   async alarm(): Promise<void> {
