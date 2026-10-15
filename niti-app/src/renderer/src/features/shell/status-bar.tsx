@@ -109,7 +109,7 @@ export function StatusBar() {
                 {remoteLink === "up" ? (Number(remoteWatching) > 0 ? `${remoteWatching} watching` : "remote") : "remote · connecting"}
               </span>
             </TooltipTrigger>
-            <TooltipContent side="top">Phones signed in to your niti account can control this project. /remote lists them; /remote revoke signs one out.</TooltipContent>
+            <TooltipContent side="top">Phones paired with this Mac can control this project. /remote lists them, /remote pair adds one, /remote revoke signs one out.</TooltipContent>
           </Tooltip>
         )}
       </span>

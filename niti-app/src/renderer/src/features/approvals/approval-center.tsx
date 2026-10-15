@@ -2,7 +2,7 @@ import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { motion } from "motion/react";
-import { Check, CheckCheck, MessageSquareWarning, Pencil, ShieldAlert, Smartphone, Terminal, X, FileCode2, Clock } from "lucide-react";
+import { Check, CheckCheck, MessageSquareWarning, Pencil, ShieldAlert, Terminal, X, FileCode2, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,13 +30,8 @@ function str(v: unknown): string {
   return typeof v === "string" ? v : v === undefined ? "" : JSON.stringify(v);
 }
 
-// The core asking whether a phone may control this Mac (src/remote/bridge.ts): a yes/no about a
-// device, compared by a code, never "always allow".
-const isDeviceRequest = (r?: ApprovalRequest) => r?.agentId === "remote" && r.tool === "allow_device";
-
 function describe(r: ApprovalRequest): { verb: string; target: string } {
   const i = r.input;
-  if (isDeviceRequest(r)) return { verb: "allow a phone:", target: str(i.phone) };
   if (r.tool === "shell" || r.tool === "bash") return { verb: "run", target: [str(i.command), ...(Array.isArray(i.args) ? (i.args as string[]) : [])].join(" ").trim() };
   if (r.tool === "write_file") return { verb: "write", target: str(i.path) };
   if (r.tool === "edit") return { verb: "edit", target: str(i.path) };
@@ -108,7 +103,6 @@ export function ApprovalCenter() {
       // in the first moments must not answer a request nobody has read yet.
       if (Date.now() - shownAt.current < 600) return;
       const k = e.key.toLowerCase();
-      if (isDeviceRequest(head) && k !== "y" && k !== "n") return;
       if (k === "y") void allow();
       else if (k === "a") void always();
       else if (k === "n") void deny();
@@ -124,34 +118,7 @@ export function ApprovalCenter() {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && hide(key)}>
       <DialogContent className="flex max-h-[86vh] w-[min(920px,94vw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none" showCloseButton={false}>
-        {head && isDeviceRequest(head) && (
-          <>
-            <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-3.5 text-left">
-              <Smartphone className="size-5 text-warning" aria-hidden />
-              <div className="min-w-0 flex-1">
-                <DialogTitle className="text-[15px]">
-                  {str(head.input.phone)} <span className="font-normal text-muted-foreground">wants to control niti on this Mac</span>
-                </DialogTitle>
-                <DialogDescription className="mt-0.5 text-xs">It signed in to your niti account. Allow it only if it shows this same code.</DialogDescription>
-              </div>
-            </DialogHeader>
-            <div className="flex flex-col items-center gap-2 px-5 py-8">
-              <div className="selectable font-mono text-4xl font-semibold tracking-[0.3em] text-foreground" aria-label={`code ${str(head.input.code).split("").join(" ")}`}>
-                {str(head.input.code).replace(/^(\d{3})(\d{3})$/, "$1 $2")}
-              </div>
-              <p className="text-xs text-muted-foreground">Once allowed, it can watch, prompt, steer, approve and stop runs here. /remote revoke signs it out.</p>
-            </div>
-            <DialogFooter className="flex-row items-center gap-2 border-t bg-muted/20 px-5 py-3 sm:justify-between">
-              <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => void deny()} disabled={busy}>
-                <X /> Deny <Kbd>N</Kbd>
-              </Button>
-              <Button onClick={() => void allow()} disabled={busy} autoFocus>
-                <Check /> Allow <Kbd className="bg-primary-foreground/15 text-primary-foreground">Y</Kbd>
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-        {head && !isDeviceRequest(head) && (
+        {head && (
           <>
             <DialogHeader className="flex-row items-center gap-3 border-b px-5 py-3.5 text-left">
               {agent && <AgentAvatar slot={agent.index} color={agent.color} lead={head.agentId === lead} size="md" />}
