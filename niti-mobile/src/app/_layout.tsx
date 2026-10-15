@@ -32,7 +32,8 @@ export default function RootLayout() {
   useEffect(() => {
     const go = (n: Notifications.Notification) => {
       const route = n.request.content.data?.route;
-      if (typeof route === "string" && route.startsWith("/")) router.push(route as never);
+      // The relay delivers the notification, so its route is only followed when it is a session screen.
+      if (typeof route === "string" && /^\/session\/[\w-]+\/[\w-]+(\?sheet=approval)?$/.test(route)) router.push(route as never);
     };
     const last = Notifications.getLastNotificationResponse();
     if (last?.notification) go(last.notification);

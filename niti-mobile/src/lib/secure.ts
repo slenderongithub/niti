@@ -2,7 +2,8 @@ import * as SecureStore from "expo-secure-store";
 import type { IdentityStore, PhoneIdentity } from "./remote";
 
 // This phone's identity (its signing key, account and the status keys Macs handed it) lives in the
-// iOS Keychain, readable only after the phone is first unlocked.
+// iOS Keychain, readable only after the phone is first unlocked, and never carried to another phone
+// by a backup: the signing key is this device.
 const KEY = "niti.identity";
 
 export const keychain: IdentityStore = {
@@ -17,6 +18,6 @@ export const keychain: IdentityStore = {
   },
   async save(id) {
     if (!id) await SecureStore.deleteItemAsync(KEY);
-    else await SecureStore.setItemAsync(KEY, JSON.stringify(id), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK });
+    else await SecureStore.setItemAsync(KEY, JSON.stringify(id), { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY });
   },
 };

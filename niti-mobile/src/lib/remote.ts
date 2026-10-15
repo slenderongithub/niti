@@ -1,4 +1,4 @@
-import { authMessage, Channel, deviceId, newDeviceKeys, openStatus, pairingCode, PROTOCOL, sign, type ChannelMessage, type DeviceInfo, type DeviceKeys, type Hello, type PushCategory, type ServerFrame, type SessionInfo } from "../../../src/remote/protocol.ts";
+import { authMessage, Channel, deviceId, isPairFrame, newDeviceKeys, openStatus, pairCommit, pairingCode, pairNonce, PROTOCOL, sign, type PairMessage, type ChannelMessage, type DeviceInfo, type DeviceKeys, type Hello, type PushCategory, type ServerFrame, type SessionInfo } from "../../../src/remote/protocol.ts";
 
 // The phone's side of remote control: sign in to the relay, see the account's Macs and their
 // projects, and open an end-to-end encrypted session with one to drive its niti. Plain TypeScript
@@ -46,6 +46,7 @@ export class RemoteClient {
   private retry?: ReturnType<typeof setTimeout>;
   private pendingEmail?: string;
   private conns = new Map<string, Session>(); // `${mac}:${session}`
+  private pairs = new Map<string, { session: string; n: string; code?: string }>(); // per Mac not yet allowing this phone
   private listeners = new Set<(s: RemoteSnapshot) => void>();
 
   constructor(
@@ -99,9 +100,40 @@ export class RemoteClient {
   }
 
   // The 6 digits this phone shows for a Mac — the Mac shows the same ones when asked to allow it.
+  // Undefined until the pairing exchange with one of that Mac's running projects is done.
   codeFor(mac: string): string | undefined {
+    return this.pairs.get(mac)?.code;
+  }
+
+  // Pair with each Mac that hasn't allowed (or refused) this phone, through one of its live
+  // projects: commit to a nonce now, reveal it once the Mac has answered with its own.
+  private pair(): void {
+    const live = (mac: string, session: string) => this.snap.sessions.some((s) => s.mac === mac && s.session === session && s.online);
+    for (const s of this.snap.sessions) {
+      if (s.allowed || s.denied) this.pairs.delete(s.mac);
+      if (s.allowed || s.denied || !s.online) continue;
+      const p = this.pairs.get(s.mac);
+      if (p && live(s.mac, p.session)) continue;
+      const n = pairNonce();
+      this.pairs.set(s.mac, { session: s.session, n });
+      this.send({ t: "to", mac: s.mac, session: s.session, data: JSON.stringify({ p: "commit", c: pairCommit(n) } satisfies PairMessage) });
+    }
+  }
+
+  private onPairing(mac: string, session: string, data: string): void {
+    const p = this.pairs.get(mac);
     const d = this.snap.devices.find((x) => x.id === mac);
-    return d && this.id ? pairingCode(d.signPub, this.id.keys.signPub) : undefined;
+    if (!p || p.session !== session || p.code || !this.id || !d || deviceId(d.signPub) !== mac) return;
+    let m: PairMessage;
+    try {
+      m = JSON.parse(data) as PairMessage;
+      if (m.p !== "nonce") return;
+      p.code = pairingCode(d.signPub, this.id.keys.signPub, p.n, String(m.n));
+    } catch {
+      return;
+    }
+    this.send({ t: "to", mac, session, data: JSON.stringify({ p: "reveal", n: p.n } satisfies PairMessage) });
+    this.set({});
   }
 
   // What a Mac last left on the relay, readable once that Mac has welcomed this phone.
@@ -130,6 +162,7 @@ export class RemoteClient {
       this.ws = undefined;
       for (const c of this.conns.values()) c.drop();
       this.conns.clear();
+      this.pairs.clear(); // pair afresh on reconnect; the Mac replaces its request with the new code
       if (e.code === 4001) {
         // Signed out from another device (or this one was revoked on the Mac).
         this.id = undefined;
@@ -165,14 +198,19 @@ export class RemoteClient {
         return this.send({ t: "auth", v: PROTOCOL, sig: sign(this.id!.keys.signSecret, authMessage(f.nonce, this.myId!)) });
       case "ready":
         this.backoff = 1000;
-        return this.set({ link: "up", me: f.you, devices: f.devices, sessions: f.sessions, error: undefined });
+        this.set({ link: "up", me: f.you, devices: f.devices, sessions: f.sessions, error: undefined });
+        return this.pair();
       case "devices":
-        return this.set({ devices: f.devices });
+        this.set({ devices: f.devices });
+        return this.pair();
       case "sessions":
         for (const [key, c] of this.conns) if (!f.sessions.some((s) => `${s.mac}:${s.session}` === key && s.online && s.allowed)) (c.drop(), this.conns.delete(key));
-        return this.set({ sessions: f.sessions });
+        this.set({ sessions: f.sessions });
+        return this.pair();
       case "from":
-        if (f.mac && f.session) this.conns.get(`${f.mac}:${f.session}`)?.receive(f.data);
+        if (!f.mac || !f.session) return;
+        if (isPairFrame(f.data)) return this.onPairing(f.mac, f.session, f.data);
+        this.conns.get(`${f.mac}:${f.session}`)?.receive(f.data);
         return;
       case "error":
         return this.set({ error: f.message });
