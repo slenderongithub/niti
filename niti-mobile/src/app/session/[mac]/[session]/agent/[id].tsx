@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Alert, KeyboardAvoidingView, Pressable, ScrollView, TextInput, View } from "react-native";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { ArrowUp, Hand, MessageSquareDashed } from "lucide-react-native";
@@ -12,6 +12,7 @@ import { alpha, fonts, radius, resolveColor, space, TOUCH, type, useTheme } from
 import { EmptyState, Progress, Spinner, Text } from "@/components/ui";
 import { AgentAvatar } from "@/components/avatar";
 import { ItemView, TodoList } from "@/components/items";
+import { Header } from "@/components/header";
 
 // One agent's transcript, as the desktop app's focused agent panel shows it, with a way to talk to
 // it: send (it reads it at its next turn) or interrupt (it stops now and carries on from your words).
@@ -20,20 +21,26 @@ export default function AgentScreen() {
   const t = useTheme();
   const a = useStore((s) => s.state.agents[id]);
   const lead = useStore((s) => s.state.leadId === id);
+  const project = useStore((s) => s.open?.project ?? "Back");
   const items = useMemo(() => (a ? groupItems(a.items).slice(-150) : []), [a]);
   const scroll = useRef<ScrollView>(null);
   const [follow, setFollow] = useState(true);
 
-  if (!a) return <EmptyState icon={MessageSquareDashed} title="No such agent" description="It isn't on this project's team any more." />;
+  if (!a)
+    return (
+      <View style={{ flex: 1 }}>
+        <Header back={project} />
+        <EmptyState icon={MessageSquareDashed} title="No such agent" description="It isn't on this project's team any more." />
+      </View>
+    );
   const color = resolveColor(t, a.color);
   const ctx = a.ctxLimit ? Math.min(100, Math.round((a.usage.lastInput * 100) / a.ctxLimit)) : 0;
 
   return (
-    <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={90} style={{ flex: 1 }}>
-      <Stack.Screen options={{ title: a.cfg.role }} />
+    <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+      <Header back={project} title={a.cfg.role} />
       <ScrollView
         ref={scroll}
-        contentInsetAdjustmentBehavior="automatic"
         keyboardDismissMode="interactive"
         onContentSizeChange={() => follow && scroll.current?.scrollToEnd({ animated: false })}
         onScroll={(e) => {
@@ -69,7 +76,11 @@ export default function AgentScreen() {
             <TodoList todos={a.todos} color={color} />
           </View>
         )}
-        {items.length ? items.map((it) => <ItemView key={it.id} item={it} />) : <EmptyState icon={MessageSquareDashed} title="Nothing yet" description={`${a.cfg.role} hasn't done anything this session.`} />}
+        {items.length ? (
+          items.map((it) => <ItemView key={it.id} item={it} />)
+        ) : (
+          <EmptyState icon={MessageSquareDashed} title="Nothing yet" description={`${a.cfg.role} hasn't done anything this session.`} />
+        )}
         {a.status === "working" && !!a.activity && (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingTop: space(2) }}>
             <Spinner size={type.xs} />
@@ -104,7 +115,20 @@ function Reply({ id, role, working }: { id: string; role: string; working: boole
 
   return (
     <View style={{ paddingHorizontal: space(3), paddingTop: space(2), paddingBottom: Math.max(insets.bottom, space(3)), backgroundColor: t.background }}>
-      <View style={{ flexDirection: "row", alignItems: "flex-end", gap: space(2), borderRadius: radius.xl, borderWidth: 1, borderColor: t.border, backgroundColor: t.card, paddingLeft: space(4), paddingRight: space(1.5), paddingVertical: 4 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "flex-end",
+          gap: space(2),
+          borderRadius: radius.xl,
+          borderWidth: 1,
+          borderColor: t.border,
+          backgroundColor: t.card,
+          paddingLeft: space(4),
+          paddingRight: space(1.5),
+          paddingVertical: 4,
+        }}
+      >
         <TextInput
           value={text}
           onChangeText={setText}
@@ -125,7 +149,18 @@ function Reply({ id, role, working }: { id: string; role: string; working: boole
               onPress={() => void send(true)}
               disabled={busy}
               hitSlop={4}
-              style={({ pressed }) => ({ height: 36, paddingHorizontal: space(3), marginBottom: 4, borderRadius: 18, borderWidth: 1, borderColor: alpha(t.warning, 0.5), flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: pressed ? alpha(t.warning, 0.12) : "transparent" })}
+              style={({ pressed }) => ({
+                height: 36,
+                paddingHorizontal: space(3),
+                marginBottom: 4,
+                borderRadius: 18,
+                borderWidth: 1,
+                borderColor: alpha(t.warning, 0.5),
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 5,
+                backgroundColor: pressed ? alpha(t.warning, 0.12) : "transparent",
+              })}
             >
               <Hand color={t.warning} size={14} />
               <Text size={type.xs} weight="medium" tone="warning">
@@ -138,7 +173,16 @@ function Reply({ id, role, working }: { id: string; role: string; working: boole
               onPress={() => void send(false)}
               disabled={busy || !text.trim()}
               hitSlop={4}
-              style={({ pressed }) => ({ width: 36, height: 36, marginBottom: 4, borderRadius: 18, backgroundColor: t.primary, alignItems: "center", justifyContent: "center", opacity: busy || !text.trim() ? 0.5 : pressed ? 0.9 : 1 })}
+              style={({ pressed }) => ({
+                width: 36,
+                height: 36,
+                marginBottom: 4,
+                borderRadius: 18,
+                backgroundColor: t.primary,
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: busy || !text.trim() ? 0.5 : pressed ? 0.9 : 1,
+              })}
             >
               <ArrowUp color={t.primaryForeground} size={18} />
             </Pressable>

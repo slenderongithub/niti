@@ -7,19 +7,24 @@ import * as Notifications from "expo-notifications";
 import * as LocalAuthentication from "expo-local-authentication";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFonts } from "expo-font";
+import { Asset } from "expo-asset";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from "@expo-google-fonts/inter";
 import { JetBrainsMono_400Regular, JetBrainsMono_500Medium, JetBrainsMono_600SemiBold } from "@expo-google-fonts/jetbrains-mono";
 import { Lock } from "lucide-react-native";
 import { useStore } from "@/lib/store";
 import { registerForPush } from "@/lib/push";
 import { loadPrefs } from "@/lib/prefs";
-import { fonts as F, space, type, useTheme } from "@/lib/theme";
+import { space, type, useTheme } from "@/lib/theme";
 import { Button, Text, Wordmark } from "@/components/ui";
+import { AVATAR_IMAGES } from "@/components/avatar";
 
 export default function RootLayout() {
   const t = useTheme();
   const [fonts] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, JetBrainsMono_400Regular, JetBrainsMono_500Medium, JetBrainsMono_600SemiBold });
   const ready = useStore((s) => s.ready);
+  // The avatars, downloaded and decoded once at launch, so a list of agents never waits on them.
+  const [images, setImages] = useState(false);
+  useEffect(() => void Asset.loadAsync(AVATAR_IMAGES).finally(() => setImages(true)), []);
   const link = useStore((s) => s.snap.link);
   const locked = useLock();
 
@@ -44,30 +49,15 @@ export default function RootLayout() {
     return () => sub.remove();
   }, []);
 
-  if (!fonts || !ready) return <View style={{ flex: 1, backgroundColor: t.background }} />;
+  if (!fonts || !ready || !images) return <View style={{ flex: 1, backgroundColor: t.background }} />;
   if (locked) return <LockScreen onUnlock={locked} />;
 
   return (
     <>
       <StatusBar style="auto" />
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: t.background },
-          headerTintColor: t.primary,
-          headerTitleStyle: { color: t.foreground, fontFamily: F.sans.semibold, fontSize: 16 },
-          headerLargeTitleStyle: { color: t.foreground, fontFamily: F.sans.semibold },
-          headerBackTitleStyle: { fontFamily: F.sans.regular },
-          headerShadowVisible: false,
-          contentStyle: { backgroundColor: t.background },
-        }}
-      >
-        <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="sign-in" options={{ headerShown: false }} />
-        <Stack.Screen name="macs" options={{ title: "Projects", headerLargeTitle: true, headerBackVisible: false }} />
-        <Stack.Screen name="session/[mac]/[session]/index" options={{ title: "" }} />
-        <Stack.Screen name="session/[mac]/[session]/agent/[id]" options={{ title: "" }} />
-        <Stack.Screen name="approval" options={{ presentation: "formSheet", sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true, headerShown: false, contentStyle: { backgroundColor: t.background } }} />
-        <Stack.Screen name="settings" options={{ presentation: "modal", title: "Settings" }} />
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: t.background } }}>
+        <Stack.Screen name="approval" options={{ presentation: "formSheet", sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true }} />
+        <Stack.Screen name="settings" options={{ presentation: "modal" }} />
       </Stack>
     </>
   );

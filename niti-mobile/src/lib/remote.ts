@@ -1,4 +1,4 @@
-import { authMessage, Channel, deviceId, isPairFrame, newDeviceKeys, openStatus, pairCommit, pairingCode, pairNonce, PROTOCOL, sign, type PairMessage, type ChannelMessage, type DeviceInfo, type DeviceKeys, type Hello, type PushCategory, type ServerFrame, type SessionInfo } from "../../../src/remote/protocol.ts";
+import { authMessage, Channel, CHANNEL_RESET, deviceId, isPairFrame, newDeviceKeys, openStatus, pairCommit, pairingCode, pairNonce, PROTOCOL, sign, type PairMessage, type ChannelMessage, type DeviceInfo, type DeviceKeys, type Hello, type PushCategory, type ServerFrame, type SessionInfo } from "../../../src/remote/protocol.ts";
 
 // The phone's side of remote control: sign in to the relay, see the account's Macs and their
 // projects, and open an end-to-end encrypted session with one to drive its niti. Plain TypeScript
@@ -255,6 +255,7 @@ export class Session {
   private onEvents?: (events: unknown[]) => void;
   private openWaiter?: { resolve: () => void; reject: (e: Error) => void };
   private dead = false;
+  onDead?: () => void; // called once, whenever this session stops working (see drop)
 
   constructor(
     private ch: Channel,
@@ -275,6 +276,7 @@ export class Session {
   }
 
   receive(data: string): void {
+    if (data === CHANNEL_RESET) return this.drop(); // the Mac no longer has this channel: open a new one
     if (!this.ch.open) {
       try {
         const hello = JSON.parse(data) as Hello;
@@ -313,7 +315,9 @@ export class Session {
   }
 
   drop(): void {
+    if (this.dead) return;
     this.dead = true;
+    this.onDead?.();
     this.openWaiter?.reject(new Error("disconnected"));
     for (const w of this.waiting.values()) w({ status: 0, body: { error: "disconnected" } });
     this.waiting.clear();

@@ -56,7 +56,9 @@ It wears the desktop app's design language, redrawn for a phone, and must keep d
   bob, model in mono, context bars, the lead's ★), transcript rows (tool one-liners with a check or a
   spinner, shell and diff blocks, notes by tone, your messages as bubbles), lowercase status words.
 - **Phone rules**: every control reaches 44pt; motion stops under Reduce Motion (one shared clock,
-  `src/lib/ticker.ts`); native iOS sheets, alerts, haptics and Face ID.
+  `src/lib/ticker.ts`); native iOS sheets, alerts, haptics and Face ID. The title bar is the app's own
+  (`src/components/header.tsx`): the system one is Liquid Glass, which ignores niti's colours. Actions
+  in it are labelled, not bare icons. The avatars are preloaded at launch.
 
 A design change on the desktop gets its matching change here, and the other way round.
 

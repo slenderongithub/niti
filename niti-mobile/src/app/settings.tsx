@@ -10,6 +10,7 @@ import { loadPrefs, savePrefs, type Prefs } from "@/lib/prefs";
 import { registerForPush } from "@/lib/push";
 import { space, type, useTheme } from "@/lib/theme";
 import { Button, Card, Row, SectionLabel, Separator, Text, Wordmark } from "@/components/ui";
+import { Header } from "@/components/header";
 import type { PushCategory } from "../../../src/remote/protocol.ts";
 
 const KINDS: [PushCategory, LucideIcon, string, string][] = [
@@ -50,106 +51,109 @@ export default function Settings() {
   const icon = (Icon: LucideIcon) => <Icon color={t.mutedForeground} size={17} />;
 
   return (
-    <ScrollView contentContainerStyle={{ padding: space(4), gap: space(6), paddingBottom: space(10) }}>
-      <View>
-        <SectionLabel>Notifications</SectionLabel>
-        <Card>
-          {KINDS.map(([k, Icon, title, body], i) => (
-            <View key={k}>
-              {i > 0 && <Separator inset={space(4) + 17 + space(3)} />}
-              <Row>
-                {icon(Icon)}
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text size={type.base} weight="medium">
-                    {title}
-                  </Text>
-                  <Text size={type.xs} tone="mutedForeground">
-                    {body}
-                  </Text>
-                </View>
-                <Switch accessibilityLabel={title} value={!!prefs?.push.includes(k)} onValueChange={(v) => void toggle(k, v)} trackColor={{ true: t.primary, false: t.input }} />
-              </Row>
-            </View>
-          ))}
-        </Card>
-        <View style={{ flexDirection: "row", gap: space(2), paddingHorizontal: space(1), paddingTop: space(2) }}>
-          <Bell color={t.mutedForeground} size={12} style={{ marginTop: 3 }} />
-          <Text size={type.xs} tone="mutedForeground" style={{ flex: 1 }}>
-            Notifications say what happened, never the code or commands. None arrive while the app is open.
-          </Text>
-        </View>
-      </View>
-
-      <View>
-        <SectionLabel>Security</SectionLabel>
-        <Card>
-          <Row>
-            {icon(ScanFace)}
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text size={type.base} weight="medium">
-                Require Face ID to open
-              </Text>
-              <Text size={type.xs} tone="mutedForeground">
-                Risky approvals always ask for Face ID.
-              </Text>
-            </View>
-            <Switch accessibilityLabel="Require Face ID to open" value={lock} onValueChange={(v) => void toggleLock(v)} trackColor={{ true: t.primary, false: t.input }} />
-          </Row>
-        </Card>
-      </View>
-
-      <View>
-        <SectionLabel>{`Devices · ${snap.me?.name ?? "this phone"}`}</SectionLabel>
-        <Card>
-          {others.length ? (
-            others.map((d, i) => (
-              <View key={d.id}>
+    <View style={{ flex: 1 }}>
+      <Header title="Settings" right={<Button variant="ghost" size="sm" title="Done" tone="primary" onPress={() => router.back()} />} />
+      <ScrollView contentContainerStyle={{ padding: space(4), gap: space(6), paddingBottom: space(10) }}>
+        <View>
+          <SectionLabel>Notifications</SectionLabel>
+          <Card>
+            {KINDS.map(([k, Icon, title, body], i) => (
+              <View key={k}>
                 {i > 0 && <Separator inset={space(4) + 17 + space(3)} />}
                 <Row>
-                  {icon(d.kind === "mac" ? Laptop : Smartphone)}
-                  <Text size={type.base} lines={1} style={{ flex: 1 }}>
-                    {d.name}
-                  </Text>
-                  <Text size={type.label} tone="mutedForeground">
-                    {d.kind}
-                  </Text>
+                  {icon(Icon)}
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text size={type.base} weight="medium">
+                      {title}
+                    </Text>
+                    <Text size={type.xs} tone="mutedForeground">
+                      {body}
+                    </Text>
+                  </View>
+                  <Switch accessibilityLabel={title} value={!!prefs?.push.includes(k)} onValueChange={(v) => void toggle(k, v)} trackColor={{ true: t.primary, false: t.input }} />
                 </Row>
               </View>
-            ))
-          ) : (
+            ))}
+          </Card>
+          <View style={{ flexDirection: "row", gap: space(2), paddingHorizontal: space(1), paddingTop: space(2) }}>
+            <Bell color={t.mutedForeground} size={12} style={{ marginTop: 3 }} />
+            <Text size={type.xs} tone="mutedForeground" style={{ flex: 1 }}>
+              Notifications say what happened, never the code or commands. None arrive while the app is open.
+            </Text>
+          </View>
+        </View>
+
+        <View>
+          <SectionLabel>Security</SectionLabel>
+          <Card>
             <Row>
-              <Text size={type.sm} tone="mutedForeground">
-                No other devices on this account.
-              </Text>
+              {icon(ScanFace)}
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text size={type.base} weight="medium">
+                  Require Face ID to open
+                </Text>
+                <Text size={type.xs} tone="mutedForeground">
+                  Risky approvals always ask for Face ID.
+                </Text>
+              </View>
+              <Switch accessibilityLabel="Require Face ID to open" value={lock} onValueChange={(v) => void toggleLock(v)} trackColor={{ true: t.primary, false: t.input }} />
             </Row>
-          )}
-        </Card>
-      </View>
+          </Card>
+        </View>
 
-      <Button
-        variant="outline"
-        title="Sign out of this phone"
-        icon={LogOut}
-        tone="destructive"
-        onPress={() =>
-          Alert.alert("Sign out?", "Your Macs stop accepting this phone. Signing in again needs each Mac to allow it again.", [
-            { text: "Cancel", style: "cancel" },
-            {
-              text: "Sign out",
-              style: "destructive",
-              onPress: async () => {
-                await useStore.getState().signOut();
-                router.replace("/sign-in");
+        <View>
+          <SectionLabel>{`Devices · ${snap.me?.name ?? "this phone"}`}</SectionLabel>
+          <Card>
+            {others.length ? (
+              others.map((d, i) => (
+                <View key={d.id}>
+                  {i > 0 && <Separator inset={space(4) + 17 + space(3)} />}
+                  <Row>
+                    {icon(d.kind === "mac" ? Laptop : Smartphone)}
+                    <Text size={type.base} lines={1} style={{ flex: 1 }}>
+                      {d.name}
+                    </Text>
+                    <Text size={type.label} tone="mutedForeground">
+                      {d.kind}
+                    </Text>
+                  </Row>
+                </View>
+              ))
+            ) : (
+              <Row>
+                <Text size={type.sm} tone="mutedForeground">
+                  No other devices on this account.
+                </Text>
+              </Row>
+            )}
+          </Card>
+        </View>
+
+        <Button
+          variant="outline"
+          title="Sign out of this phone"
+          icon={LogOut}
+          tone="destructive"
+          onPress={() =>
+            Alert.alert("Sign out?", "Your Macs stop accepting this phone. Signing in again needs each Mac to allow it again.", [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Sign out",
+                style: "destructive",
+                onPress: async () => {
+                  await useStore.getState().signOut();
+                  router.replace("/sign-in");
+                },
               },
-            },
-          ])
-        }
-      />
+            ])
+          }
+        />
 
-      <View style={{ alignItems: "center", gap: space(2), paddingTop: space(4) }}>
-        <Wordmark size={15} align="center" />
-        <Text mono size={type.label} tone="mutedForeground">{`mobile ${Constants.expoConfig?.version ?? ""}`}</Text>
-      </View>
-    </ScrollView>
+        <View style={{ alignItems: "center", gap: space(2), paddingTop: space(4) }}>
+          <Wordmark size={15} align="center" />
+          <Text mono size={type.label} tone="mutedForeground">{`mobile ${Constants.expoConfig?.version ?? ""}`}</Text>
+        </View>
+      </ScrollView>
+    </View>
   );
 }

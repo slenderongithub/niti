@@ -1,10 +1,11 @@
 import { useMemo } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { Stack, router } from "expo-router";
+import { router } from "expo-router";
 import { ChevronRight, CircleSlash, Folder, Laptop, Settings, ShieldAlert, Target, WifiOff } from "lucide-react-native";
 import { useStore, remoteClient } from "@/lib/store";
 import { alpha, radius, space, TOUCH, type, useTheme } from "@/lib/theme";
-import { Badge, Card, CardContent, Dot, EmptyState, Separator, Spinner, Text } from "@/components/ui";
+import { Badge, Button, Card, CardContent, Dot, EmptyState, Separator, Spinner, Text, Wordmark } from "@/components/ui";
+import { Header } from "@/components/header";
 import type { SessionInfo } from "../../../src/remote/protocol.ts";
 
 // What a Mac leaves on the relay (bridge.ts sendStatus), readable once that Mac has welcomed this phone.
@@ -23,17 +24,17 @@ export default function Macs() {
   const macs = useMemo(() => snap.devices.filter((d) => d.kind === "mac"), [snap.devices]);
 
   return (
-    <>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <Pressable accessibilityRole="button" accessibilityLabel="Settings" hitSlop={12} onPress={() => router.push("/settings")}>
-              <Settings color={t.mutedForeground} size={21} />
-            </Pressable>
-          ),
-        }}
-      />
-      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ padding: space(4), gap: space(5) }}>
+    <View style={{ flex: 1 }}>
+      <Header left={<Wordmark size={17} />} right={<Button variant="outline" size="sm" icon={Settings} title="Settings" onPress={() => router.push("/settings")} />} />
+      <ScrollView contentContainerStyle={{ padding: space(4), paddingTop: space(6), gap: space(5) }}>
+        <View style={{ gap: space(1), paddingHorizontal: space(1) }}>
+          <Text size={type.xl} weight="semibold" accessibilityRole="header">
+            Projects
+          </Text>
+          <Text size={type.sm} tone="mutedForeground">
+            niti running on your Macs. Tap one to watch and steer it.
+          </Text>
+        </View>
         {snap.link !== "up" && (
           <View style={{ flexDirection: "row", alignItems: "center", gap: space(2), paddingHorizontal: space(1) }}>
             {snap.link === "connecting" ? <Spinner size={type.xs} /> : <WifiOff color={snap.error ? t.destructive : t.mutedForeground} size={13} />}
@@ -42,12 +43,14 @@ export default function Macs() {
             </Text>
           </View>
         )}
-        {snap.link === "up" && !macs.length && <EmptyState icon={Laptop} title="No Mac yet" description="On your Mac, run /remote login with the same email. It shows up here as soon as it signs in." />}
+        {snap.link === "up" && !macs.length && (
+          <EmptyState icon={Laptop} title="No Mac yet" description="On your Mac, run /remote login with the same email. It shows up here as soon as it signs in." />
+        )}
         {macs.map((mac) => (
           <MacCard key={mac.id} id={mac.id} name={mac.name} sessions={snap.sessions.filter((s) => s.mac === mac.id)} />
         ))}
       </ScrollView>
-    </>
+    </View>
   );
 }
 
@@ -94,7 +97,9 @@ function MacCard({ id, name, sessions }: { id: string; name: string; sessions: S
         // The pairing code, as the Mac's own dialog shows it: large, mono, spaced out.
         <CardContent style={{ alignItems: "center", paddingVertical: space(7), gap: space(3) }}>
           <Text size={type.xs} tone="mutedForeground" center style={{ maxWidth: 300 }}>
-            {online ? `niti on ${name} is asking whether to allow this phone. Allow it there only if it shows this code.` : `Open niti on ${name}. It will ask whether to allow this phone, showing this code.`}
+            {online
+              ? `niti on ${name} is asking whether to allow this phone. Allow it there only if it shows this code.`
+              : `Open niti on ${name}. It will ask whether to allow this phone, showing this code.`}
           </Text>
           {code ? (
             <Text mono selectable size={36} weight="semibold" style={{ letterSpacing: 10, lineHeight: 46 }}>
@@ -127,13 +132,29 @@ function SessionRow({ s }: { s: SessionInfo }) {
   const g = status?.goal;
   const project = status?.project ?? "project";
   const ago = s.online ? undefined : sinceText(s.lastSeen);
-  const line = g ? (g.state === "running" ? `goal ${g.round}/${g.maxRounds} · ${g.objective}` : `goal ${g.state} · ${g.objective}`) : status?.running ? "working" : s.online ? "idle" : `last seen ${ago}`;
+  const line = g
+    ? g.state === "running"
+      ? `goal ${g.round}/${g.maxRounds} · ${g.objective}`
+      : `goal ${g.state} · ${g.objective}`
+    : status?.running
+      ? "working"
+      : s.online
+        ? "idle"
+        : `last seen ${ago}`;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`${project}, ${s.online ? "online" : `offline, last seen ${ago}`}, ${line}`}
       onPress={() => router.push(`/session/${s.mac}/${s.session}`)}
-      style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: space(3), paddingHorizontal: space(4), paddingVertical: space(3), minHeight: TOUCH + 12, backgroundColor: pressed ? t.accent : "transparent" })}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        gap: space(3),
+        paddingHorizontal: space(4),
+        paddingVertical: space(3),
+        minHeight: TOUCH + 12,
+        backgroundColor: pressed ? t.accent : "transparent",
+      })}
     >
       <View style={{ width: 36, height: 36, borderRadius: radius.lg, backgroundColor: g?.state === "running" ? alpha(t.primary, 0.12) : t.muted, alignItems: "center", justifyContent: "center" }}>
         {g ? <Target color={g.state === "running" ? t.primary : t.mutedForeground} size={16} /> : <Folder color={t.mutedForeground} size={16} />}
@@ -147,7 +168,11 @@ function SessionRow({ s }: { s: SessionInfo }) {
         </Text>
       </View>
       {!!status?.approvals && <Badge text={String(status.approvals)} tone="warning" icon={ShieldAlert} />}
-      {!s.online && <Text size={type.label} tone="mutedForeground">{ago}</Text>}
+      {!s.online && (
+        <Text size={type.label} tone="mutedForeground">
+          {ago}
+        </Text>
+      )}
       <ChevronRight color={t.mutedForeground} size={16} />
     </Pressable>
   );

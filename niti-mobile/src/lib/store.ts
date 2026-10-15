@@ -42,6 +42,23 @@ interface Store {
 let client: RemoteClient | undefined;
 
 export const useStore = create<Store>((set, get) => {
+  // The open session stopped working (the Mac's core restarted, its link reconnected, the phone
+  // lost the relay): show "reconnecting…" and open it again once the Mac is back, as long as it is
+  // still the session on screen. The replay from 0 brings the view up to date.
+  const reopen = (mac: string, session: string, conn: Session) => {
+    if (get().open?.conn !== conn) return;
+    set((s) => ({ state: { ...s.state, connection: "lost" } }));
+    const attempt = async () => {
+      if (get().open?.conn !== conn) return; // closed, or already reopened
+      if (client?.snap.sessions.some((x) => x.mac === mac && x.session === session && x.online && x.allowed)) {
+        await get().openSession(mac, session);
+        if (get().open?.conn !== conn) return;
+      }
+      setTimeout(() => void attempt(), 2000);
+    };
+    setTimeout(() => void attempt(), 300);
+  };
+
   const makeClient = (relay: string) => {
     client?.stop();
     client = new RemoteClient({ relay, name: Device.deviceName ?? "iPhone", store: keychain });
@@ -107,14 +124,16 @@ export const useStore = create<Store>((set, get) => {
         // Replay from 0, as the desktop app does: the core's buffer holds the run so far.
         set({ open: { mac, session, conn, project: conn.welcome?.project ?? "" }, state: fromSession(info.body), opening: false });
         conn.subscribe(0, (events) => set((s) => ({ state: applyEvents(s.state, events as ServerEvent[]) })));
+        conn.onDead = () => reopen(mac, session, conn);
       } catch (err) {
         set({ opening: false, error: err instanceof Error ? err.message : String(err) });
       }
     },
 
     closeSession() {
-      get().open?.conn.drop();
-      set({ open: undefined, state: emptyState() });
+      const conn = get().open?.conn;
+      set({ open: undefined, state: emptyState() }); // first, so its drop doesn't count as a lost link
+      conn?.drop();
     },
 
     async call<T>(method: string, path: string, body?: unknown): Promise<T> {

@@ -18,9 +18,22 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      ["expo-local-authentication", { "faceIDPermission": "niti asks for Face ID before approving risky actions on your Mac." }],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "niti asks for Face ID before approving risky actions on your Mac."
+        }
+      ],
       "expo-notifications",
-      ["expo-splash-screen", { "backgroundColor": "#111111", "image": "./assets/images/splash-icon.png", "imageWidth": 76 }]
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#111111",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76
+        }
+      ],
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,

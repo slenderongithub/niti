@@ -1,10 +1,31 @@
 import { memo, useEffect, useState } from "react";
 import { Alert, KeyboardAvoidingView, Pressable, ScrollView, TextInput, View } from "react-native";
-import { Stack, router, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useShallow } from "zustand/react/shallow";
 import * as Haptics from "expo-haptics";
-import { ArrowRight, ArrowUp, Coffee, Coins, Ellipsis, FileDiff, GitBranch, GitMerge, Gauge, ListTodo, Pause, Play, Plus, ShieldAlert, Square, Target, Trash2, Unplug, Users, WifiOff } from "lucide-react-native";
+import {
+  ArrowRight,
+  ArrowUp,
+  Coffee,
+  Coins,
+  Ellipsis,
+  FileDiff,
+  GitBranch,
+  GitMerge,
+  Gauge,
+  ListTodo,
+  Pause,
+  Play,
+  Plus,
+  ShieldAlert,
+  Square,
+  Target,
+  Trash2,
+  Unplug,
+  Users,
+  WifiOff,
+} from "lucide-react-native";
 import { steerTarget, type AgentView } from "../../../../../../niti-app/src/renderer/src/lib/reducer";
 import { statusColor, TASK_GLYPH } from "../../../../../../niti-app/src/renderer/src/lib/identity";
 import { goalLive } from "../../../../../../niti-app/src/renderer/src/lib/types";
@@ -13,6 +34,7 @@ import { useStore } from "@/lib/store";
 import { alpha, fonts, radius, resolveColor, space, TOUCH, type, useTheme } from "@/lib/theme";
 import { Badge, Button, Card, CardContent, CardFooter, CardHeader, CodeBlock, Dot, EmptyState, Progress, SectionLabel, Separator, Spinner, Tabs, Text } from "@/components/ui";
 import { AgentAvatar, PixelAvatar } from "@/components/avatar";
+import { Header } from "@/components/header";
 
 type Tab = "team" | "tasks" | "changes";
 
@@ -22,7 +44,14 @@ export default function SessionScreen() {
   const opening = useStore((s) => s.opening);
   const error = useStore((s) => s.error);
   const approvals = useStore((s) => s.state.approvals.length);
-  const counts = useStore(useShallow((s) => ({ agents: s.state.order.length, done: s.state.tasks.filter((x) => x.status === "done").length, tasks: s.state.tasks.length, changed: Object.values(s.state.touched).filter((k) => k !== "R").length })));
+  const counts = useStore(
+    useShallow((s) => ({
+      agents: s.state.order.length,
+      done: s.state.tasks.filter((x) => x.status === "done").length,
+      tasks: s.state.tasks.length,
+      changed: Object.values(s.state.touched).filter((k) => k !== "R").length,
+    })),
+  );
   const [tab, setTab] = useState<Tab>("team");
 
   useEffect(() => {
@@ -37,26 +66,33 @@ export default function SessionScreen() {
 
   if (!open) {
     return (
-      <View style={{ flex: 1, justifyContent: "center" }}>
-        <Stack.Screen options={{ title: "" }} />
-        {opening || !error ? (
-          <View style={{ alignItems: "center", gap: space(3) }}>
-            <Spinner size={type.xl} />
-            <Text size={type.xs} tone="mutedForeground">
-              opening an encrypted session…
-            </Text>
-          </View>
-        ) : (
-          <EmptyState icon={Unplug} title="Couldn't reach the Mac" description={error} action={<Button title="Try again" variant="outline" onPress={() => void useStore.getState().openSession(mac, session)} />} />
-        )}
+      <View style={{ flex: 1 }}>
+        <Header back="Projects" />
+        <View style={{ flex: 1, justifyContent: "center" }}>
+          {opening || !error ? (
+            <View style={{ alignItems: "center", gap: space(3) }}>
+              <Spinner size={type.xl} />
+              <Text size={type.xs} tone="mutedForeground">
+                opening an encrypted session…
+              </Text>
+            </View>
+          ) : (
+            <EmptyState
+              icon={Unplug}
+              title="Couldn't reach the Mac"
+              description={error}
+              action={<Button title="Try again" variant="outline" onPress={() => void useStore.getState().openSession(mac, session)} />}
+            />
+          )}
+        </View>
       </View>
     );
   }
 
   return (
-    <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={90} style={{ flex: 1 }}>
-      <Stack.Screen options={{ title: open.project, headerRight: () => <SessionMenu /> }} />
-      <ScrollView contentInsetAdjustmentBehavior="automatic" keyboardDismissMode="interactive" contentContainerStyle={{ padding: space(4), gap: space(4), paddingBottom: space(6) }}>
+    <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+      <Header back="Projects" title={open.project} right={<SessionMenu />} />
+      <ScrollView keyboardDismissMode="interactive" contentContainerStyle={{ padding: space(4), gap: space(4), paddingBottom: space(6) }}>
         <StatusStrip />
         {approvals > 0 && <ApprovalsBanner n={approvals} />}
         <GoalCard />
@@ -96,11 +132,53 @@ function StatusStrip() {
   return (
     <View accessibilityRole="summary" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space(3), rowGap: space(1.5), paddingHorizontal: space(1) }}>
       {s.connection === "lost"
-        ? item(<><WifiOff color={t.destructive} size={12} /><Text size={type.label} tone="destructive">reconnecting…</Text></>, "link")
-        : item(<><Dot color={t.success} /><Text size={type.label} tone="mutedForeground">{s.active ? "working" : "connected"}</Text></>, "link")}
-      {g && item(<><Target color={g.state === "running" ? t.primary : t.mutedForeground} size={12} /><Text size={type.label} tone={g.state === "running" ? "primary" : "mutedForeground"}>{g.state === "running" ? `goal ${g.round}/${g.maxRounds}` : `goal ${g.state}`}</Text></>, "goal")}
-      {s.awake !== "off" && item(<><Coffee color={t.warning} size={12} /><Text size={type.label} tone="warning">{s.awake === "lid" ? "awake" : "awake · lid open"}</Text></>, "awake")}
-      {deepest && deepest.pct > 0 && item(<><Gauge color={deepest.pct >= 80 ? t.destructive : deepest.pct >= 60 ? t.warning : t.mutedForeground} size={12} /><Text size={type.label} tone={deepest.pct >= 80 ? "destructive" : deepest.pct >= 60 ? "warning" : "mutedForeground"}>{`ctx ${deepest.pct}%`}</Text></>, "ctx")}
+        ? item(
+            <>
+              <WifiOff color={t.destructive} size={12} />
+              <Text size={type.label} tone="destructive">
+                reconnecting…
+              </Text>
+            </>,
+            "link",
+          )
+        : item(
+            <>
+              <Dot color={t.success} />
+              <Text size={type.label} tone="mutedForeground">
+                {s.active ? "working" : "connected"}
+              </Text>
+            </>,
+            "link",
+          )}
+      {g &&
+        item(
+          <>
+            <Target color={g.state === "running" ? t.primary : t.mutedForeground} size={12} />
+            <Text size={type.label} tone={g.state === "running" ? "primary" : "mutedForeground"}>
+              {g.state === "running" ? `goal ${g.round}/${g.maxRounds}` : `goal ${g.state}`}
+            </Text>
+          </>,
+          "goal",
+        )}
+      {s.awake !== "off" &&
+        item(
+          <>
+            <Coffee color={t.warning} size={12} />
+            <Text size={type.label} tone="warning">
+              {s.awake === "lid" ? "awake" : "awake · lid open"}
+            </Text>
+          </>,
+          "awake",
+        )}
+      {deepest &&
+        deepest.pct > 0 &&
+        item(
+          <>
+            <Gauge color={deepest.pct >= 80 ? t.destructive : deepest.pct >= 60 ? t.warning : t.mutedForeground} size={12} />
+            <Text size={type.label} tone={deepest.pct >= 80 ? "destructive" : deepest.pct >= 60 ? "warning" : "mutedForeground"}>{`ctx ${deepest.pct}%`}</Text>
+          </>,
+          "ctx",
+        )}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginLeft: "auto" }}>
         <Coins color={t.mutedForeground} size={12} />
         <Text mono size={type.label} tone="mutedForeground">{`${fmtTokens(total)} tok · ${fmtCost(s.cost, s.costKnown)}`}</Text>
@@ -191,7 +269,9 @@ function GoalCard() {
       <CardFooter>
         {running && <Button variant="outline" size="sm" title="Pause after round" icon={Pause} onPress={() => void run("pause")} busy={busy} style={{ flex: 1 }} />}
         {g.state === "paused" && <Button size="sm" title="Resume" icon={Play} onPress={() => void run("resume")} busy={busy} style={{ flex: 1 }} />}
-        {(g.state === "budget" || g.state === "rounds") && <Button size="sm" title="5 more rounds" icon={Plus} onPress={() => void run("more --rounds 5").then(() => run("resume"))} busy={busy} style={{ flex: 1 }} />}
+        {(g.state === "budget" || g.state === "rounds") && (
+          <Button size="sm" title="5 more rounds" icon={Plus} onPress={() => void run("more --rounds 5").then(() => run("resume"))} busy={busy} style={{ flex: 1 }} />
+        )}
         {goalLive(g) && (
           <Button
             variant="outline"
@@ -199,7 +279,12 @@ function GoalCard() {
             title="Stop"
             icon={Square}
             tone="destructive"
-            onPress={() => Alert.alert("Stop the goal?", "The round in progress is cancelled.", [{ text: "Keep going", style: "cancel" }, { text: "Stop", style: "destructive", onPress: () => void run("stop") }])}
+            onPress={() =>
+              Alert.alert("Stop the goal?", "The round in progress is cancelled.", [
+                { text: "Keep going", style: "cancel" },
+                { text: "Stop", style: "destructive", onPress: () => void run("stop") },
+              ])
+            }
           />
         )}
       </CardFooter>
@@ -324,7 +409,11 @@ function Changes() {
   const [wt, setWt] = useState<Worktree>();
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    void useStore.getState().call<Worktree>("GET", "/worktree").then(setWt).catch(() => {});
+    void useStore
+      .getState()
+      .call<Worktree>("GET", "/worktree")
+      .then(setWt)
+      .catch(() => {});
   }, [running]);
   const edited = Object.entries(touched).filter(([, k]) => k !== "R");
   const act = (what: "merge" | "discard") =>
@@ -422,7 +511,6 @@ function Changes() {
 }
 
 function SessionMenu() {
-  const t = useTheme();
   const active = useStore((s) => s.state.active);
   const awake = useStore((s) => s.state.awake);
   const run = async (fn: () => Promise<unknown>) => {
@@ -441,11 +529,7 @@ function SessionMenu() {
       { text: "Status", onPress: () => void run(() => s.command("status")) },
       { text: "Cancel", style: "cancel" as const },
     ]);
-  return (
-    <Pressable accessibilityRole="button" accessibilityLabel="Project actions" hitSlop={12} onPress={open}>
-      <Ellipsis color={t.mutedForeground} size={22} />
-    </Pressable>
-  );
+  return <Button variant="outline" size="sm" icon={Ellipsis} title="Actions" label="Project actions: stop the run, keep the Mac awake, status" onPress={open} />;
 }
 
 // The desktop composer: a rounded card holding the text and a toolbar, who it goes to on the left,
@@ -495,7 +579,22 @@ function Composer() {
       {!!suggestions.length && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: space(2) }}>
           {suggestions.map((sg) => (
-            <Pressable key={sg} accessibilityRole="button" accessibilityLabel={`Use suggestion: ${sg}`} onPress={() => setText(sg)} style={({ pressed }) => ({ borderWidth: 1, borderColor: t.border, backgroundColor: pressed ? t.accent : t.card, borderRadius: radius.full, paddingHorizontal: space(3), height: 36, justifyContent: "center", maxWidth: 280 })}>
+            <Pressable
+              key={sg}
+              accessibilityRole="button"
+              accessibilityLabel={`Use suggestion: ${sg}`}
+              onPress={() => setText(sg)}
+              style={({ pressed }) => ({
+                borderWidth: 1,
+                borderColor: t.border,
+                backgroundColor: pressed ? t.accent : t.card,
+                borderRadius: radius.full,
+                paddingHorizontal: space(3),
+                height: 36,
+                justifyContent: "center",
+                maxWidth: 280,
+              })}
+            >
               <Text size={type.xs} lines={1}>
                 {sg}
               </Text>
@@ -514,7 +613,16 @@ function Composer() {
           selectionColor={t.primary}
           accessibilityLabel={placeholder}
           multiline
-          style={{ minHeight: 48, maxHeight: 140, color: t.foreground, paddingHorizontal: space(4), paddingTop: 13, paddingBottom: space(1), fontSize: 16, fontFamily: text.startsWith("/") ? fonts.mono.regular : fonts.sans.regular }}
+          style={{
+            minHeight: 48,
+            maxHeight: 140,
+            color: t.foreground,
+            paddingHorizontal: space(4),
+            paddingTop: 13,
+            paddingBottom: space(1),
+            fontSize: 16,
+            fontFamily: text.startsWith("/") ? fonts.mono.regular : fonts.sans.regular,
+          }}
         />
         <View style={{ flexDirection: "row", alignItems: "center", gap: space(2), paddingLeft: space(4), paddingRight: space(1.5), height: TOUCH + 4 }}>
           <Users color={t.mutedForeground} size={12} />
@@ -528,8 +636,22 @@ function Composer() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Stop the run"
-              onPress={() => Alert.alert("Stop the run?", "Every agent stops what it's doing.", [{ text: "Keep going", style: "cancel" }, { text: "Stop", style: "destructive", onPress: () => void useStore.getState().call("POST", "/cancel") }])}
-              style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: t.input, alignItems: "center", justifyContent: "center", backgroundColor: pressed ? t.accent : "transparent" })}
+              onPress={() =>
+                Alert.alert("Stop the run?", "Every agent stops what it's doing.", [
+                  { text: "Keep going", style: "cancel" },
+                  { text: "Stop", style: "destructive", onPress: () => void useStore.getState().call("POST", "/cancel") },
+                ])
+              }
+              style={({ pressed }) => ({
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                borderWidth: 1,
+                borderColor: t.input,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: pressed ? t.accent : "transparent",
+              })}
               hitSlop={4}
             >
               <Square color={t.foreground} fill={t.foreground} size={11} />
@@ -541,7 +663,15 @@ function Composer() {
             disabled={busy || !text.trim()}
             onPress={() => void send(text)}
             hitSlop={4}
-            style={({ pressed }) => ({ width: 36, height: 36, borderRadius: 18, backgroundColor: t.primary, alignItems: "center", justifyContent: "center", opacity: busy || !text.trim() ? 0.5 : pressed ? 0.9 : 1 })}
+            style={({ pressed }) => ({
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: t.primary,
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: busy || !text.trim() ? 0.5 : pressed ? 0.9 : 1,
+            })}
           >
             {busy ? <Spinner tone="primaryForeground" size={type.sm} /> : <ArrowUp color={t.primaryForeground} size={18} />}
           </Pressable>

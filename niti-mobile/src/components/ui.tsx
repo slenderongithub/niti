@@ -23,7 +23,9 @@ export function Text({
   lines,
   selectable,
   center,
+  accessibilityRole,
 }: {
+  accessibilityRole?: "header";
   children: ReactNode;
   tone?: Tone;
   size?: number;
@@ -37,6 +39,7 @@ export function Text({
   const t = useTheme();
   return (
     <RNText
+      accessibilityRole={accessibilityRole}
       numberOfLines={lines}
       selectable={selectable}
       maxFontSizeMultiplier={1.6}
