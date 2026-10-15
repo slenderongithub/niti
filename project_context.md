@@ -236,6 +236,49 @@ Test cores never touch your real files: every harness sets the isolation env (`N
 | Mobile | `cd niti-mobile && npm run typecheck && bun test ./src && npx expo export --platform ios` |
 | Agent quality (before and after any agent-loop or tool change) | `bun run scripts/eval/run.ts --repeat 3` |
 
+## Releasing
+
+The CLI and the desktop app have separate version lines: the CLI is `0.4.x` on npm, tagged `v*`;
+the app is `0.1.x`, a DMG on GitHub, tagged `app-v*`. Never bump one to match the other, and never
+tag the app `v*` (that tag triggers the npm workflow).
+
+**CLI to npm.** `@slenderbuilds/niti` is a Node shim (`bin/`) that loads one of five unscoped
+platform packages (`niti-darwin-arm64`, `niti-darwin-x64`, `niti-linux-x64`, `niti-linux-arm64`,
+`niti-win32-x64`), each carrying both binaries and the dashboard.
+
+```sh
+bun run bump 0.4.9                   # package.json, its platform pins, the TUI's Version, bun.lock
+git commit -am "Bump version to 0.4.9"
+bun run build:release                # all five platforms into npm/
+npm login
+npm publish ./npm/darwin-arm64 --access public   # each platform package first
+npm publish ./npm/darwin-x64 --access public
+npm publish ./npm/linux-x64 --access public
+npm publish ./npm/linux-arm64 --access public
+npm publish ./npm/win32-x64 --access public
+for p in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do npm view niti-$p@0.4.9 version; done
+npm publish --access public          # the root package last, only once all five show the version
+git tag v0.4.9 && git push origin v0.4.9 && gh release create v0.4.9 --notes "…"
+```
+
+The order matters: a root package published before its platform packages pins versions that don't
+exist, and every install breaks. `.github/workflows/release.yml` runs on a `v*` tag, checks the
+versions agree, tests and builds; it publishes only if the repo has an `NPM_TOKEN` secret, which it
+doesn't today, so publishing is by hand as above. Add `--otp=<code>` to `npm publish` if npm asks.
+
+**Desktop app to GitHub.**
+
+```sh
+(cd niti-app && npm version 0.1.3 --no-git-tag-version)
+git commit -am "niti-app: version 0.1.3"
+(cd niti-app && npm run dist)        # bundles the core, builds → niti-app/release/niti-0.1.3-arm64.dmg
+git tag app-v0.1.3 && git push origin app-v0.1.3
+gh release create app-v0.1.3 niti-app/release/niti-0.1.3-arm64.dmg --title "niti desktop v0.1.3" --notes "…" --latest
+```
+
+The DMG is Apple Silicon only and not notarized; its notes say so (right-click → Open the first
+time). Run the full checks (`zsh scripts/e2e/run.sh`, `cd niti-app && npm run check`) before either.
+
 ## Known ceilings
 
 - One global shell lock rather than per path; the tool sandbox is path-jailed plus the OS sandbox,
