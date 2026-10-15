@@ -75,7 +75,7 @@ test("sign-in: codes are single-use, expire, limit attempts and sends, and a key
   await post(`${r.url}/v1/login/start`, { email: "b@x.dev" });
   for (let i = 0; i < 5; i++) await post(`${r.url}/v1/login/verify`, { email: "b@x.dev", code: "x", device: { name: "M", kind: "mac", signPub: keys.signPub } });
   expect((await post(`${r.url}/v1/login/verify`, { email: "b@x.dev", code: codes.get("b@x.dev"), device: { name: "M", kind: "mac", signPub: keys.signPub } })).body.error).toContain("too many");
-  for (let i = 0; i < 5; i++) await post(`${r.url}/v1/login/start`, { email: "c@x.dev" });
+  for (let i = 0; i < 10; i++) await post(`${r.url}/v1/login/start`, { email: "c@x.dev" });
   expect((await post(`${r.url}/v1/login/start`, { email: "c@x.dev" })).body.error).toContain("too many");
   // The same key can't be on two accounts.
   await post(`${r.url}/v1/login/start`, { email: "d@x.dev" });
@@ -109,12 +109,17 @@ test("a phone reaches a Mac session only once that Mac allows it; then frames fl
   p.send({ t: "to", mac: mac.id, session: "proj1", data: "hello?" });
   expect((await p.next("error")).code).toBe("not_allowed");
   m.send({ t: "to", device: phone.id, data: "sneaky" }); // a Mac can't talk to a phone it hasn't allowed either
+  // …except to pair: the small cleartext exchange behind the code a person compares.
+  p.send({ t: "to", mac: mac.id, session: "proj1", data: '{"p":"commit","c":"x"}' });
+  expect(await m.next("from")).toEqual({ t: "from", device: phone.id, data: '{"p":"commit","c":"x"}' });
+  m.send({ t: "to", device: phone.id, data: '{"p":"nonce","n":"y"}' });
+  expect((await p.next("from")).data).toBe('{"p":"nonce","n":"y"}');
   m.send({ t: "allow", phones: [phone.id] });
   await p.next("sessions", (f) => f.sessions[0]?.allowed === true);
   p.send({ t: "to", mac: mac.id, session: "proj1", data: "hello" });
-  expect(await m.next("from")).toEqual({ t: "from", device: phone.id, data: "hello" });
+  expect(await m.next("from", (f) => f.data === "hello")).toEqual({ t: "from", device: phone.id, data: "hello" });
   m.send({ t: "to", device: phone.id, data: "hi back" });
-  expect(await p.next("from")).toEqual({ t: "from", mac: mac.id, session: "proj1", data: "hi back" });
+  expect(await p.next("from", (f) => f.data === "hi back")).toEqual({ t: "from", mac: mac.id, session: "proj1", data: "hi back" });
   expect(p.frames.some((f) => f.t === "from" && f.data === "sneaky")).toBe(false);
 
   // Status: only an allowed phone sees it.
@@ -169,6 +174,8 @@ test("revoking a device closes its socket and it can't connect again", async () 
   await m.next("ready");
   const p = await connect(r.url, phone);
   await p.next("ready");
+  p.send({ t: "revoke", device: mac.id }); // a phone can't sign the Mac out
+  expect((await p.next("error")).code).toBe("forbidden");
   m.send({ t: "revoke", device: phone.id });
   await m.next("devices", (f) => !f.devices.some((d) => d.id === phone.id));
   await Bun.sleep(50);

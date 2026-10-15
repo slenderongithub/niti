@@ -20,7 +20,10 @@ export const SCHEMA = [
 
 const CODE_TTL_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
-const MAX_SENDS_PER_HOUR = 5;
+// Codes per email per day. With MAX_ATTEMPTS each, that caps guessing at 50 a day: about a 2% chance
+// a year of ever landing one, and even then the new device still has to be allowed on a Mac.
+const MAX_SENDS_PER_DAY = 10;
+const SEND_WINDOW_MS = 24 * 3_600_000;
 const MAX_DEVICES = 10;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -60,9 +63,9 @@ export class Accounts {
     if (!EMAIL.test(email) || email.length > 254) return { ok: false, error: "that doesn't look like an email address" };
     const now = this.now();
     const prev = await this.sql.first<{ sent: number; window_start: number }>(`SELECT sent, window_start FROM codes WHERE email = ?`, email);
-    const fresh = !prev || now - prev.window_start > 3_600_000;
+    const fresh = !prev || now - prev.window_start > SEND_WINDOW_MS;
     const sent = fresh ? 1 : prev.sent + 1;
-    if (sent > MAX_SENDS_PER_HOUR) return { ok: false, error: "too many codes requested — try again in an hour" };
+    if (sent > MAX_SENDS_PER_DAY) return { ok: false, error: "too many codes requested today — try again tomorrow" };
     const code = String(crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000).padStart(6, "0");
     await this.sql.run(
       `INSERT INTO codes (email, code_hash, expires, attempts, sent, window_start) VALUES (?, ?, ?, 0, ?, ?)

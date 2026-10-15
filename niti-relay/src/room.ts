@@ -1,4 +1,4 @@
-import { authMessage, PROTOCOL, randomId, verify, type ClientFrame, type DeviceInfo, type PushCategory, type ServerFrame, type SessionInfo } from "../../src/remote/protocol.ts";
+import { authMessage, isPairFrame, PROTOCOL, randomId, verify, type ClientFrame, type DeviceInfo, type PushCategory, type ServerFrame, type SessionInfo } from "../../src/remote/protocol.ts";
 import type { Accounts } from "./accounts.ts";
 
 // One account's room: its Macs (one socket per running core) and its phones. It routes opaque
@@ -110,6 +110,10 @@ export class Room {
         if (me.kind !== "phone") return;
         return this.d.accounts.setPush(me.id, f.token, Array.isArray(f.categories) ? f.categories : []);
       case "revoke": {
+        // A phone signs out only itself, and a Mac itself or a phone: whoever got hold of the email
+        // can't sign the account's Macs out from under it.
+        const target = await this.d.accounts.device(String(f.device));
+        if (target && target.id !== me.id && (me.kind === "phone" || target.kind === "mac")) return sock.send({ t: "error", code: "forbidden", message: "only a Mac can sign another device out, and only a phone" });
         if (!(await this.d.accounts.revoke(me.account, String(f.device)))) return sock.send({ t: "error", code: "not_found", message: "no such device on this account" });
         for (const s of this.d.sockets()) if (s.meta.device.id === f.device) s.close(4001, "signed out");
         return this.devicesChanged();
@@ -152,17 +156,19 @@ export class Room {
   private async route(sock: Sock, f: Extract<ClientFrame, { t: "to" }>): Promise<void> {
     const me = sock.meta.device;
     const data = String(f.data ?? "");
+    // Before a Mac allows a phone, only the pairing exchange (small, cleartext) passes between them.
+    const pairing = isPairFrame(data);
     if (me.kind === "phone") {
       if (!f.mac || !f.session) return;
-      if (!(await this.d.accounts.allowed(f.mac, me.id))) return sock.send({ t: "error", code: "not_allowed", message: "this Mac hasn't allowed this phone yet" });
-      const target = this.d.sockets().find((s) => s.meta.authed && s.meta.device.id === f.mac && s.meta.session === f.session);
+      if (!pairing && !(await this.d.accounts.allowed(f.mac, me.id))) return sock.send({ t: "error", code: "not_allowed", message: "this Mac hasn't allowed this phone yet" });
+      const target = this.d.sockets().find((s) => s.meta.authed && s.meta.device.kind === "mac" && s.meta.device.id === f.mac && s.meta.session === f.session);
       if (!target) return sock.send({ t: "error", code: "offline", message: "that session is offline" });
       return target.send({ t: "from", device: me.id, data });
     }
     if (!f.device || !sock.meta.session) return;
-    if (!(await this.d.accounts.allowed(me.id, f.device))) return;
+    if (!pairing && !(await this.d.accounts.allowed(me.id, f.device))) return;
     for (const s of this.d.sockets()) {
-      if (s.meta.authed && s.meta.device.id === f.device) s.send({ t: "from", mac: me.id, session: sock.meta.session, data });
+      if (s.meta.authed && s.meta.device.kind === "phone" && s.meta.device.id === f.device) s.send({ t: "from", mac: me.id, session: sock.meta.session, data });
     }
   }
 
