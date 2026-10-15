@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import type { ServerWebSocket } from "bun";
 import { Accounts, type Mail, type Sql } from "./src/accounts.ts";
 import { Room, newSockMeta, type KV, type PushMessage, type Sock, type SockMeta } from "./src/room.ts";
-import { login } from "./src/http.ts";
+import { login, urlOf } from "./src/http.ts";
 
 // The relay on Bun: the same room and accounts code the Cloudflare Worker runs, over Bun.serve and
 // bun:sqlite. For tests and the end-to-end check — and for anyone who would rather run a relay on
@@ -63,7 +63,7 @@ export async function startRelay(o: { port?: number; host?: string; db?: string;
     async fetch(req, srv) {
       const res = await login(req, accounts, async (account) => rooms.get(account)?.room.devicesChanged());
       if (res) return res;
-      const u = new URL(req.url);
+      const u = urlOf(req);
       if (u.pathname === "/v1/connect") {
         const device = await accounts.device(u.searchParams.get("device") ?? "");
         if (!device) return Response.json({ error: "unknown device — sign in again" }, { status: 401 });

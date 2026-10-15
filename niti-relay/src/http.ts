@@ -4,8 +4,12 @@ import type { Accounts } from "./accounts.ts";
 //   POST /v1/login/start  {email}                         → a code goes to that inbox
 //   POST /v1/login/verify {email, code, device:{name, kind, signPub}} → {account, device}
 // `signedIn` lets the account's live room tell everyone a device arrived.
+// Bun builds an upgrade request's url from a bare IPv6 Host header without its brackets, which
+// `new URL` rejects; the host never matters here, only the path and query.
+export const urlOf = (req: Request): URL => new URL(req.url.replace(/^\w+:\/\/[^/]*/, ""), "http://relay");
+
 export async function login(req: Request, accounts: Accounts, signedIn: (account: string) => Promise<void>): Promise<Response | undefined> {
-  const path = new URL(req.url).pathname;
+  const path = urlOf(req).pathname;
   if (req.method !== "POST" || (path !== "/v1/login/start" && path !== "/v1/login/verify")) return undefined;
   let body: { email?: string; code?: string; device?: { name: string; kind: "mac" | "phone"; signPub: string } };
   try {

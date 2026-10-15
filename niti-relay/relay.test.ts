@@ -175,3 +175,9 @@ test("revoking a device closes its socket and it can't connect again", async () 
   expect(p.closed()?.code).toBe(4001);
   expect((await fetch(`${r.url}/v1/connect?device=${phone.id}`)).status).toBe(401);
 });
+
+test("urlOf reads the path even when Bun drops an IPv6 host's brackets", async () => {
+  const { urlOf } = await import("./src/http.ts");
+  const u = urlOf({ url: "http://2409:40f0::1:8787/v1/connect?device=abc" } as Request);
+  expect([u.pathname, u.searchParams.get("device")]).toEqual(["/v1/connect", "abc"]);
+});
