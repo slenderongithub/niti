@@ -307,3 +307,21 @@ test("/agents says an agent with no allowedTools has none, not all", async () =>
   const e = new Engine({ configs: [{ id: "solo", provider: "anthropic", model: "m", role: "R", systemPrompt: "s", lead: true }], makeProvider: () => stub });
   expect((await new CommandRegistry([...BUILTIN_COMMANDS]).run(e, "agents")).message).toContain("[(none)]");
 });
+
+test("/remote on <email> signs in with that email, with or without --relay", async () => {
+  const cwd = process.cwd();
+  process.chdir(mkdtempSync(join(tmpdir(), "niti-remote-cmd-"))); // /remote on saves `remote: true` to the project's agents.yaml
+  try {
+    const e = engine();
+    const calls: [string, string | undefined][] = [];
+    e.remote = { setEnabled() {}, signIn: async (email: string, relay?: string) => (calls.push([email, relay]), { ok: true, message: "code" }), state: () => ({ signedIn: false, phones: [] }) } as never;
+    const r = new CommandRegistry(BUILTIN_COMMANDS);
+    await r.run(e, "remote", "on ada@x.dev");
+    await r.run(e, "remote", "on ada@x.dev --relay http://r");
+    await r.run(e, "remote", "on --relay http://r ada@x.dev");
+    expect(calls).toEqual([["ada@x.dev", undefined], ["ada@x.dev", "http://r"], ["ada@x.dev", "http://r"]]);
+    expect((await r.run(e, "remote", "on")).message).toContain("usage: /remote on <your email>");
+  } finally {
+    process.chdir(cwd);
+  }
+});

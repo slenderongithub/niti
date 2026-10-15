@@ -1,7 +1,7 @@
-import { authMessage, Channel, CHANNEL_RESET, deviceId, isPairFrame, newDeviceKeys, openStatus, pairCommit, pairingCode, pairNonce, PROTOCOL, sign, type PairMessage, type ChannelMessage, type DeviceInfo, type DeviceKeys, type Hello, type PushCategory, type ServerFrame, type SessionInfo } from "../../../src/remote/protocol.ts";
+import { authMessage, Channel, CHANNEL_RESET, deviceId, isPairFrame, newDeviceKeys, openStatus, Pake, pairTag, PROTOCOL, registerMessage, sign, type PairMessage, type ChannelMessage, type DeviceInfo, type DeviceKeys, type Hello, type PushCategory, type ServerFrame, type SessionInfo } from "../../../src/remote/protocol.ts";
 
-// The phone's side of remote control: sign in to the relay, see the account's Macs and their
-// projects, and open an end-to-end encrypted session with one to drive its niti. Plain TypeScript
+// The phone's side of remote control: pair with a Mac by typing the code it shows, see the paired
+// Macs and their projects, and open an end-to-end encrypted session with one to drive its niti. Plain TypeScript
 // with no React Native imports, so the end-to-end check drives the same code under Bun.
 
 export interface PhoneIdentity {
@@ -10,6 +10,7 @@ export interface PhoneIdentity {
   name: string;
   keys: DeviceKeys;
   statusKeys: Record<string, string>; // per Mac, from its welcome: opens the status it leaves on the relay
+  macs: Record<string, string>; // the Macs this phone paired with: id → signing key. Only these are ever opened.
 }
 
 export interface IdentityStore {
@@ -44,9 +45,8 @@ export class RemoteClient {
   private stopped = true;
   private backoff = 1000;
   private retry?: ReturnType<typeof setTimeout>;
-  private pendingEmail?: string;
   private conns = new Map<string, Session>(); // `${mac}:${session}`
-  private pairs = new Map<string, { session: string; n: string; code?: string }>(); // per Mac not yet allowing this phone
+  private pakes = new Map<string, { pake: Pake; done: (r: "paired" | "wrong") => void }>(); // `${mac}:${session}` while pairing
   private listeners = new Set<(s: RemoteSnapshot) => void>();
 
   constructor(
@@ -65,23 +65,66 @@ export class RemoteClient {
   }
 
   async restore(): Promise<boolean> {
-    this.id = await this.o.store.load();
+    const id = await this.o.store.load();
+    this.id = id?.macs ? id : undefined; // from before pairing by code: pair again
     return !!this.id;
   }
 
-  async loginStart(email: string): Promise<{ ok: boolean; error?: string }> {
-    this.pendingEmail = email.trim();
-    return post(this.relay, "/v1/login/start", { email: this.pendingEmail });
+  // Pair with the Mac showing `code` (/remote on <email> there). The first time, this registers the
+  // phone under the email, which is only a name: nothing is sent to it.
+  async pair(email: string, code: string, timeoutMs = 10_000): Promise<{ ok: boolean; error?: string }> {
+    const clean = email.trim().toLowerCase();
+    if (!this.id || this.id.email !== clean) {
+      const keys = this.id?.keys ?? newDeviceKeys(); // the same phone keeps its key
+      const r = await post(this.relay, "/v1/register", { email: clean, device: { name: this.o.name, kind: "phone", signPub: keys.signPub, sig: sign(keys.signSecret, registerMessage(clean, "phone", keys.signPub)) } });
+      if (!r.ok) return r;
+      this.id = { relay: this.relay, email: clean, name: this.o.name, keys, statusKeys: {}, macs: {} };
+      await this.o.store.save(this.id);
+      this.ws?.close(1000, "new account");
+      this.ws = undefined;
+    }
+    this.connect();
+    if (!(await this.until(() => this.snap.link === "up", timeoutMs))) return { ok: false, error: "couldn't reach the relay — check your connection" };
+    const targets = this.snap.sessions.filter((s) => s.online && !s.allowed);
+    if (!targets.length) return { ok: false, error: `no Mac is waiting — on your Mac, run /remote on ${clean}` };
+    const results: ("paired" | "wrong")[] = [];
+    for (const s of targets) {
+      const key = `${s.mac}:${s.session}`;
+      const pake = new Pake(code.replace(/\D/g, ""), `${s.mac}:${this.myId}`);
+      this.pakes.set(key, { pake, done: (r) => (this.pakes.delete(key), results.push(r)) });
+      this.send({ t: "to", mac: s.mac, session: s.session, data: JSON.stringify({ p: "pake", y: pake.y, pub: this.id!.keys.signPub } satisfies PairMessage) });
+    }
+    // Only the Mac showing a code answers; the first right answer wins.
+    await this.until(() => results.includes("paired") || results.length === targets.length, timeoutMs);
+    for (const s of targets) this.pakes.delete(`${s.mac}:${s.session}`);
+    if (results.includes("paired")) return { ok: true };
+    if (results.includes("wrong")) return { ok: false, error: "that code doesn't match the one on your Mac" };
+    return { ok: false, error: "your Mac didn't answer — is the code still showing? (/remote pair makes a new one)" };
   }
 
-  async loginVerify(code: string): Promise<{ ok: boolean; error?: string }> {
-    if (!this.pendingEmail) return { ok: false, error: "enter your email first" };
-    const keys = this.id?.keys ?? newDeviceKeys(); // the same phone keeps its key across sign-ins
-    const r = await post(this.relay, "/v1/login/verify", { email: this.pendingEmail, code: code.trim(), device: { name: this.o.name, kind: "phone", signPub: keys.signPub } });
-    if (!r.ok) return r;
-    this.id = { relay: this.relay, email: this.pendingEmail, name: this.o.name, keys, statusKeys: this.id?.statusKeys ?? {} };
-    await this.o.store.save(this.id);
-    return { ok: true };
+  // The Mac's answer to our share: its tag proves it used the same code, and its key is pinned.
+  private onPairing(mac: string, session: string, data: string): void {
+    const p = this.pakes.get(`${mac}:${session}`);
+    if (!p || !this.id) return;
+    let m: PairMessage;
+    try {
+      m = JSON.parse(data) as PairMessage;
+    } catch {
+      return;
+    }
+    if (m.p !== "pake" || typeof m.y !== "string" || typeof m.pub !== "string" || deviceId(m.pub) !== mac) return;
+    const mine = this.id.keys.signPub;
+    const key = p.pake.key(m.y, p.pake.y, m.y);
+    if (!key || m.t !== pairTag(key, "mac", mine, m.pub)) return p.done("wrong");
+    this.send({ t: "to", mac, session, data: JSON.stringify({ p: "confirm", t: pairTag(key, "phone", mine, m.pub) } satisfies PairMessage) });
+    this.id.macs[mac] = m.pub;
+    void this.o.store.save(this.id);
+    p.done("paired");
+  }
+
+  private async until(cond: () => boolean, ms: number): Promise<boolean> {
+    for (const end = Date.now() + ms; !cond(); await new Promise((r) => setTimeout(r, 50))) if (Date.now() > end) return false;
+    return true;
   }
 
   async signOut(): Promise<void> {
@@ -99,41 +142,9 @@ export class RemoteClient {
     return this.id ? deviceId(this.id.keys.signPub) : undefined;
   }
 
-  // The 6 digits this phone shows for a Mac — the Mac shows the same ones when asked to allow it.
-  // Undefined until the pairing exchange with one of that Mac's running projects is done.
-  codeFor(mac: string): string | undefined {
-    return this.pairs.get(mac)?.code;
-  }
-
-  // Pair with each Mac that hasn't allowed (or refused) this phone, through one of its live
-  // projects: commit to a nonce now, reveal it once the Mac has answered with its own.
-  private pair(): void {
-    const live = (mac: string, session: string) => this.snap.sessions.some((s) => s.mac === mac && s.session === session && s.online);
-    for (const s of this.snap.sessions) {
-      if (s.allowed || s.denied) this.pairs.delete(s.mac);
-      if (s.allowed || s.denied || !s.online) continue;
-      const p = this.pairs.get(s.mac);
-      if (p && live(s.mac, p.session)) continue;
-      const n = pairNonce();
-      this.pairs.set(s.mac, { session: s.session, n });
-      this.send({ t: "to", mac: s.mac, session: s.session, data: JSON.stringify({ p: "commit", c: pairCommit(n) } satisfies PairMessage) });
-    }
-  }
-
-  private onPairing(mac: string, session: string, data: string): void {
-    const p = this.pairs.get(mac);
-    const d = this.snap.devices.find((x) => x.id === mac);
-    if (!p || p.session !== session || p.code || !this.id || !d || deviceId(d.signPub) !== mac) return;
-    let m: PairMessage;
-    try {
-      m = JSON.parse(data) as PairMessage;
-      if (m.p !== "nonce") return;
-      p.code = pairingCode(d.signPub, this.id.keys.signPub, p.n, String(m.n));
-    } catch {
-      return;
-    }
-    this.send({ t: "to", mac, session, data: JSON.stringify({ p: "reveal", n: p.n } satisfies PairMessage) });
-    this.set({});
+  // The paired Macs' projects, as the relay lists them.
+  get paired(): SessionInfo[] {
+    return this.snap.sessions.filter((s) => s.allowed && this.id?.macs[s.mac]);
   }
 
   // What a Mac last left on the relay, readable once that Mac has welcomed this phone.
@@ -162,7 +173,6 @@ export class RemoteClient {
       this.ws = undefined;
       for (const c of this.conns.values()) c.drop();
       this.conns.clear();
-      this.pairs.clear(); // pair afresh on reconnect; the Mac replaces its request with the new code
       if (e.code === 4001) {
         // Signed out from another device (or this one was revoked on the Mac).
         this.id = undefined;
@@ -198,15 +208,12 @@ export class RemoteClient {
         return this.send({ t: "auth", v: PROTOCOL, sig: sign(this.id!.keys.signSecret, authMessage(f.nonce, this.myId!)) });
       case "ready":
         this.backoff = 1000;
-        this.set({ link: "up", me: f.you, devices: f.devices, sessions: f.sessions, error: undefined });
-        return this.pair();
+        return this.set({ link: "up", me: f.you, devices: f.devices, sessions: f.sessions, error: undefined });
       case "devices":
-        this.set({ devices: f.devices });
-        return this.pair();
+        return this.set({ devices: f.devices });
       case "sessions":
         for (const [key, c] of this.conns) if (!f.sessions.some((s) => `${s.mac}:${s.session}` === key && s.online && s.allowed)) (c.drop(), this.conns.delete(key));
-        this.set({ sessions: f.sessions });
-        return this.pair();
+        return this.set({ sessions: f.sessions });
       case "from":
         if (!f.mac || !f.session) return;
         if (isPairFrame(f.data)) return this.onPairing(f.mac, f.session, f.data);
@@ -223,10 +230,10 @@ export class RemoteClient {
     const existing = this.conns.get(key);
     if (existing?.ready) return existing;
     existing?.drop();
-    const d = this.snap.devices.find((x) => x.id === mac);
-    // The id is the key's hash: a relay can't hand over some other key under this Mac's name.
-    if (!d || d.kind !== "mac" || deviceId(d.signPub) !== mac || !this.id) throw new Error("unknown Mac");
-    const ch = new Channel(`${mac}:${session}:${this.myId}`, "a", this.id.keys.signSecret, d.signPub);
+    // Only a Mac this phone paired with, by the key pinned then: a relay can't slip in a Mac of its own.
+    const pub = this.id?.macs[mac];
+    if (!pub || !this.id) throw new Error("this phone isn't paired with that Mac");
+    const ch = new Channel(`${mac}:${session}:${this.myId}`, "a", this.id.keys.signSecret, pub);
     const conn = new Session(ch, (data) => this.send({ t: "to", mac, session, data }), (statusKey) => {
       if (this.id && this.id.statusKeys[mac] !== statusKey) {
         this.id.statusKeys[mac] = statusKey;

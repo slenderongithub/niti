@@ -11,7 +11,7 @@ import nacl from "tweetnacl";
 //                  with keys made fresh on every connection and signed with each side's long-term
 //                  key. The relay sees opaque base64.
 
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 
 // ---- encoding --------------------------------------------------------------------------------
 
@@ -97,29 +97,70 @@ export function verify(pub: string, msg: string, sig: string): boolean {
   }
 }
 
-// Pairing: the 6 digits a person compares on the Mac and the phone when the phone is first allowed.
-// Commit, then reveal (the numeric comparison Bluetooth pairing uses): the phone commits to a nonce,
-// the Mac answers with its own, the phone reveals. The code covers both signing keys and both
-// nonces, and each side fixed its nonce before seeing the other's, so no one in the middle (the
-// relay, or anyone else signed in to the account) can pick a key that lands on the code a person is
-// about to compare. Without the nonces, a million tries finds such a key in seconds.
-export type PairMessage = { p: "commit"; c: string } | { p: "nonce"; n: string } | { p: "reveal"; n: string };
+// Pairing: the Mac shows a 6-digit code and the phone types it in. The code itself never travels:
+// both sides run CPace (a password-authenticated key exchange, draft-irtf-cfrg-cpace, over X25519)
+// with it, so nothing that passes through the relay lets anyone test a guess offline; each guess
+// needs a live try, and the Mac allows five per code. The key they land on then vouches for both
+// devices' long-term keys, which each side pins from then on.
+//   phone → Mac   { p: "pake", y, pub }        its CPace share and signing key
+//   Mac → phone   { p: "pake", y, pub, t }     the same, and a tag only the right code produces
+//   phone → Mac   { p: "confirm", t }          the phone's tag: the Mac allows it
+export type PairMessage = { p: "pake"; y: string; pub: string; t?: string } | { p: "confirm"; t: string };
 
 // Pairing frames travel in the clear through the relay, the only thing it forwards between a Mac
 // and a phone the Mac hasn't allowed.
-export const isPairFrame = (data: string): boolean => data.length <= 200 && data.startsWith('{"p":');
+export const isPairFrame = (data: string): boolean => data.length <= 300 && data.startsWith('{"p":');
 
-export const pairNonce = () => randomId(32);
+export const newPairCode = (): string => String(new DataView(nacl.randomBytes(4).buffer).getUint32(0) % 1_000_000).padStart(6, "0");
 
-export function pairCommit(nonce: string): string {
-  return b64(nacl.hash(concat(utf8("niti-pair-commit-v2"), unb64(nonce))));
+const P = 2n ** 255n - 19n;
+const A = 486662n;
+const mod = (x: bigint) => ((x % P) + P) % P;
+function pow(b: bigint, e: bigint): bigint {
+  let r = 1n;
+  b = mod(b);
+  for (; e > 0n; e >>= 1n, b = (b * b) % P) if (e & 1n) r = (r * b) % P;
+  return r;
+}
+const le = (b: Uint8Array) => b.reduceRight((n, x) => (n << 8n) | BigInt(x), 0n);
+const toLe = (n: bigint) => Uint8Array.from({ length: 32 }, (_, i) => Number((n >> BigInt(8 * i)) & 255n));
+
+// The code (and who is pairing with whom) hashed to a point on Curve25519 by Elligator 2 (RFC 9380
+// 6.7.1, Z = 2), as the u-coordinate X25519 works on. ponytail: not constant-time, which only
+// matters to someone timing this device during the ten minutes a code lives.
+function generator(code: string, ctx: string): Uint8Array {
+  const r = mod(le(nacl.hash(utf8(`niti-cpace-v1:${ctx}:${code}`)).subarray(0, 32)) & ((1n << 255n) - 1n));
+  const t = mod(2n * r * r);
+  const x1 = mod(-A * pow(t === P - 1n ? 1n : t + 1n, P - 2n));
+  const square = (x: bigint) => x === 0n || pow(x, (P - 1n) / 2n) === 1n;
+  return toLe(square(mod(x1 * (x1 * x1 + A * x1 + 1n))) ? x1 : mod(-x1 - A));
 }
 
-export function pairingCode(macSignPub: string, phoneSignPub: string, phoneNonce: string, macNonce: string): string {
-  const h = nacl.hash(concat(utf8("niti-pair-v2"), unb64(macSignPub), unb64(phoneSignPub), unb64(phoneNonce), unb64(macNonce)));
-  const n = ((h[0]! << 24) | (h[1]! << 16) | (h[2]! << 8) | h[3]!) >>> 0;
-  return String(n % 1_000_000).padStart(6, "0");
+const zero = (b: Uint8Array) => b.every((x) => x === 0);
+
+// One side of a pairing. `ctx` is `${macId}:${phoneId}`, so a code works only between those two.
+export class Pake {
+  private secret = nacl.randomBytes(32);
+  readonly y: string;
+  constructor(code: string, ctx: string) {
+    this.y = b64(nacl.scalarMult(this.secret, generator(code, ctx)));
+  }
+
+  // The key both sides share when they used the same code; undefined for a degenerate share.
+  key(peerY: string, phoneY: string, macY: string): Uint8Array | undefined {
+    try {
+      const k = nacl.scalarMult(this.secret, unb64(peerY));
+      return zero(k) ? undefined : nacl.hash(concat(utf8("niti-cpace-sk"), k, unb64(phoneY), unb64(macY))).subarray(0, 32);
+    } catch {
+      return undefined;
+    }
+  }
 }
+
+// What each side sends to prove it holds the key, over both devices' signing keys: a Mac and a phone
+// that agree on the tags agree on who the other is.
+export const pairTag = (key: Uint8Array, role: "mac" | "phone", phonePub: string, macPub: string): string =>
+  b64(nacl.hash(concat(key, utf8(`niti-pair-tag:${role}:${phonePub}:${macPub}`))).subarray(0, 32));
 
 export const randomId = (bytes = 16) => b64(nacl.randomBytes(bytes));
 
@@ -142,13 +183,12 @@ export interface SessionInfo {
   lastSeen: number;
   status?: string; // the latest encrypted status blob (see sealStatus)
   allowed: boolean; // this Mac has allowed the phone asking
-  denied: boolean; // …or someone said no on the Mac
 }
 
 export type ClientFrame =
   | { t: "auth"; v: number; sig: string; session?: string } // sig = sign(nonce + deviceId); a Mac names its core's session
   | { t: "to"; mac?: string; session?: string; device?: string; data: string } // phone → a Mac session, or Mac → a phone
-  | { t: "allow"; phones: string[]; denied?: string[] } // Mac: the phones it has allowed (and refused), all of them, every time it changes
+  | { t: "allow"; phones: string[] } // Mac: the phones it has allowed, all of them, every time it changes
   | { t: "status"; blob: string; offlineAlert: boolean } // Mac: what a phone shows while this session is offline
   | { t: "push"; category: PushCategory; title: string; body: string; route?: string } // Mac: notify its allowed phones
   | { t: "pushToken"; token: string; categories: PushCategory[] } // phone: where and what to push
@@ -169,6 +209,9 @@ export type PushCategory = "approval" | "goal" | "error" | "offline";
 export const PUSH_CATEGORIES: PushCategory[] = ["approval", "goal", "error", "offline"];
 
 export const authMessage = (nonce: string, id: string) => `niti-relay-auth-v1:${nonce}:${id}`;
+// Registering a device under an account is signed with that device's key: knowing a public key isn't
+// enough to move the device somewhere else.
+export const registerMessage = (email: string, kind: DeviceKind, signPub: string) => `niti-relay-register-v1:${email.trim().toLowerCase()}:${kind}:${signPub}`;
 
 // ---- the encrypted channel -------------------------------------------------------------------
 

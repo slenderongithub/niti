@@ -10,7 +10,8 @@ import { keychain } from "./secure";
 // The app's one store: the relay connection (which Macs and projects exist) and, while one is open,
 // a project's session folded by the same reducer the desktop app uses.
 
-const DEFAULT_RELAY = (Constants.expoConfig?.extra?.relay as string | undefined) ?? "";
+// The relay is built in (app.json extra.relay): nobody types an address.
+const RELAY = (Constants.expoConfig?.extra?.relay as string | undefined) ?? "";
 
 interface Open {
   mac: string;
@@ -21,17 +22,15 @@ interface Open {
 
 interface Store {
   ready: boolean; // the keychain has been read
-  signedIn: boolean;
-  relay: string;
+  signedIn: boolean; // paired with at least one Mac
+  email?: string;
   snap: RemoteSnapshot;
   open?: Open;
   state: SessionState;
   opening: boolean;
   error?: string;
   init(): Promise<void>;
-  setRelay(url: string): void;
-  startSignIn(email: string): Promise<string | undefined>;
-  finishSignIn(code: string): Promise<string | undefined>;
+  pair(email: string, code: string): Promise<string | undefined>;
   signOut(): Promise<void>;
   openSession(mac: string, session: string): Promise<void>;
   closeSession(): void;
@@ -59,10 +58,11 @@ export const useStore = create<Store>((set, get) => {
     setTimeout(() => void attempt(), 300);
   };
 
+  const paired = () => !!client?.id && Object.keys(client.id.macs).length > 0;
   const makeClient = (relay: string) => {
     client?.stop();
     client = new RemoteClient({ relay, name: Device.deviceName ?? "iPhone", store: keychain });
-    client.onChange((snap) => set({ snap, signedIn: !!client?.id }));
+    client.onChange((snap) => set({ snap, signedIn: paired(), email: client?.id?.email }));
     return client;
   };
 
@@ -77,34 +77,22 @@ export const useStore = create<Store>((set, get) => {
   return {
     ready: false,
     signedIn: false,
-    relay: DEFAULT_RELAY,
     snap: { link: "off", devices: [], sessions: [] },
     state: emptyState(),
     opening: false,
 
     async init() {
-      const saved = await keychain.load();
-      const c = makeClient(saved?.relay || DEFAULT_RELAY);
-      await c.restore();
-      set({ ready: true, signedIn: !!c.id, relay: c.relay });
+      const c = makeClient(RELAY);
+      await c.restore(); // a paired phone keeps the relay it paired through
+      set({ ready: true, signedIn: paired(), email: c.id?.email });
       if (c.id) c.connect();
     },
 
-    setRelay(url) {
-      set({ relay: url.trim().replace(/\/$/, "") });
-    },
-
-    async startSignIn(email) {
-      const c = makeClient(get().relay);
-      const r = await c.loginStart(email);
-      return r.ok ? undefined : (r.error ?? "couldn't send the code");
-    },
-
-    async finishSignIn(code) {
-      const r = await client!.loginVerify(code);
-      if (!r.ok) return r.error ?? "sign-in failed";
-      set({ signedIn: true });
-      client!.connect();
+    async pair(email, code) {
+      if (!client?.relay) return "this build of the app has no relay set (app.json extra.relay)";
+      const r = await client.pair(email, code);
+      if (!r.ok) return r.error ?? "couldn't pair";
+      set({ signedIn: true, email: client.id?.email });
       return undefined;
     },
 

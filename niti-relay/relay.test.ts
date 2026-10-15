@@ -1,10 +1,9 @@
 import { test, expect, afterEach } from "bun:test";
 import { startRelay } from "./bun.ts";
-import { authMessage, deviceId, newDeviceKeys, sign, type ClientFrame, type DeviceKeys, type ServerFrame } from "../src/remote/protocol.ts";
+import { authMessage, deviceId, newDeviceKeys, PROTOCOL, registerMessage, sign, type ClientFrame, type DeviceKeys, type ServerFrame } from "../src/remote/protocol.ts";
 import type { PushMessage } from "./src/room.ts";
 
 let clock = 1_000_000;
-const codes = new Map<string, string>();
 const pushes: PushMessage[] = [];
 const stops: (() => void)[] = [];
 afterEach(() => {
@@ -13,7 +12,7 @@ afterEach(() => {
 });
 
 async function relay() {
-  const r = await startRelay({ mail: async (e, c) => void codes.set(e, c), push: async (m) => void pushes.push(...m), now: () => clock });
+  const r = await startRelay({ push: async (m) => void pushes.push(...m), now: () => clock });
   stops.push(r.stop);
   return r;
 }
@@ -23,9 +22,11 @@ const post = async (url: string, body: unknown) => {
   return { status: res.status, body: (await res.json()) as any };
 };
 
+const reg = (url: string, email: string, kind: "mac" | "phone", name: string, keys: DeviceKeys) =>
+  post(`${url}/v1/register`, { email, device: { name, kind, signPub: keys.signPub, sig: sign(keys.signSecret, registerMessage(email, kind, keys.signPub)) } });
+
 async function signIn(url: string, email: string, kind: "mac" | "phone", name: string, keys = newDeviceKeys()) {
-  expect((await post(`${url}/v1/login/start`, { email })).status).toBe(200);
-  const r = await post(`${url}/v1/login/verify`, { email, code: codes.get(email), device: { name, kind, signPub: keys.signPub } });
+  const r = await reg(url, email, kind, name, keys);
   expect(r.body.ok).toBe(true);
   return { keys, id: deviceId(keys.signPub), account: r.body.account as string };
 }
@@ -39,7 +40,7 @@ async function connect(url: string, d: { keys: DeviceKeys; id: string }, session
   ws.onclose = (e) => (closed = { code: e.code, reason: e.reason });
   ws.onmessage = (e) => {
     const f = JSON.parse(String(e.data)) as ServerFrame;
-    if (f.t === "challenge") return ws.send(JSON.stringify({ t: "auth", v: 1, sig: sign(d.keys.signSecret, authMessage(f.nonce, d.id)), session }));
+    if (f.t === "challenge") return ws.send(JSON.stringify({ t: "auth", v: PROTOCOL, sig: sign(d.keys.signSecret, authMessage(f.nonce, d.id)), session }));
     frames.push(f);
     for (const [i, [pred, res]] of waiters.entries()) if (pred(f)) (waiters.splice(i, 1), res(f));
   };
@@ -55,31 +56,24 @@ async function connect(url: string, d: { keys: DeviceKeys; id: string }, session
   return { ws, frames, next, send, closed: () => closed };
 }
 
-test("sign-in: codes are single-use, expire, limit attempts and sends, and a key belongs to one account", async () => {
+test("registering: needs the device's own signature; the same key is the same device; a full account makes room from devices nobody allowed", async () => {
   const r = await relay();
   const keys = newDeviceKeys();
-  const verify = (code: string, k = keys) => post(`${r.url}/v1/login/verify`, { email: "A@x.dev", code, device: { name: "Mac", kind: "mac", signPub: k.signPub } });
-  expect((await post(`${r.url}/v1/login/start`, { email: "nope" })).status).toBe(400);
-  await post(`${r.url}/v1/login/start`, { email: "a@x.dev" });
-  const code = codes.get("a@x.dev")!;
-  expect((await verify("000000" === code ? "111111" : "000000")).body.error).toBe("wrong code");
-  const ok = await verify(code);
-  expect(ok.body.ok).toBe(true);
-  expect(ok.body.device.id).toBe(deviceId(keys.signPub));
-  expect((await verify(code)).body.ok).toBe(false); // single use
-
-  await post(`${r.url}/v1/login/start`, { email: "a@x.dev" });
-  clock += 11 * 60_000;
-  expect((await verify(codes.get("a@x.dev")!)).body.error).toContain("expired");
-
-  await post(`${r.url}/v1/login/start`, { email: "b@x.dev" });
-  for (let i = 0; i < 5; i++) await post(`${r.url}/v1/login/verify`, { email: "b@x.dev", code: "x", device: { name: "M", kind: "mac", signPub: keys.signPub } });
-  expect((await post(`${r.url}/v1/login/verify`, { email: "b@x.dev", code: codes.get("b@x.dev"), device: { name: "M", kind: "mac", signPub: keys.signPub } })).body.error).toContain("too many");
-  for (let i = 0; i < 10; i++) await post(`${r.url}/v1/login/start`, { email: "c@x.dev" });
-  expect((await post(`${r.url}/v1/login/start`, { email: "c@x.dev" })).body.error).toContain("too many");
-  // The same key can't be on two accounts.
-  await post(`${r.url}/v1/login/start`, { email: "d@x.dev" });
-  expect((await post(`${r.url}/v1/login/verify`, { email: "d@x.dev", code: codes.get("d@x.dev"), device: { name: "M", kind: "mac", signPub: keys.signPub } })).body.error).toContain("another account");
+  expect((await reg(r.url, "nope", "mac", "Mac", keys)).status).toBe(400);
+  // Knowing a public key isn't enough to register (or move) that device.
+  const forged = await post(`${r.url}/v1/register`, { email: "x@x.dev", device: { name: "M", kind: "mac", signPub: keys.signPub, sig: sign(newDeviceKeys().signSecret, registerMessage("x@x.dev", "mac", keys.signPub)) } });
+  expect(forged.body.error).toBe("bad device signature");
+  const a = await reg(r.url, "A@x.dev", "mac", "Mac", keys);
+  expect(a.body.device.id).toBe(deviceId(keys.signPub));
+  expect((await reg(r.url, "a@x.dev", "mac", "Mac 2", keys)).body.account).toBe(a.body.account); // same email, same key: same device
+  // An account at its cap drops the oldest device no Mac has allowed, never an allowed one.
+  const phone = await signIn(r.url, "a@x.dev", "phone", "iPhone");
+  await r.accounts.setAllowed(a.body.account, deviceId(keys.signPub), [phone.id]);
+  for (let i = 0; i < 25; i++) expect((await reg(r.url, "a@x.dev", "phone", `junk ${i}`, newDeviceKeys())).body.ok).toBe(true);
+  const ids = (await r.accounts.devices(a.body.account)).map((d) => d.id);
+  expect(ids).toHaveLength(20);
+  expect(ids).toContain(deviceId(keys.signPub));
+  expect(ids).toContain(phone.id);
 });
 
 test("connecting: an unknown device or a wrong key is refused; a Mac must name its session", async () => {
@@ -103,17 +97,17 @@ test("a phone reaches a Mac session only once that Mac allows it; then frames fl
   expect(ready.devices.map((d) => d.name).sort()).toEqual(["Studio", "iPhone"]);
   const p = await connect(r.url, phone);
   const pr = await p.next("ready");
-  expect(pr.sessions).toEqual([expect.objectContaining({ mac: mac.id, session: "proj1", online: true, allowed: false, denied: false })]);
+  expect(pr.sessions).toEqual([expect.objectContaining({ mac: mac.id, session: "proj1", online: true, allowed: false })]);
   expect((await m.next("phones", (f) => f.online.includes(phone.id))).online).toEqual([phone.id]);
 
   p.send({ t: "to", mac: mac.id, session: "proj1", data: "hello?" });
   expect((await p.next("error")).code).toBe("not_allowed");
   m.send({ t: "to", device: phone.id, data: "sneaky" }); // a Mac can't talk to a phone it hasn't allowed either
-  // …except to pair: the small cleartext exchange behind the code a person compares.
-  p.send({ t: "to", mac: mac.id, session: "proj1", data: '{"p":"commit","c":"x"}' });
-  expect(await m.next("from")).toEqual({ t: "from", device: phone.id, data: '{"p":"commit","c":"x"}' });
-  m.send({ t: "to", device: phone.id, data: '{"p":"nonce","n":"y"}' });
-  expect((await p.next("from")).data).toBe('{"p":"nonce","n":"y"}');
+  // …except to pair: the small cleartext exchange over the code typed on the phone.
+  p.send({ t: "to", mac: mac.id, session: "proj1", data: '{"p":"pake","y":"a","pub":"b"}' });
+  expect(await m.next("from")).toEqual({ t: "from", device: phone.id, data: '{"p":"pake","y":"a","pub":"b"}' });
+  m.send({ t: "to", device: phone.id, data: '{"p":"pake","y":"c","pub":"d","t":"e"}' });
+  expect((await p.next("from")).data).toBe('{"p":"pake","y":"c","pub":"d","t":"e"}');
   m.send({ t: "allow", phones: [phone.id] });
   await p.next("sessions", (f) => f.sessions[0]?.allowed === true);
   p.send({ t: "to", mac: mac.id, session: "proj1", data: "hello" });
@@ -126,9 +120,11 @@ test("a phone reaches a Mac session only once that Mac allows it; then frames fl
   m.send({ t: "status", blob: "sealed-status", offlineAlert: true });
   expect((await p.next("sessions", (f) => f.sessions[0]?.status === "sealed-status")).sessions[0]!.status).toBe("sealed-status");
 
-  // A denial reaches the phone.
-  m.send({ t: "allow", phones: [], denied: [phone.id] });
-  expect((await p.next("sessions", (f) => f.sessions[0]?.denied === true)).sessions[0]!.allowed).toBe(false);
+  // Taken back: the phone sees it isn't allowed, and once the Mac is offline it doesn't see it at all.
+  m.send({ t: "allow", phones: [] });
+  expect((await p.next("sessions", (f) => f.sessions[0]?.allowed === false)).sessions[0]!.status).toBeUndefined();
+  m.ws.close();
+  await p.next("sessions", (f) => f.sessions.length === 0);
 });
 
 test("pushes go to allowed phones that aren't connected, by category, and an alerting Mac going offline is pushed", async () => {

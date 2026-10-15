@@ -27,7 +27,7 @@ details; the top-level `README.md` is the user-facing GitHub page.
 |---|---|---|
 | **CLI** (the main product) | `src/` (engine), `tui/` (Go TUI), `web/` (dashboard), `scripts/`, `bin/` | `niti`, a Go + Bubbletea terminal app, spawns `niti-core`, the Bun/TypeScript engine, and drives it over local HTTP + SSE. `niti-core` also runs headless for scripts and CI, and serves the web dashboard. |
 | **Desktop app** | `niti-app/` | The same product as a native Electron + React window over the same engine (it bundles `niti-core`). Same config, keys and sessions as the CLI. |
-| **Relay** | `niti-relay/` | A Cloudflare Worker + Durable Object (or Bun, self-hosted): email-code sign-in, forwards end-to-end encrypted frames between a Mac's core and a phone, sends pushes. Never sees content. |
+| **Relay** | `niti-relay/` | A Cloudflare Worker + Durable Object (or Bun, self-hosted): devices register under an email (only a name), forwards end-to-end encrypted frames between a Mac's core and a phone, sends pushes. Never sees content. |
 | **Mobile app** | `niti-mobile/` | An Expo iPhone app: a remote control for a core running on a Mac. Watch, steer, approve, pause, merge. All work still runs on the Mac. |
 
 The CLI and the desktop app are **one product in two packagings**; the relay and the phone app are
@@ -48,7 +48,7 @@ niti-app/src/renderer/src/assets/avatars/  ◀── loaded by niti-mobile/
         │                 │                  │                           │
         └──────── HTTP + SSE, bearer token, 127.0.0.1 ────────┐          │ wss, E2E encrypted
                                                               ▼          ▼
-                                                       src/server   niti-relay ◀─ email codes, push
+                                                       src/server   niti-relay ◀─ push
                                                               │          ▲
                                        Engine (src/engine.ts) ┤          │ one outbound socket
                                                               └── src/remote/bridge.ts
@@ -200,14 +200,20 @@ Slash commands (`commands/registry.ts`): `/goal /cancel /awake /remote /auto /ma
 
 ## Remote control (`src/remote/`, `niti-relay/`, `niti-mobile/`)
 
-- **Sign-in**: email + a 6-digit code at the relay registers a device's ed25519 key under an account.
-  From then on the key is the credential: each connection signs the relay's challenge. Codes expire
-  in 10 minutes, allow 5 tries, and are capped at 10 an email a day. `/remote login` and `/remote code`
-  sign a Mac in (shared by every core on it); the phone signs in on its first screen.
-- **Pairing**: a Mac allows each phone once, through its normal approval queue, comparing a 6-digit
-  code with the phone. The code comes from a commit-then-reveal exchange (the phone commits to a
-  nonce, the Mac answers with its own, the phone reveals), so neither the relay nor anyone else on the
-  account can choose a key that matches. A phone can never answer its own allow request.
+- **Signing in**: `/remote on <email>` registers the Mac's ed25519 key at the relay under that email,
+  which is only a name grouping your devices: nothing is sent to it or checked. Registering is signed
+  by the device's key (`registerMessage`), so knowing a public key can't move a device elsewhere. From
+  then on the key is the credential: each connection signs the relay's challenge. The relay address
+  is built in (`DEFAULT_RELAY` in `identity.ts`, `extra.relay` in the app); `--relay` is for your own.
+  Shared by every core on the Mac (`~/.config/niti/remote.json`).
+- **Pairing**: the Mac shows a 6-digit code (`/remote on <email>`, `/remote pair` for another); the
+  phone types the email and the code, once per Mac. The code never travels: both sides run CPace, a
+  password-authenticated key exchange over X25519 (`protocol.ts` `Pake`), bound to the two device
+  ids, and swap tags over both signing keys. A passive relay learns nothing to test guesses against;
+  each guess needs a live try, and a code allows 5 tries and lives 10 minutes. The Mac then allows the
+  phone, and the phone pins the Mac's key: it only ever opens Macs it paired with. Anyone can register
+  under your email, so the relay makes room at its 20-device cap from devices nobody allowed, and the
+  phone shows only paired Macs.
 - **Channel**: each connection exchanges fresh x25519 keys signed with the long-term keys pinned at
   pairing; frames are secretbox-sealed with direction + counter nonces (no replay, no reordering).
   The relay forwards only the small pairing exchange between a Mac and a phone it hasn't allowed.
@@ -287,14 +293,17 @@ time). Run the full checks (`zsh scripts/e2e/run.sh`, `cd niti-app && npm run ch
 - File watching has no debounce or full `.gitignore` parsing.
 - MCP servers are shared by the team, not per agent.
 - A core lives as long as the TUI or app that started it: a phone can't start niti on a Mac (no daemon yet).
-- Phone denials last only for the core's lifetime. No refresh tokens: the device key is the credential.
+- No refresh tokens: the device key is the credential. A relay that knows your email can list your
+  devices' names and when your Macs are online, never what they do.
 - Not yet built: Live Activity, approving from the lock screen without opening the app, Android.
 
 ## History worth knowing
 
 - **October 2026:** `/goal`, interrupting one agent, remote control (relay + iPhone app), and the
-  commit-then-reveal pairing (the first version's code was a hash of public keys alone, which anyone
-  on the account could match by trying keys). The archived v1 Ink TUI (`old-tech/`), a VS Code fork
+  pairing by code: first a code compared on both screens behind an email sign-in (commit-then-reveal,
+  after a first version whose code was a hash of public keys alone, which anyone could match by trying
+  keys), then the email check and the compare step dropped for a code typed on the phone, checked by
+  CPace so the relay still can't learn it. The archived v1 Ink TUI (`old-tech/`), a VS Code fork
   (`ide/`) and an earlier Electron app (`desktop/`) were deleted; none of them exists.
 - **Bugs found in review, kept as lessons:** `compactTurns()` could split a tool call from its result
   (the cut now walks back); cancel didn't stop retry backoff or the final integrate; a reused task id

@@ -11,11 +11,10 @@ How it fits with the rest of the repo: `../project_context.md`.
 
 ## Screens
 
-- **Sign in** (`src/app/sign-in.tsx`): the email you used on the Mac, the relay URL, then the emailed
-  code. Once.
-- **Projects** (`macs.tsx`): each Mac on the account and the projects running on it: goal round,
-  working or idle, approvals waiting, last seen. A Mac that hasn't allowed this phone shows the
-  pairing code to compare with the one the Mac shows.
+- **Pair** (`src/app/sign-in.tsx`): the email the Mac was turned on with and the code it shows. Once
+  per Mac; "Pair another Mac" on Projects opens it again.
+- **Projects** (`macs.tsx`): each Mac this phone paired with and the projects running on it: goal
+  round, working or idle, approvals waiting, last seen.
 - **Session** (`session/[mac]/[session]/index.tsx`): a status strip (link, goal, awake, context,
   tokens and cost), approvals waiting, the goal card (pause, resume, 5 more rounds, stop), then Team,
   Tasks and Changes (merge or discard a worktree), and the composer: a note while a goal runs, a
@@ -77,28 +76,30 @@ npx eas-cli@latest build --profile development --platform ios
 npx expo start                   # then open the dev build on your iPhone
 ```
 
-Building for a device needs an Apple Developer account. Set the relay URL in `app.json` under
-`extra.relay`, or type it on the sign-in screen.
+Building for a device needs an Apple Developer account. The relay's address is built in:
+`extra.relay` in `app.json` (`../niti-relay/README.md` deploys one on Cloudflare's free plan).
 
 **To look at it with no accounts or keys** (Expo Go, everything but push):
 
-1. Run a local relay: `cd ../niti-relay && bun bun.ts --port=8787 --host=0.0.0.0`. Sign-in codes
-   print to its console instead of being emailed.
+1. Run a local relay: `cd ../niti-relay && bun bun.ts --port=8787 --host=0.0.0.0`, and put its
+   address (`http://<mac-ip>:8787`, or a public tunnel to it for a phone on mobile data) in
+   `extra.relay`.
 2. Start Expo: `npx expo start --lan` with the phone on the same Wi-Fi as the Mac, or
    `npx expo start --tunnel` when it isn't (needs `npm i -g @expo/ngrok`). Recent Expo Go versions want
    the phone and the Mac signed in to the same free Expo account (`./node_modules/.bin/expo login`).
-3. Scan the QR code with the Camera app. On the sign-in screen, use the relay at the Mac's address
-   (`http://<mac-ip>:8787`). A phone on mobile data needs the relay on a public tunnel too.
+3. Scan the QR code with the Camera app.
 4. On the Mac, in this repo's build (`bun run build:all && ./niti`):
-   `/remote login <email> --relay http://localhost:8787`, then `/remote code <digits>`.
+   `/remote on <email> --relay http://localhost:8787`, then pair as below.
 
 ## Pairing
 
-1. On the Mac: `/remote login you@example.com --relay https://your-relay`, then `/remote code <digits>`.
-2. On the phone: sign in with the same email.
-3. The phone and the Mac exchange a commit-then-reveal handshake and both show a 6-digit code. Allow
-   the phone on the Mac only if the codes match. If the app restarts mid-way, the Mac replaces its
-   request with the new code.
+1. On the Mac: `/remote on you@example.com`. The email is only a name for your devices: nothing is
+   sent to it. niti shows a 6-digit code for 10 minutes (`/remote pair` makes another).
+2. On the phone: type the same email and the code. That's it; both reconnect on their own from then on.
+
+The code never crosses the relay: both sides run CPace over it (`../src/remote/protocol.ts`), so the
+relay can't learn it, and a code allows 5 tries. The phone pins the Mac's key and only ever opens
+Macs it paired with.
 
 ## Check it
 

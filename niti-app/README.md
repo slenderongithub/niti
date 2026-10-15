@@ -17,7 +17,7 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
   - the run summary, with next-step suggestions
 - **Composer.** Build/Plan modes, `/commands`, `@file` mentions, `!shell`, history, Esc to stop. Mid-run, tick "Interrupt it now" to stop one agent and have it carry on from your message.
 - **Goals.** `/goal <objective>` keeps the team working round after round until a judge says it's done or a budget runs out. The status bar shows the round; while it runs, what you type is a note to the next round, and you're notified once when it ends.
-- **Remote control.** Once this Mac is signed in (`/remote login`), the status bar shows the link and how many phones are watching. A phone asking to join shows its pairing code here, to allow or deny.
+- **Remote control.** `/remote on <email>` shows a code to type into the niti app on your phone; then the status bar shows the link and how many phones are watching. `/remote pair` adds another phone.
 - **Files.** Open any file as a tab in the centre and edit it (CodeMirror: syntax highlighting, search, undo), save with ⌘S.
   - Lines the agents changed this session are marked in the gutter.
   - A file an agent is writing is read-only until it's done.

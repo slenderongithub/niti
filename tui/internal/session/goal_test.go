@@ -66,29 +66,9 @@ func TestInterruptOneAgentFromTheAgentsPanel(t *testing.T) {
 	}
 }
 
-// A phone asking to control this Mac gets its own banner with the code to compare, only yes or no
-// (never "always allow"), and the header shows remote control once the Mac is signed in.
-func TestPhoneRequestAndRemoteChip(t *testing.T) {
+// The header shows remote control once the Mac is signed in, and how many phones are watching.
+func TestRemoteChip(t *testing.T) {
 	m := sized(1, 120, 30)
-	client, calls := fakeCore(t)
-	m.client = client
-	id := 7
-	m.apply(api.Event{Kind: "approval_request", Requests: []api.Approval{{ID: &id, AgentID: "remote", Tool: "allow_device", Input: map[string]any{"phone": "Ada's iPhone", "code": "482913"}}}})
-	b := m.approvalBanner(100, 6, false)
-	if !strings.Contains(b, "Ada's iPhone") || !strings.Contains(b, "482 913") {
-		t.Fatalf("banner should name the phone and the code: %q", b)
-	}
-	for _, k := range m.keymap() {
-		if k.desc == "Allow for remote" || k.desc == "Deny & tell" {
-			t.Fatalf("a device request must not offer %q", k.desc)
-		}
-	}
-	next, cmd := m.onKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-	m = next.(Model)
-	run(cmd)
-	if len(*calls) != 1 || !strings.Contains((*calls)[0], `"id":7`) || !strings.Contains((*calls)[0], `"ok":true`) {
-		t.Fatalf("y should allow that request, calls=%v", *calls)
-	}
 	if strings.Contains(m.header(120), "remote") {
 		t.Fatal("no chip while signed out")
 	}

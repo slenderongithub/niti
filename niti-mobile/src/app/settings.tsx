@@ -6,7 +6,7 @@ import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as LocalAuthentication from "expo-local-authentication";
 import { Bell, CircleAlert, Laptop, LogOut, ScanFace, ShieldAlert, Smartphone, Target, WifiOff, type LucideIcon } from "lucide-react-native";
-import { useStore } from "@/lib/store";
+import { remoteClient, useStore } from "@/lib/store";
 import { loadPrefs, savePrefs, type Prefs } from "@/lib/prefs";
 import { registerForPush } from "@/lib/push";
 import { space, type, useTheme } from "@/lib/theme";
@@ -48,7 +48,8 @@ export default function Settings() {
     await AsyncStorage.setItem("niti.lock", on ? "1" : "0");
   };
 
-  const others = snap.devices.filter((d) => d.id !== snap.me?.id);
+  // The Macs this phone paired with (anyone can register a device under an email, so not the rest).
+  const others = snap.devices.filter((d) => d.kind === "mac" && remoteClient()?.id?.macs[d.id]);
   const icon = (Icon: LucideIcon) => <Icon color={t.mutedForeground} size={17} />;
 
   return (
@@ -103,7 +104,7 @@ export default function Settings() {
         </View>
 
         <View>
-          <SectionLabel>{`Devices · ${snap.me?.name ?? "this phone"}`}</SectionLabel>
+          <SectionLabel>{`Paired Macs · ${snap.me?.name ?? "this phone"}`}</SectionLabel>
           <Card>
             {others.length ? (
               others.map((d, i) => (
@@ -123,7 +124,7 @@ export default function Settings() {
             ) : (
               <Row>
                 <Text size={type.sm} tone="mutedForeground">
-                  No other devices on this account.
+                  Not paired with a Mac yet.
                 </Text>
               </Row>
             )}
@@ -136,7 +137,7 @@ export default function Settings() {
           icon={LogOut}
           tone="destructive"
           onPress={() =>
-            alert("Sign out?", "Your Macs stop accepting this phone. Signing in again needs each Mac to allow it again.", [
+            alert("Sign out?", "Your Macs stop accepting this phone. Coming back needs a new code from each Mac (/remote pair).", [
               { text: "Cancel", style: "cancel" },
               {
                 text: "Sign out",

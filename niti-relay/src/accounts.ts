@@ -1,8 +1,11 @@
-import { deviceId, randomId, type DeviceInfo, type DeviceKind, type PushCategory, PUSH_CATEGORIES } from "../../src/remote/protocol.ts";
+import { deviceId, randomId, registerMessage, verify, type DeviceInfo, type DeviceKind, type PushCategory, PUSH_CATEGORIES } from "../../src/remote/protocol.ts";
 
-// Accounts and their devices: email + a 6-digit code to sign in, then a device's own signing key is
-// its credential from there on (no bearer tokens to steal). Written against a tiny SQL interface so
-// the same code runs on D1 in production and bun:sqlite in tests.
+// Accounts and their devices. An account is just a name, the person's email (never emailed, never
+// checked): it groups their Macs and phones into one room. A device registers its signing key under
+// it, and that key is its credential from then on (no bearer tokens to steal). Registering grants
+// nothing: a phone reaches a Mac only once that Mac has allowed it, which takes the code shown on the
+// Mac (protocol.ts, Pake). Written against a tiny SQL interface so the same code runs on D1 in
+// production and bun:sqlite in tests.
 
 export interface Sql {
   run(q: string, ...args: unknown[]): Promise<void>;
@@ -15,19 +18,13 @@ export const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, account TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, sign_pub TEXT NOT NULL, created INTEGER NOT NULL, push_token TEXT, push_categories TEXT)`,
   `CREATE INDEX IF NOT EXISTS devices_account ON devices(account)`,
   `CREATE TABLE IF NOT EXISTS allows (mac TEXT NOT NULL, phone TEXT NOT NULL, PRIMARY KEY (mac, phone))`,
-  `CREATE TABLE IF NOT EXISTS codes (email TEXT PRIMARY KEY, code_hash TEXT NOT NULL, expires INTEGER NOT NULL, attempts INTEGER NOT NULL, sent INTEGER NOT NULL, window_start INTEGER NOT NULL)`,
 ];
 
-const CODE_TTL_MS = 10 * 60_000;
-const MAX_ATTEMPTS = 5;
-// Codes per email per day. With MAX_ATTEMPTS each, that caps guessing at 50 a day: about a 2% chance
-// a year of ever landing one, and even then the new device still has to be allowed on a Mac.
-const MAX_SENDS_PER_DAY = 10;
-const SEND_WINDOW_MS = 24 * 3_600_000;
-const MAX_DEVICES = 10;
+// Devices per account. Anyone who knows an email can register under it, so when it is full the
+// oldest device no Mac has allowed (and that allowed no phone) makes room: strangers can't lock the
+// owner out by filling it.
+const MAX_DEVICES = 20;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-export type Mail = (email: string, code: string) => Promise<void>;
 
 interface DeviceRow {
   id: string;
@@ -41,15 +38,9 @@ interface DeviceRow {
 
 const toInfo = (r: DeviceRow): DeviceInfo => ({ id: r.id, name: r.name, kind: r.kind, signPub: r.sign_pub });
 
-async function sha256(s: string): Promise<string> {
-  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 export class Accounts {
   constructor(
     private sql: Sql,
-    private mail: Mail,
     private now: () => number = Date.now,
   ) {}
 
@@ -57,46 +48,17 @@ export class Accounts {
     for (const q of SCHEMA) await this.sql.run(q);
   }
 
-  // Send a sign-in code. Says nothing about whether the email has an account.
-  async start(rawEmail: string): Promise<{ ok: boolean; error?: string }> {
-    const email = String(rawEmail ?? "").trim().toLowerCase();
-    if (!EMAIL.test(email) || email.length > 254) return { ok: false, error: "that doesn't look like an email address" };
-    const now = this.now();
-    const prev = await this.sql.first<{ sent: number; window_start: number }>(`SELECT sent, window_start FROM codes WHERE email = ?`, email);
-    const fresh = !prev || now - prev.window_start > SEND_WINDOW_MS;
-    const sent = fresh ? 1 : prev.sent + 1;
-    if (sent > MAX_SENDS_PER_DAY) return { ok: false, error: "too many codes requested today — try again tomorrow" };
-    const code = String(crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000).padStart(6, "0");
-    await this.sql.run(
-      `INSERT INTO codes (email, code_hash, expires, attempts, sent, window_start) VALUES (?, ?, ?, 0, ?, ?)
-       ON CONFLICT(email) DO UPDATE SET code_hash = excluded.code_hash, expires = excluded.expires, attempts = 0, sent = excluded.sent, window_start = excluded.window_start`,
-      email,
-      await sha256(`${email}:${code}`),
-      now + CODE_TTL_MS,
-      sent,
-      fresh ? now : prev!.window_start,
-    );
-    await this.mail(email, code);
-    return { ok: true };
-  }
-
-  // Check the code and register this device's key under the account (made on first sign-in).
-  async verify(
+  // Register this device's key under the account (made on first use), signed with that key. The same
+  // key again is the same device.
+  async register(
     rawEmail: string,
-    code: string,
-    device: { name: string; kind: DeviceKind; signPub: string },
+    device: { name: string; kind: DeviceKind; signPub: string; sig: string },
   ): Promise<{ ok: true; account: string; device: DeviceInfo } | { ok: false; error: string }> {
     const email = String(rawEmail ?? "").trim().toLowerCase();
+    if (!EMAIL.test(email) || email.length > 254) return { ok: false, error: "that doesn't look like an email address" };
     if (device?.kind !== "mac" && device?.kind !== "phone") return { ok: false, error: "unknown device kind" };
     if (typeof device.signPub !== "string" || device.signPub.length !== 43) return { ok: false, error: "bad device key" };
-    const row = await this.sql.first<{ code_hash: string; expires: number; attempts: number }>(`SELECT code_hash, expires, attempts FROM codes WHERE email = ?`, email);
-    if (!row || row.expires < this.now()) return { ok: false, error: "that code has expired — ask for a new one" };
-    if (row.attempts >= MAX_ATTEMPTS) return { ok: false, error: "too many wrong codes — ask for a new one" };
-    if ((await sha256(`${email}:${String(code).trim()}`)) !== row.code_hash) {
-      await this.sql.run(`UPDATE codes SET attempts = attempts + 1 WHERE email = ?`, email);
-      return { ok: false, error: "wrong code" };
-    }
-    await this.sql.run(`UPDATE codes SET expires = 0 WHERE email = ?`, email); // single use; keep the send window
+    if (!verify(device.signPub, registerMessage(email, device.kind, device.signPub), String(device.sig ?? ""))) return { ok: false, error: "bad device signature" };
     let account = (await this.sql.first<{ id: string }>(`SELECT id FROM accounts WHERE email = ?`, email))?.id;
     if (!account) {
       account = randomId();
@@ -104,11 +66,24 @@ export class Accounts {
     }
     const id = deviceId(device.signPub);
     const existing = await this.sql.first<{ account: string }>(`SELECT account FROM devices WHERE id = ?`, id);
-    if (existing && existing.account !== account) return { ok: false, error: "this device is signed in to another account — sign out there first" };
+    if (existing && existing.account !== account) {
+      // The same device under another email: it moves, and what it was allowed under the old one goes.
+      await this.sql.run(`DELETE FROM allows WHERE mac = ? OR phone = ?`, id, id);
+      await this.sql.run(`DELETE FROM devices WHERE id = ?`, id);
+    }
     const count = (await this.sql.first<{ n: number }>(`SELECT COUNT(*) AS n FROM devices WHERE account = ?`, account))?.n ?? 0;
-    if (!existing && count >= MAX_DEVICES) return { ok: false, error: `an account can have at most ${MAX_DEVICES} devices — sign one out first` };
+    if (!existing || existing.account !== account) {
+      if (count >= MAX_DEVICES) {
+        const spare = await this.sql.first<{ id: string }>(
+          `SELECT id FROM devices WHERE account = ? AND id NOT IN (SELECT mac FROM allows UNION SELECT phone FROM allows) ORDER BY created LIMIT 1`,
+          account,
+        );
+        if (!spare) return { ok: false, error: `an account can have at most ${MAX_DEVICES} devices — sign one out first` };
+        await this.sql.run(`DELETE FROM devices WHERE id = ?`, spare.id);
+      }
+    }
     const name = String(device.name ?? "").trim().slice(0, 60) || (device.kind === "mac" ? "Mac" : "Phone");
-    if (existing) await this.sql.run(`UPDATE devices SET name = ? WHERE id = ?`, name, id);
+    if (existing?.account === account) await this.sql.run(`UPDATE devices SET name = ? WHERE id = ?`, name, id);
     else await this.sql.run(`INSERT INTO devices (id, account, kind, name, sign_pub, created) VALUES (?, ?, ?, ?, ?, ?)`, id, account, device.kind, name, device.signPub, this.now());
     return { ok: true, account, device: { id, name, kind: device.kind, signPub: device.signPub } };
   }

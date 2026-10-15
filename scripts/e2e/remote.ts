@@ -1,8 +1,8 @@
 // End-to-end check of remote control: a real `niti-core serve` in a throwaway project on the fake
-// model, the relay (the Bun build of niti-relay, sign-in codes caught instead of emailed), and a
-// headless phone using niti-mobile's own client library. The Mac signs in with /remote, the phone
-// signs in and is allowed once, then starts a /goal, sends a note, interrupts an agent, answers an
-// approval, and watches the goal finish — and is refused everything a phone must not do.
+// model, the relay (the Bun build of niti-relay), and a headless phone using niti-mobile's own client
+// library. The Mac turns remote on with an email and shows a code, the phone pairs by typing it, then
+// starts a /goal, sends a note, interrupts an agent, answers an approval, and watches the goal
+// finish — and is refused everything a phone must not do.
 // Run: bun scripts/e2e/remote.ts (or scripts/e2e/run.sh for everything).
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,9 +37,8 @@ writeFileSync(
       .join("\n") + "\nverify: false\n",
 );
 
-const codes = new Map<string, string>();
 const pushes: PushMessage[] = [];
-const relay = await startRelay({ mail: async (e, c) => void codes.set(e, c), push: async (m) => void pushes.push(...m) });
+const relay = await startRelay({ push: async (m) => void pushes.push(...m) });
 const llm = Bun.spawn(["bun", join(import.meta.dir, "fakellm.ts"), String(LLM), state], { stdout: "ignore", stderr: "inherit" });
 const env = { ...process.env, NITI_TRUST: "1", NITI_AUTH_FILE: join(state, "auth.json"), NITI_TRUST_FILE: join(state, "trust.json"), NITI_REMOTE_FILE: join(state, "remote.json"), NITI_OFFLINE: "1", NITI_MODELS_FILE: join(state, "models.json") };
 const core = Bun.spawn(["bun", "run", join(NITI, "src/cli.ts"), "serve"], { cwd: P, env, stdout: "pipe", stderr: Bun.file(join(state, "core.log")) });
@@ -69,7 +68,6 @@ void (async () => {
     }
   }
 })().catch(() => {});
-const pendingRemote = () => (macEvents.findLast((e) => e.kind === "approval_request")?.requests ?? []).find((r: any) => r.agentId === "remote");
 
 let saved: PhoneIdentity | undefined;
 const phone = new RemoteClient({ relay: relay.url, name: "Test iPhone", store: { load: async () => saved, save: async (id) => void (saved = id) } });
@@ -78,24 +76,19 @@ try {
   // --- the Mac signs in, from the TUI's command line
   const status0 = await cmd("remote");
   check("/remote: off until signed in", status0.message.includes("remote control is off"), status0.message);
-  const login = await cmd("remote", `login ada@example.dev --relay ${relay.url}`);
-  check("/remote login sends a code", login.ok && login.message.includes("on its way"), login.message);
-  const code = await cmd("remote", `code ${codes.get("ada@example.dev")}`);
-  check("/remote code signs the Mac in", code.ok, code.message);
+  const on = await cmd("remote", `on ada@example.dev --relay ${relay.url}`);
+  const code = on.message.match(/code\s+(\d{3}) (\d{3})/)?.slice(1).join("") ?? "";
+  check("/remote on <email> shows a code to type on the phone", on.ok && code.length === 6, on.message);
   check("the Mac's relay link comes up", await until(async () => (await post("/session")).remote?.link === "up"));
 
-  // --- the phone signs in and is allowed once, codes matching
-  await phone.loginStart("ada@example.dev");
-  check("phone signs in", (await phone.loginVerify(codes.get("ada@example.dev")!)).ok);
-  phone.connect();
-  check("phone link up", await until(() => phone.snap.link === "up"));
-  let ask: any;
-  check("the Mac asks to allow the phone", await until(() => !!(ask = pendingRemote())));
-  const mac = phone.snap.devices.find((d) => d.kind === "mac")!;
-  check("the code on the Mac matches the phone's", ask?.input?.code === phone.codeFor(mac.id), `${ask?.input?.code} vs ${phone.codeFor(mac.id)}`);
-  await post("/approval", { ok: true, id: ask.id });
-  check("allowed", await until(() => phone.snap.sessions.some((s) => s.allowed && s.online)));
-  const sess = phone.snap.sessions.find((s) => s.allowed)!;
+  // --- the phone pairs by typing it
+  const wrong = await phone.pair("ada@example.dev", String((Number(code) + 1) % 1_000_000).padStart(6, "0"));
+  check("a wrong code is refused", !wrong.ok && /doesn't match/.test(wrong.error ?? ""), JSON.stringify(wrong));
+  const paired = await phone.pair("ada@example.dev", code);
+  check("the right code pairs the phone", paired.ok, JSON.stringify(paired));
+  check("allowed", await until(() => phone.paired.some((s) => s.online)));
+  check("the Mac lists the phone", (await post("/session")).remote?.phones?.[0]?.name === "Test iPhone");
+  const sess = phone.paired[0]!;
   const s = await phone.open(sess.mac, sess.session);
   check("the encrypted session opens with a welcome", s.welcome?.project === P.split("/").pop(), JSON.stringify(s.welcome));
   const events: any[] = [];

@@ -715,18 +715,6 @@ func (m Model) promptPanel(w, rows int, compact bool) string {
 func (m Model) approvalBanner(w, rows int, compact bool) string {
 	r := m.approvals[0]
 	bg := theme.BgDeep
-	if isDeviceRequest(r) {
-		phone, _ := r.Input["phone"].(string)
-		code, _ := r.Input["code"].(string)
-		if compact {
-			return lipgloss.NewStyle().Width(w).MaxWidth(w).Background(theme.Tint(theme.Amber)).Render(" ⚠ " + truncate("allow "+phone+" to control niti? code "+spacedCode(code), w-3))
-		}
-		text := strings.Join([]string{
-			txt(theme.Fg, bg).Bold(true).Render(phone) + txt(theme.Fg, bg).Render(" wants to control niti on this Mac."),
-			txt(theme.Fg, bg).Render("Allow it only if the phone shows this code: ") + txt(theme.Amber, bg).Bold(true).Render(spacedCode(code)),
-		}, "\n")
-		return ui.Panel{Title: "New phone", Focused: true, TitleLeft: true, Color: theme.Amber}.Render(text, w, rows)
-	}
 	// The whole call, wrapped: a long command cut at the panel edge hid the part being approved.
 	lines := []string{txt(theme.Fg, bg).Bold(true).Render(r.AgentID) + txt(theme.Fg, bg).Render(" wants to run:")}
 	for _, l := range m.approvalCallLines(w) {
@@ -741,17 +729,6 @@ func (m Model) approvalBanner(w, rows int, compact bool) string {
 		sub = fmt.Sprintf("%d more waiting", n-1)
 	}
 	return ui.Panel{Title: "Approval needed", Subtitle: sub, Focused: true, TitleLeft: true, Color: theme.Amber}.Render(text, w, rows)
-}
-
-// isDeviceRequest: the core asking whether a phone may control this Mac (src/remote/bridge.ts) — a
-// yes/no about a device, not a tool call, so it has its own banner and no "always allow".
-func isDeviceRequest(r api.Approval) bool { return r.AgentID == "remote" && r.Tool == "allow_device" }
-
-func spacedCode(c string) string {
-	if len(c) == 6 {
-		return c[:3] + " " + c[3:]
-	}
-	return c
 }
 
 // approvalCallLines is the pending call wrapped to the banner's width, at most four lines; a longer

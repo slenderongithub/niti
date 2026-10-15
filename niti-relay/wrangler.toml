@@ -1,19 +1,16 @@
-# The niti relay on Cloudflare. Setup (once):
+# The niti relay on Cloudflare's free plan. Setup (once):
+#   npx wrangler login
 #   npx wrangler d1 create niti-relay        → put the id below
-#   npx wrangler secret put RESEND_API_KEY
-#   npx wrangler secret put EXPO_ACCESS_TOKEN  (optional until Expo's enhanced push security is on)
 #   npx wrangler deploy
+# Optional: npx wrangler secret put EXPO_ACCESS_TOKEN, once Expo's enhanced push security is on.
 name = "niti-relay"
 main = "src/worker.ts"
 compatibility_date = "2026-09-01"
 
-[vars]
-MAIL_FROM = "niti <login@example.com>"
-
 [[d1_databases]]
 binding = "DB"
 database_name = "niti-relay"
-database_id = "REPLACE-WITH-YOUR-D1-ID"
+database_id = "8e44b8cc-8cf7-4afd-8054-05675a4da3f3"
 
 [[durable_objects.bindings]]
 name = "ROOMS"
