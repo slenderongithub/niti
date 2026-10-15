@@ -26,7 +26,7 @@ Shared code is imported, never copied:
 | File | Is | Update it when |
 |---|---|---|
 | `README.md` | The GitHub page, for users. | **Only when the user asks.** Don't edit it as a side effect of other work. |
-| `project_context.md` | The universal README: the whole repo's architecture, engine, API, data, remote control, testing and history. | Anything structural changes: a new module, route, event, command, option, file on disk, product, or security property. |
+| `project_context.md` | The universal README: the whole repo's architecture, engine, API, data, remote control, testing, releasing and history. | Anything structural changes: a new module, route, event, command, option, file on disk, product, or security property. |
 | `tui/README.md`, `niti-app/README.md`, `niti-mobile/README.md`, `niti-relay/README.md` | Each product's own README: what it does, how to run and check it, its layout. | That product's features, keys, commands, run or check steps change. |
 | `CLAUDE.md` (this) | The rules. | A rule changes or a new one is learned. |
 
@@ -73,6 +73,10 @@ A doc change belongs in the same commit as the change it describes. `README.md`,
    `niti-mobile/` and `niti-relay/` have their own `node_modules`. Never point a directory walk at the
    repo root without a boundary.
 9. **Commit messages carry no AI attribution** (no `Co-Authored-By: Claude` or similar).
+10. **Release by the book** (`project_context.md` → Releasing). The CLI (`v*`, npm) and the app
+    (`app-v*`, DMG) have their own version lines; never bump one to match the other. npm is published
+    by hand: the five platform packages first, the root `@slenderbuilds/niti` last, only once all five
+    are on the registry.
 
 # UI & design system rules
 
