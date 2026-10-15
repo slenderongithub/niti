@@ -116,8 +116,9 @@ export class RemoteBridge {
 
   // ---- signing in and pairing (/remote on <email>, /remote pair) ----
 
-  // Register this Mac under the email (just a name: nothing is sent to it), then show a code.
-  async signIn(email: string, relay = this.id?.relay || DEFAULT_RELAY): Promise<{ ok: boolean; message: string }> {
+  // Register this Mac under the email (just a name: nothing is sent to it), then show a code. The
+  // built-in relay unless --relay names another: not the one saved from last time, which may be gone.
+  async signIn(email: string, relay = DEFAULT_RELAY): Promise<{ ok: boolean; message: string }> {
     if (!relay) return { ok: false, message: "this build of niti has no relay — /remote on <email> --relay https://your-relay" };
     const keys = keysFor(this.file);
     const clean = email.trim().toLowerCase();
