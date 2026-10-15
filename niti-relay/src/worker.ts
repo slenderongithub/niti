@@ -1,16 +1,14 @@
 import { DurableObject } from "cloudflare:workers";
 import { Accounts, type Sql } from "./accounts.ts";
 import { Room, newSockMeta, type KV, type PushMessage, type Sock, type SockMeta } from "./room.ts";
-import { login } from "./http.ts";
+import { register } from "./http.ts";
 
-// The relay on Cloudflare: a Worker for sign-in and routing, one Durable Object per account holding
+// The relay on Cloudflare: a Worker for registering devices and routing, one Durable Object per account holding
 // that account's sockets (hibernating — an idle account costs nothing while its sockets stay open).
 
 interface Env {
   DB: D1Database;
   ROOMS: DurableObjectNamespace<AccountRoom>;
-  RESEND_API_KEY: string; // wrangler secret
-  MAIL_FROM: string; // e.g. "niti <login@yourdomain>"
   EXPO_ACCESS_TOKEN?: string; // wrangler secret; required once Expo's enhanced push security is on
   LIMITER?: RateLimit; // optional rate-limiting binding, keyed by client IP
 }
@@ -26,20 +24,7 @@ function d1(db: D1Database): Sql {
 // Tables are created on an isolate's first request (IF NOT EXISTS), so there is no migration step.
 let migrated: Promise<void> | undefined;
 
-const accountsFor = (env: Env) =>
-  new Accounts(d1(env.DB), async (email, code) => {
-    const r = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        from: env.MAIL_FROM,
-        to: email,
-        subject: `${code} is your niti sign-in code`,
-        text: `Your niti sign-in code is ${code}.\n\nIt expires in 10 minutes. If you didn't ask for it, ignore this email.`,
-      }),
-    });
-    if (!r.ok) throw new Error(`could not send the email (${r.status})`);
-  });
+const accountsFor = (env: Env) => new Accounts(d1(env.DB));
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -47,7 +32,7 @@ export default {
     if (env.LIMITER && !(await env.LIMITER.limit({ key: ip })).success) return Response.json({ error: "slow down" }, { status: 429 });
     const accounts = accountsFor(env);
     await (migrated ??= accounts.migrate());
-    const res = await login(req, accounts, async (account) => {
+    const res = await register(req, accounts, async (account) => {
       await env.ROOMS.get(env.ROOMS.idFromName(account)).fetch("https://room/devices-changed", { method: "POST" });
     });
     if (res) return res;
@@ -55,7 +40,7 @@ export default {
     if (u.pathname === "/v1/connect") {
       if (req.headers.get("upgrade") !== "websocket") return new Response("expected a websocket", { status: 426 });
       const device = await accounts.device(u.searchParams.get("device") ?? "");
-      if (!device) return Response.json({ error: "unknown device — sign in again" }, { status: 401 });
+      if (!device) return Response.json({ error: "unknown device — pair again" }, { status: 401 });
       const fwd = new Request(req, { headers: new Headers(req.headers) });
       fwd.headers.set("x-niti-device", JSON.stringify(device));
       return env.ROOMS.get(env.ROOMS.idFromName(device.account)).fetch(fwd);

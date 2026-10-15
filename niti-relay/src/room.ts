@@ -91,7 +91,6 @@ export class Room {
       case "allow":
         if (me.kind !== "mac" || !Array.isArray(f.phones)) return;
         await this.d.accounts.setAllowed(me.account, me.id, f.phones.map(String));
-        await this.d.kv.put(`denied:${me.id}`, (f.denied ?? []).map(String));
         return this.tellPhones();
       case "status": {
         if (me.kind !== "mac" || !m.session) return;
@@ -110,8 +109,8 @@ export class Room {
         if (me.kind !== "phone") return;
         return this.d.accounts.setPush(me.id, f.token, Array.isArray(f.categories) ? f.categories : []);
       case "revoke": {
-        // A phone signs out only itself, and a Mac itself or a phone: whoever got hold of the email
-        // can't sign the account's Macs out from under it.
+        // A phone signs out only itself, and a Mac itself or a phone: anyone can register under an
+        // email, so a stranger's phone can't sign the account's Macs out from under it.
         const target = await this.d.accounts.device(String(f.device));
         if (target && target.id !== me.id && (me.kind === "phone" || target.kind === "mac")) return sock.send({ t: "error", code: "forbidden", message: "only a Mac can sign another device out, and only a phone" });
         if (!(await this.d.accounts.revoke(me.account, String(f.device)))) return sock.send({ t: "error", code: "not_found", message: "no such device on this account" });
@@ -239,8 +238,9 @@ export class Room {
         continue;
       }
       const allowed = await this.d.accounts.allowed(rec.mac, phone);
-      const denied = !allowed && ((await this.d.kv.get<string[]>(`denied:${rec.mac}`)) ?? []).includes(phone);
-      out.push({ mac: rec.mac, session: rec.session, online, lastSeen: rec.lastSeen, allowed, denied, status: allowed ? rec.status : undefined });
+      // A Mac that hasn't allowed this phone shows only while it is online, to pair with.
+      if (!allowed && !online) continue;
+      out.push({ mac: rec.mac, session: rec.session, online, lastSeen: rec.lastSeen, allowed, status: allowed ? rec.status : undefined });
     }
     return out;
   }
