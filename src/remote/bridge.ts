@@ -4,7 +4,7 @@ import pkg from "../../package.json";
 import type { Engine } from "../engine.ts";
 import type { ServerEvent } from "../server/events.ts";
 import type { GoalStatus } from "../goal.ts";
-import { authMessage, Channel, deviceId, isPairFrame, newStatusKey, pairCommit, pairingCode, pairNonce, PROTOCOL, sealStatus, sign, type ChannelMessage, type DeviceInfo, type Hello, type PairMessage, type PushCategory, type ServerFrame } from "./protocol.ts";
+import { authMessage, Channel, CHANNEL_RESET, deviceId, isPairFrame, newStatusKey, pairCommit, pairingCode, pairNonce, PROTOCOL, sealStatus, sign, type ChannelMessage, type DeviceInfo, type Hello, type PairMessage, type PushCategory, type ServerFrame } from "./protocol.ts";
 import { DEFAULT_RELAY, keysFor, loadIdentity, macId, macName, mtime, newIdentity, remoteFile, saveIdentity, sessionFor, type RemoteIdentity } from "./identity.ts";
 
 // Remote control, on the Mac's side. The core keeps one outbound WebSocket to the relay; phones the
@@ -207,6 +207,15 @@ export class RemoteBridge {
         return;
       }
       if (e.code === 4002) console.error(`niti: remote: ${e.reason}`);
+      if (e.code === 4004) {
+        // Another niti on this Mac connected for this same project, and the relay keeps one link per
+        // project: reconnecting would take it back, and the two would swap forever (the phone's
+        // requests lost in between). The newer one keeps it; this one says so and stays off.
+        this.o.enabled = false;
+        this.setLink("off");
+        this.engine.bus.publish({ agentId: "orchestrator", type: "warning", payload: "another niti on this Mac took over this project's phone link — /remote on takes it back", time: Date.now() });
+        return;
+      }
       this.setLink(this.stopped || !this.id || !this.o.enabled ? "off" : "connecting");
       if (this.stopped || !this.id || !this.o.enabled) return;
       this.retry = setTimeout(() => this.connect(), this.backoff);
@@ -366,8 +375,9 @@ export class RemoteBridge {
       return;
     }
     const c = this.channels.get(phoneId);
-    const msg = c?.ch.unseal(data);
-    if (!c || !msg) return;
+    if (!c) return this.send({ t: "to", device: phoneId, data: CHANNEL_RESET }); // a channel from before a restart or reconnect
+    const msg = c.ch.unseal(data);
+    if (!msg) return;
     if (msg.k === "sub") return this.subscribe(phoneId, msg.from);
     if (msg.k === "req") {
       const { status, body } = await this.request(c.name, msg.method, msg.path, msg.body);

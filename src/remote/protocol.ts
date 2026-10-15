@@ -192,6 +192,11 @@ export interface Hello {
 
 const helloMessage = (eph: string, ctx: string, peer = "") => `niti-hello-v1:${ctx}:${eph}:${peer}`;
 
+// The Mac's answer to a sealed frame for a channel it no longer has (its core restarted, or its link
+// to the relay reconnected): the phone drops its side and opens a fresh channel. In the clear and
+// unsigned, so at worst a relay can make a phone reconnect.
+export const CHANNEL_RESET = '{"h":"reset"}';
+
 export class Channel {
   private key?: Uint8Array;
   private sendCtr = 0;

@@ -128,6 +128,15 @@ test("sign in on both sides, allow the phone once with matching codes, then driv
   // What the phone did shows on the Mac.
   expect(events.some((e) => e.kind === "agent_event" && String(e.event.payload).startsWith("📱 iPhone: approved"))).toBe(true);
 
+  // The Mac loses the channel (its link reconnected): the phone hears so, drops it, and reopens.
+  (w.bridge as unknown as { channels: Map<string, unknown> }).channels.clear();
+  let dead = false;
+  s.onDead = () => (dead = true);
+  expect((await s.request("POST", "/session")).status).toBe(0);
+  expect([dead, s.ready]).toEqual([true, false]);
+  const reopened = await w.phone.open(s0.mac, s0.session);
+  expect((await reopened.request("POST", "/session")).status).toBe(200);
+
   // Signing the phone out on the Mac cuts it off.
   expect(w.bridge.revoke("iPhone")).toContain("signed out");
   await until(() => w.phone.snap.link === "off", "the phone to be cut off");
@@ -170,4 +179,18 @@ test("a phone can't let another device in, and a phone that isn't connected is p
   expect(w.pushes[0]).toMatchObject({ to: "ExponentPushToken[bo]", title: expect.stringContaining("Approval needed"), body: "worker wants to write a file" });
   expect(w.pushes[0]!.data.route).toBe(`/session/${s0.mac}/${s0.session}?sheet=approval`); // the phone opens straight onto it
   w.engine.cancel();
+});
+
+test("a second niti on the same project takes the phone link, and the first stays off instead of fighting for it", async () => {
+  const w = await world();
+  expect(await w.bridge.loginStart("ada@x.dev", w.relay.url)).toContain("code is on its way");
+  expect((await w.bridge.loginVerify(w.codes.get("ada@x.dev")!)).ok).toBe(true);
+  await until(() => w.bridge.state().link === "up", "the first link");
+  const second = new RemoteBridge(w.engine, w.server, { enabled: true, file: join(w.root, "remote.json") });
+  cleanup.push(() => second.stop());
+  second.start();
+  await until(() => second.state().link === "up", "the second link");
+  await until(() => w.bridge.state().link === "off", "the first to step aside");
+  await Bun.sleep(1500); // past the first reconnect backoff: still off, still second's
+  expect([w.bridge.state().link, second.state().link]).toEqual(["off", "up"]);
 });
