@@ -40,7 +40,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "relay": ""
+      "relay": "https://niti-relay.niti-relay.workers.dev"
     }
   }
 }
