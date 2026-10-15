@@ -7,7 +7,7 @@ import { setAuto, setOption } from "../config/config.ts";
 import { loadSkills, frontmatter } from "../skills/skills.ts";
 import { isGitRepo, snapshotBranch } from "../orchestrator/worktree.ts";
 import { buildExportReport } from "./export.ts";
-import { arm, release } from "../awake.ts";
+import { arm, off } from "../awake.ts";
 import { parseGoalArgs } from "../goal.ts";
 
 // Slash commands live here, on the server, rather than in the Go TUI's key handler — otherwise the
@@ -71,10 +71,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     name: "awake",
     description: "Keep the Mac awake, lid closed too, until the current or next run finishes (/awake off to stop)",
     async run(engine, args, ctx) {
-      if (args.trim() === "off") {
-        release();
-        return { ok: true, message: "awake off — normal sleep restored" };
-      }
+      if (args.trim() === "off") return off(ctx?.origin === "remote" ? null : undefined);
       // From a phone, never the admin dialog: nobody is at the Mac to answer it, and it would wait
       // forever. That means lid-open only, which the reply says.
       const elevate = ctx?.origin === "remote" ? async () => false : undefined;

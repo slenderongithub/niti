@@ -33,6 +33,26 @@ export function release(): void {
   hub.publish({ kind: "awake", state: "off" });
 }
 
+// pmset's own record. Lid-closed sleep is a Mac-wide setting that outlives whoever turned it off: a
+// reboot or a killed watchdog leaves it off with no niti holding it, so /awake off asks the Mac.
+export function sleepDisabled(): boolean {
+  if (process.platform !== "darwin") return false;
+  return /SleepDisabled\s+1/.test(Bun.spawnSync(["pmset", "-g"]).stdout.toString());
+}
+
+// /awake off: drop this core's hold, then make sure the Mac can really sleep again. `elevate` is null
+// from a phone, where nobody is at the Mac to answer the admin prompt.
+export async function off(elevate: Elevate | null = osascript, disabled = sleepDisabled): Promise<{ ok: boolean; message: string }> {
+  const lid = awakeMode() === "lid";
+  release();
+  for (let i = 0; lid && disabled() && i < 6; i++) await Bun.sleep(500); // our watchdog restores it within 2s
+  if (!disabled()) return { ok: true, message: "awake off — normal sleep restored" };
+  const leftover = "lid-closed sleep was still off, left over from an earlier /awake";
+  if (!elevate) return { ok: false, message: `${leftover} — run /awake off on the Mac to restore it` };
+  if (await elevate("pmset -a disablesleep 0")) return { ok: true, message: `awake off — ${leftover}; restored` };
+  return { ok: false, message: `${leftover}, and the admin prompt was declined (sudo pmset -a disablesleep 0 restores it)` };
+}
+
 // `keep`: while it says true, a run ending doesn't release — /goal holds sleep off across all its
 // rounds and lets go when the goal itself ends (its `goal` event).
 export async function arm(hub: EventHub, elevate: Elevate = osascript, keep: () => boolean = () => false): Promise<{ ok: boolean; message: string }> {

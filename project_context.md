@@ -106,7 +106,8 @@ in one disappears from the others (the core answers by id; a second answer gets 
     restart. While a goal runs, `/prompt` gets 409 and what you type is a note to its next round.
 11. **`/awake`** (`awake.ts`): keeps the Mac awake, lid closed too, until the run (or the whole goal)
     ends, through one admin prompt and a root watchdog. From a phone it never asks for admin: lid-open
-    only.
+    only. `/awake off` checks `pmset` itself, because lid-closed sleep is Mac-wide and survives a
+    reboot or a dead watchdog: if it is still off, it asks for admin once and turns it back on.
 12. **LSP and MCP** side by side in the tool list; a missing server is a message, never a crash.
     `watch.ts` reports edits made outside niti.
 
