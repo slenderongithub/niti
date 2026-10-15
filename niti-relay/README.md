@@ -20,7 +20,8 @@ The protocol lives in `../src/remote/protocol.ts`, shared with the core and the 
   `npm run deploy`. Sign-in emails go through [Resend](https://resend.com); its free tier allows
   100 a day.
 - **Your own box**: `bun bun.ts --port=8787`. The same code runs on Bun and SQLite. With no mailer,
-  sign-in codes print to the console, and pushes are logged instead of sent.
+  sign-in codes print to the console, and pushes are logged instead of sent. It listens on
+  127.0.0.1 only; add `--host=0.0.0.0` so a phone on the same network can reach it.
 
 Sign a Mac in to a relay with `/remote login <email> --relay https://…` in niti; the phone app
 asks for the same relay URL. `remote: false` in a project's `.niti/agents.yaml` keeps that project

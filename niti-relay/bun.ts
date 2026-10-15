@@ -23,7 +23,7 @@ interface Live {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-export async function startRelay(o: { port?: number; db?: string; mail: Mail; push: (m: PushMessage[]) => Promise<void>; now?: () => number }) {
+export async function startRelay(o: { port?: number; host?: string; db?: string; mail: Mail; push: (m: PushMessage[]) => Promise<void>; now?: () => number }) {
   const accounts = new Accounts(sqlite(new Database(o.db ?? ":memory:")), o.mail, o.now);
   await accounts.migrate();
   const now = o.now ?? Date.now;
@@ -59,7 +59,7 @@ export async function startRelay(o: { port?: number; db?: string; mail: Mail; pu
   type Data = { meta: SockMeta; sock?: Sock };
   const server = Bun.serve<Data>({
     port: o.port ?? 0,
-    hostname: "127.0.0.1",
+    hostname: o.host ?? "127.0.0.1",
     async fetch(req, srv) {
       const res = await login(req, accounts, async (account) => rooms.get(account)?.room.devicesChanged());
       if (res) return res;
@@ -112,9 +112,10 @@ export async function startRelay(o: { port?: number; db?: string; mail: Mail; pu
 }
 
 if (import.meta.main) {
-  const port = Number(process.argv.find((a) => a.startsWith("--port="))?.slice(7) ?? 8787);
+  const arg = (k: string) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3);
   const r = await startRelay({
-    port,
+    port: Number(arg("port") ?? 8787),
+    host: arg("host"), // --host=0.0.0.0 to reach it from a phone on the same network
     db: process.env.NITI_RELAY_DB ?? "niti-relay.db",
     mail: async (email, code) => console.log(`sign-in code for ${email}: ${code}`), // no mailer here: read it off the console
     push: async (m) => console.log(`push: ${JSON.stringify(m)}`),
