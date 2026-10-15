@@ -2,7 +2,7 @@
 
 The desktop app for niti: a team of AI coding agents from different providers working on one project, in a native window instead of a terminal.
 
-It runs the same engine as the terminal app (`niti-core serve`). It also shares the terminal app's config (`.niti/agents.yaml`), keys (`~/.config/niti/auth.json` + keychain), trust list and session store. You can switch between the two on the same project.
+It runs the same engine as the terminal app (`niti-core serve`). It also shares the terminal app's config (`.niti/agents.yaml`), keys (`~/.config/niti/auth.json` + keychain), trust list, session store and remote-control sign-in. You can switch between the two on the same project. How every part of the repo fits together: `../project_context.md`; the terminal app: `../tui/README.md`.
 
 ## Features
 
@@ -15,7 +15,9 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
   - shell results
   - pinned checklists
   - the run summary, with next-step suggestions
-- **Composer.** Build/Plan modes, `/commands`, `@file` mentions, `!shell`, history, Esc to stop.
+- **Composer.** Build/Plan modes, `/commands`, `@file` mentions, `!shell`, history, Esc to stop. Mid-run, tick "Interrupt it now" to stop one agent and have it carry on from your message.
+- **Goals.** `/goal <objective>` keeps the team working round after round until a judge says it's done or a budget runs out. The status bar shows the round; while it runs, what you type is a note to the next round, and you're notified once when it ends.
+- **Remote control.** Once this Mac is signed in (`/remote login`), the status bar shows the link and how many phones are watching. A phone asking to join shows its pairing code here, to allow or deny.
 - **Files.** Open any file as a tab in the centre and edit it (CodeMirror: syntax highlighting, search, undo), save with ⌘S.
   - Lines the agents changed this session are marked in the gutter.
   - A file an agent is writing is read-only until it's done.
@@ -46,7 +48,16 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
   - A notification when a long run ends, and a Dock badge for pending approvals.
   - Drop a folder on the window or the Dock icon to open it.
 
-The look: the TUI's obsidian palettes with a violet accent (`#9D8CFF` / `#5A46D8`), the logo's spider web for empty space, the braille spinner, and the transcript's glyph language.
+The look: the TUI's obsidian palettes with a violet accent (`#9D8CFF` / `#5A46D8`), Inter and JetBrains Mono, the logo's spider web for empty space, the braille spinner, and the transcript's glyph language.
+
+## Shared with the phone
+
+The iPhone app (`../niti-mobile/`) wears this app's design language and runs on this app's code:
+it imports `src/renderer/src/lib/` (the reducer, types, humanize, identity, diff, format) and loads the
+avatars from `src/renderer/src/assets/avatars/`. A change there is a change to the phone too: run its
+checks (`cd ../niti-mobile && npm run typecheck && bun test ./src`), and give a design change here its
+matching change there. `niti-mobile/src/lib/colors.test.ts` fails if the colour tokens in
+`src/renderer/src/styles/globals.css` and the phone's drift apart.
 
 ## Develop
 
