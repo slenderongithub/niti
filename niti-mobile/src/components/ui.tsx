@@ -1,8 +1,8 @@
-import type { ReactNode } from "react";
-import { ActivityIndicator, Pressable, Text as RNText, TextInput, View, type StyleProp, type TextInputProps, type TextStyle, type ViewStyle } from "react-native";
+import { useEffect, useRef, type ReactNode } from "react";
+import { ActivityIndicator, Animated, Pressable, Text as RNText, TextInput, View, type StyleProp, type TextInputProps, type TextStyle, type ViewStyle } from "react-native";
 import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
-import { alpha, fonts, radius, space, TOUCH, type, useTheme, type ColorToken, type Weight } from "@/lib/theme";
+import { alpha, fonts, radius, space, TOUCH, type, useReduceMotion, useTheme, type ColorToken, type Weight } from "@/lib/theme";
 import { useTick } from "@/lib/ticker";
 
 // The desktop app's building blocks (its shadcn/ui primitives in niti-app/src/renderer/src/components),
@@ -167,6 +167,45 @@ export function Button({
           {title}
         </RNText>
       )}
+    </Pressable>
+  );
+}
+
+// shadcn's Switch (niti-app's components/ui/switch.tsx), in place of iOS's, whose thumb is Liquid
+// Glass now: a primary track when on, the input colour when off, a round thumb that slides across.
+// The track is drawn larger than the desktop's and the tap area reaches 44pt.
+export function Switch({ value, onValueChange, accessibilityLabel, disabled }: { value: boolean; onValueChange: (v: boolean) => void; accessibilityLabel: string; disabled?: boolean }) {
+  const t = useTheme();
+  const reduce = useReduceMotion();
+  const x = useRef(new Animated.Value(value ? 1 : 0)).current;
+  useEffect(() => {
+    if (reduce) x.setValue(value ? 1 : 0);
+    else Animated.timing(x, { toValue: value ? 1 : 0, duration: 150, useNativeDriver: true }).start();
+  }, [value, reduce, x]);
+  const W = 46;
+  const THUMB = 22;
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ checked: value, disabled: !!disabled }}
+      disabled={disabled}
+      hitSlop={9}
+      onPress={() => {
+        void Haptics.selectionAsync();
+        onValueChange(!value);
+      }}
+      style={{ width: W, height: THUMB + 4, borderRadius: radius.full, padding: 2, justifyContent: "center", backgroundColor: value ? t.primary : t.dark ? alpha(t.input, 0.8) : t.input, opacity: disabled ? 0.5 : 1 }}
+    >
+      <Animated.View
+        style={{
+          width: THUMB,
+          height: THUMB,
+          borderRadius: radius.full,
+          backgroundColor: t.dark ? (value ? t.primaryForeground : t.foreground) : t.background,
+          transform: [{ translateX: x.interpolate({ inputRange: [0, 1], outputRange: [0, W - THUMB - 4] }) }],
+        }}
+      />
     </Pressable>
   );
 }

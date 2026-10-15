@@ -17,6 +17,7 @@ import { loadPrefs } from "@/lib/prefs";
 import { space, type, useTheme } from "@/lib/theme";
 import { Button, Text, Wordmark } from "@/components/ui";
 import { AVATAR_IMAGES } from "@/components/avatar";
+import { DialogHost } from "@/components/dialog";
 
 export default function RootLayout() {
   const t = useTheme();
@@ -56,9 +57,11 @@ export default function RootLayout() {
     <>
       <StatusBar style="auto" />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: t.background } }}>
-        <Stack.Screen name="approval" options={{ presentation: "formSheet", sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true }} />
+        {/* Both are the app's own page sheets: a partly open sheet is Liquid Glass on iOS 26. */}
+        <Stack.Screen name="approval" options={{ presentation: "modal" }} />
         <Stack.Screen name="settings" options={{ presentation: "modal" }} />
       </Stack>
+      <DialogHost />
     </>
   );
 }

@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
-import { Alert, KeyboardAvoidingView, Pressable, ScrollView, TextInput, View } from "react-native";
+import { KeyboardAvoidingView, Pressable, ScrollView, TextInput, View } from "react-native";
+import { alert } from "@/components/dialog";
 import { useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
@@ -108,7 +109,7 @@ function Reply({ id, role, working }: { id: string; role: string; working: boole
       setText("");
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
-      Alert.alert(interrupt ? "Couldn't interrupt" : "Not sent", err instanceof Error ? err.message : String(err));
+      alert(interrupt ? "Couldn't interrupt" : "Not sent", err instanceof Error ? err.message : String(err));
     }
     setBusy(false);
   };

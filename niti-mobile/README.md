@@ -22,7 +22,7 @@ How it fits with the rest of the repo: `../project_context.md`.
   message to the working agent mid-run, a new run when idle, or any `/command`.
 - **Agent** (`session/[mac]/[session]/agent/[id].tsx`): one agent's transcript, row for row as the
   desktop draws it, with Send (read at its next turn) and Interrupt (stop now, carry on from this).
-- **Approval** (`approval.tsx`, a sheet): who wants to do what, the command or the diff, then allow,
+- **Approval** (`approval.tsx`, a page sheet): who wants to do what, the command or the diff, then allow,
   always for this agent, always in this folder, deny, or deny and say why. Risky requests need Face ID
   and never offer "always". If the Mac answered first, it says so.
 - **Settings** (`settings.tsx`): which notifications, Face ID to open, the account's devices, sign out.
@@ -56,9 +56,13 @@ It wears the desktop app's design language, redrawn for a phone, and must keep d
   bob, model in mono, context bars, the lead's ★), transcript rows (tool one-liners with a check or a
   spinner, shell and diff blocks, notes by tone, your messages as bubbles), lowercase status words.
 - **Phone rules**: every control reaches 44pt; motion stops under Reduce Motion (one shared clock,
-  `src/lib/ticker.ts`); native iOS sheets, alerts, haptics and Face ID. The title bar is the app's own
-  (`src/components/header.tsx`): the system one is Liquid Glass, which ignores niti's colours. Actions
-  in it are labelled, not bare icons. The avatars are preloaded at launch.
+  `src/lib/ticker.ts`); haptics and Face ID are native. Nothing else is: iOS draws its own title bar,
+  alerts, action sheets, part-height sheets and switches in Liquid Glass, which ignores niti's colours,
+  so the app draws its own: the title bar (`src/components/header.tsx`), alerts and menus
+  (`src/components/dialog.tsx`, the desktop's AlertDialog, called like `Alert.alert`), the Switch
+  (`ui.tsx`), and full page sheets for Approval and Settings. Don't use `Alert`, `ActionSheetIOS`,
+  React Native's `Switch` or a `formSheet`. Header actions are labelled, not bare icons. The avatars
+  are preloaded at launch.
 
 A design change on the desktop gets its matching change here, and the other way round.
 

@@ -12,6 +12,7 @@ import { alpha, fonts, radius, resolveColor, space, type, useTheme } from "@/lib
 import { Badge, Button, CodeBlock, EmptyState, Separator, Text } from "@/components/ui";
 import { AgentAvatar } from "@/components/avatar";
 import { DiffRows } from "@/components/items";
+import { Header } from "@/components/header";
 
 const str = (v: unknown) => (typeof v === "string" ? v : v === undefined ? "" : JSON.stringify(v));
 
@@ -70,8 +71,9 @@ export default function Approval() {
 
   return (
     <View style={{ flex: 1 }}>
+      <Header title="Approval" right={<Button variant="ghost" size="sm" title="Close" tone="primary" onPress={() => router.back()} />} />
       <ScrollView contentContainerStyle={{ paddingBottom: space(4) }} keyboardShouldPersistTaps="handled">
-        <View style={{ flexDirection: "row", gap: space(3), paddingHorizontal: space(5), paddingTop: space(6), paddingBottom: space(4), borderBottomWidth: 1, borderColor: t.border }}>
+        <View style={{ flexDirection: "row", gap: space(3), paddingHorizontal: space(5), paddingTop: space(4), paddingBottom: space(4), borderBottomWidth: 1, borderColor: t.border }}>
           {agent ? <AgentAvatar slot={agent.index} lead={head.agentId === lead} size={36} /> : <ShieldAlert color={t.warning} size={22} />}
           <View style={{ flex: 1, gap: space(1.5) }}>
             <Text size={type.lg} weight="semibold">

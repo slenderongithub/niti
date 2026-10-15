@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Alert, ScrollView, Switch, View } from "react-native";
+import { ScrollView, View } from "react-native";
+import { alert } from "@/components/dialog";
 import { router } from "expo-router";
 import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -9,7 +10,7 @@ import { useStore } from "@/lib/store";
 import { loadPrefs, savePrefs, type Prefs } from "@/lib/prefs";
 import { registerForPush } from "@/lib/push";
 import { space, type, useTheme } from "@/lib/theme";
-import { Button, Card, Row, SectionLabel, Separator, Text, Wordmark } from "@/components/ui";
+import { Button, Card, Row, SectionLabel, Separator, Switch, Text, Wordmark } from "@/components/ui";
 import { Header } from "@/components/header";
 import type { PushCategory } from "../../../src/remote/protocol.ts";
 
@@ -38,7 +39,7 @@ export default function Settings() {
     setPrefs(next);
     await savePrefs(next);
     const err = await registerForPush(next.push);
-    if (err) Alert.alert("Notifications", err);
+    if (err) alert("Notifications", err);
   };
 
   const toggleLock = async (on: boolean) => {
@@ -70,7 +71,7 @@ export default function Settings() {
                       {body}
                     </Text>
                   </View>
-                  <Switch accessibilityLabel={title} value={!!prefs?.push.includes(k)} onValueChange={(v) => void toggle(k, v)} trackColor={{ true: t.primary, false: t.input }} />
+                  <Switch accessibilityLabel={title} value={!!prefs?.push.includes(k)} onValueChange={(v) => void toggle(k, v)} />
                 </Row>
               </View>
             ))}
@@ -96,7 +97,7 @@ export default function Settings() {
                   Risky approvals always ask for Face ID.
                 </Text>
               </View>
-              <Switch accessibilityLabel="Require Face ID to open" value={lock} onValueChange={(v) => void toggleLock(v)} trackColor={{ true: t.primary, false: t.input }} />
+              <Switch accessibilityLabel="Require Face ID to open" value={lock} onValueChange={(v) => void toggleLock(v)} />
             </Row>
           </Card>
         </View>
@@ -135,7 +136,7 @@ export default function Settings() {
           icon={LogOut}
           tone="destructive"
           onPress={() =>
-            Alert.alert("Sign out?", "Your Macs stop accepting this phone. Signing in again needs each Mac to allow it again.", [
+            alert("Sign out?", "Your Macs stop accepting this phone. Signing in again needs each Mac to allow it again.", [
               { text: "Cancel", style: "cancel" },
               {
                 text: "Sign out",

@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from "react";
-import { Alert, KeyboardAvoidingView, Pressable, ScrollView, TextInput, View } from "react-native";
+import { KeyboardAvoidingView, Pressable, ScrollView, TextInput, View } from "react-native";
+import { alert } from "@/components/dialog";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useShallow } from "zustand/react/shallow";
@@ -214,9 +215,9 @@ function GoalCard() {
     setBusy(true);
     try {
       const r = await useStore.getState().command("goal", args);
-      if (!r.ok) Alert.alert("Goal", r.message);
+      if (!r.ok) alert("Goal", r.message);
     } catch (err) {
-      Alert.alert("Goal", err instanceof Error ? err.message : String(err));
+      alert("Goal", err instanceof Error ? err.message : String(err));
     }
     setBusy(false);
   };
@@ -280,7 +281,7 @@ function GoalCard() {
             icon={Square}
             tone="destructive"
             onPress={() =>
-              Alert.alert("Stop the goal?", "The round in progress is cancelled.", [
+              alert("Stop the goal?", "The round in progress is cancelled.", [
                 { text: "Keep going", style: "cancel" },
                 { text: "Stop", style: "destructive", onPress: () => void run("stop") },
               ])
@@ -417,7 +418,7 @@ function Changes() {
   }, [running]);
   const edited = Object.entries(touched).filter(([, k]) => k !== "R");
   const act = (what: "merge" | "discard") =>
-    Alert.alert(what === "merge" ? "Merge into your project?" : "Throw these changes away?", what === "merge" ? `Brings ${wt?.branch} into the project on your Mac.` : "This can't be undone.", [
+    alert(what === "merge" ? "Merge into your project?" : "Throw these changes away?", what === "merge" ? `Brings ${wt?.branch} into the project on your Mac.` : "This can't be undone.", [
       { text: "Cancel", style: "cancel" },
       {
         text: what === "merge" ? "Merge" : "Discard",
@@ -426,10 +427,10 @@ function Changes() {
           setBusy(true);
           try {
             const r = await useStore.getState().call<{ ok: boolean; message: string }>("POST", `/worktree/${what}`);
-            Alert.alert(r.ok ? "Done" : "Couldn't do that", r.message);
+            alert(r.ok ? "Done" : "Couldn't do that", r.message);
             setWt(await useStore.getState().call<Worktree>("GET", "/worktree"));
           } catch (err) {
-            Alert.alert("Couldn't do that", err instanceof Error ? err.message : String(err));
+            alert("Couldn't do that", err instanceof Error ? err.message : String(err));
           }
           setBusy(false);
         },
@@ -516,14 +517,14 @@ function SessionMenu() {
   const run = async (fn: () => Promise<unknown>) => {
     try {
       const r = (await fn()) as { message?: string } | undefined;
-      if (r?.message) Alert.alert("niti", r.message);
+      if (r?.message) alert("niti", r.message);
     } catch (err) {
-      Alert.alert("niti", err instanceof Error ? err.message : String(err));
+      alert("niti", err instanceof Error ? err.message : String(err));
     }
   };
   const s = useStore.getState();
   const open = () =>
-    Alert.alert("This project", undefined, [
+    alert("This project", undefined, [
       ...(active ? [{ text: "Stop the run", style: "destructive" as const, onPress: () => void run(() => s.call("POST", "/cancel")) }] : []),
       awake === "off" ? { text: "Keep the Mac awake", onPress: () => void run(() => s.command("awake")) } : { text: "Let the Mac sleep", onPress: () => void run(() => s.command("awake", "off")) },
       { text: "Status", onPress: () => void run(() => s.command("status")) },
@@ -557,7 +558,7 @@ function Composer() {
       if (msg.startsWith("/")) {
         const [name = "", ...rest] = msg.slice(1).split(" ");
         const r = await s.command(name, rest.join(" "));
-        if (r.message) Alert.alert(`/${name}`, r.message);
+        if (r.message) alert(`/${name}`, r.message);
       } else if (live) {
         await s.command("goal", `note ${msg}`);
       } else if (state.active) {
@@ -569,7 +570,7 @@ function Composer() {
       setText("");
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
-      Alert.alert("Not sent", err instanceof Error ? err.message : String(err));
+      alert("Not sent", err instanceof Error ? err.message : String(err));
     }
     setBusy(false);
   };
@@ -637,7 +638,7 @@ function Composer() {
               accessibilityRole="button"
               accessibilityLabel="Stop the run"
               onPress={() =>
-                Alert.alert("Stop the run?", "Every agent stops what it's doing.", [
+                alert("Stop the run?", "Every agent stops what it's doing.", [
                   { text: "Keep going", style: "cancel" },
                   { text: "Stop", style: "destructive", onPress: () => void useStore.getState().call("POST", "/cancel") },
                 ])
