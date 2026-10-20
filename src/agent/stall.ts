@@ -148,3 +148,55 @@ export function stallNudge(rounds: number): string {
     `If you cannot fix it, stop and report exactly what is blocking you instead of continuing to look.`
   );
 }
+
+// The loop a small model falls into before it has written anything, which StallGuard deliberately
+// doesn't judge: the same call, with the same arguments, again and again — or two calls taking turns.
+// Every harness that runs local models has met it (OPENDEV, pi-loop-guard, pydantic-deepagents all
+// fingerprint tool + arguments over a short window). Counted over the last WINDOW calls, so A-B-A-B
+// counts for both. Used by the local profile, whose thresholds are in profile.ts.
+const WINDOW = 12;
+
+export class RepeatGuard {
+  private recent: string[] = [];
+  private nudged = new Set<string>();
+  name = ""; // the repeated tool, for the message
+  count = 0;
+
+  constructor(
+    private nudgeAt: number,
+    private stopAt: number,
+  ) {}
+
+  observe(calls: ToolCall[]): StallVerdict {
+    let verdict: StallVerdict = "ok";
+    for (const c of calls) {
+      const key = `${c.name}\u0000${stable(c.input)}`;
+      this.recent.push(key);
+      if (this.recent.length > WINDOW) this.recent.shift();
+      const n = this.recent.filter((k) => k === key).length;
+      if (n >= this.stopAt) {
+        this.name = c.name;
+        this.count = n;
+        return "stop";
+      }
+      if (n >= this.nudgeAt && !this.nudged.has(key)) {
+        this.nudged.add(key);
+        this.name = c.name;
+        this.count = n;
+        verdict = "nudge";
+      }
+    }
+    return verdict;
+  }
+}
+
+// JSON with sorted keys, so {a,b} and {b,a} are the same call.
+function stable(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
+}
+
+export function repeatNudge(name: string, count: number): string {
+  return `[niti: you have now called ${name} with exactly the same arguments ${count} times, and it gives the same result each time. Repeating it will not change anything. Do something different: use what the result already told you, try another approach, or if you are finished, say so in one or two sentences.]`;
+}

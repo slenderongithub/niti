@@ -52,7 +52,7 @@ export interface GoalHost {
   readonly busy: boolean;
   spent(): { tokens: number; cost: number };
   runRound(prompt: string, label: string, judge: (r: RoundResult) => Promise<Omit<Verdict, "round" | "changed">>): Promise<RoundResult & { verdict?: Omit<Verdict, "round" | "changed"> }>;
-  ask(prompt: string): Promise<string>; // the lead, read-only, inside the round's run
+  ask(prompt: string, opts?: { json?: boolean }): Promise<string>; // the lead, read-only, inside the round's run
   stopRun(): void; // cancel the round in flight without pausing the goal (the caller sets the state)
   tellTeam(text: string): boolean; // deliver to the agents working right now; false = nobody is
   commitRound(message: string): Promise<void>;
@@ -364,7 +364,7 @@ export class GoalLoop {
       `{"done": true|false, "reason": "<one sentence>", "next": "<the single most useful next step, if not done>"}`,
     ].join("\n");
     try {
-      const parsed = VerdictJson.safeParse(extractJson(await this.host.ask(prompt)));
+      const parsed = VerdictJson.safeParse(extractJson(await this.host.ask(prompt, { json: true })));
       if (parsed.success) return parsed.data;
       return { done: false, reason: "the judge's reply wasn't valid JSON", next: "" };
     } catch (err) {

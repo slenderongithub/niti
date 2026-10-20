@@ -236,6 +236,7 @@ export function saveAgents(agents: AgentConfig[], path = CONFIG): void {
       ...(a.reasoning ? { reasoning: a.reasoning } : {}),
       ...(a.maxOutput ? { maxOutput: a.maxOutput } : {}),
       ...(a.editFormat ? { editFormat: a.editFormat } : {}),
+      ...(a.profile ? { profile: a.profile } : {}),
     })),
   };
   editConfig(path, (doc) => doc.set("agents", next.agents));
@@ -265,6 +266,13 @@ function parseEditFormat(v: unknown, where: string): "hashline" | undefined {
   if (v === undefined || v === null || v === "" || v === "str_replace") return undefined;
   if (v === "hashline") return "hashline";
   throw new Error(`${where}: editFormat must be "hashline" or "str_replace", got ${JSON.stringify(v)}`);
+}
+
+// Unset picks the profile from the provider (src/agent/profile.ts); a typo is an error.
+function parseProfile(v: unknown, where: string): "local" | "standard" | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  if (v === "local" || v === "standard") return v;
+  throw new Error(`${where}: profile must be "local" or "standard", got ${JSON.stringify(v)}`);
 }
 
 function validate(a: unknown, i: number, path: string): AgentConfig {
@@ -300,5 +308,6 @@ function validate(a: unknown, i: number, path: string): AgentConfig {
     reasoning: parseReasoning(rec.reasoning),
     maxOutput: Number.isInteger(rec.maxOutput) && (rec.maxOutput as number) > 0 ? (rec.maxOutput as number) : undefined,
     editFormat: parseEditFormat(rec.editFormat, `${path} agent[${i}]`),
+    profile: parseProfile(rec.profile, `${path} agent[${i}]`),
   };
 }

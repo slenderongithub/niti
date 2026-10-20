@@ -38,10 +38,12 @@ export class LocalProvider implements Provider {
     runtime.register(agentId, model);
   }
 
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true): Promise<ProviderReply> {
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true, format?: "json"): Promise<ProviderReply> {
     const { baseURL, slot, manifest } = await this.runtime.ensure(this.model, this.agentId);
-    const think = thinking && this.reasoning !== "off";
-    const extras = requestExtras(manifest, slot, think);
+    // A JSON reply is constrained by grammar from its first token, which leaves no room for a
+    // thinking block in front of it.
+    const think = thinking && this.reasoning !== "off" && format !== "json";
+    const extras = { ...requestExtras(manifest, slot, think), ...(format === "json" ? { response_format: { type: "json_object" } } : {}) };
     if (!this.inner || this.inner.url !== baseURL || this.inner.slot !== slot) {
       this.inner = {
         url: baseURL,

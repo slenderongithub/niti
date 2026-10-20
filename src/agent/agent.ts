@@ -11,16 +11,18 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, normalizePath, projectRelative, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, applyAnchoredEdit, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, applyAnchoredEdit, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS, BUILTIN_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import { isSecretPath, shellTouchesSecret } from "../secrets.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { contextWindow } from "../providers/catalog.ts";
 import { costOf } from "../providers/pricing.ts";
-import { StallGuard, stallNudge, recurringNudge } from "./stall.ts";
+import { StallGuard, RepeatGuard, stallNudge, recurringNudge, repeatNudge } from "./stall.ts";
 import { condenseForModel, shellCommandLine } from "../tools/condense.ts";
-import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations, MAX_RESULT_CHARS } from "./context.ts";
+import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations } from "./context.ts";
+import { profileFor, type Profile } from "./profile.ts";
+import { checkArgs, extractTextToolCalls, unknownToolMessage } from "./toolcalls.ts";
 import { createHash } from "node:crypto";
 import { defaultSettings, type RuntimeSettings } from "../settings.ts";
 import { runChecks, checkSurface, enforcerFiles, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
@@ -55,7 +57,8 @@ const MAX_FORKS_PER_RUN = 4;
 // re-asserting the same fix, and the honest outcome is a failing task a human can see, not a loop.
 const MAX_VERIFY_ROUNDS = 2;
 const WARN_RATIO = 0.85; // heads-up when input tokens pass this fraction of the context window
-const COMPACT_RATIO = 0.95; // auto-compact past this fraction — a long task's turns can otherwise fill the window
+// The context thresholds (warn, compact) and result caps come from the agent's profile
+// (src/agent/profile.ts): 0.85 / 0.95 / 60k chars for cloud models, earlier and smaller locally.
 // shell can touch anything (redirects, git, mv, rm…) and args are opaque to us — parsing them for
 // real paths is a guessing game. ponytail: one global lock for all shell calls instead of per-path;
 // upgrade to real path extraction only if shell contention actually shows up in practice.
@@ -313,6 +316,9 @@ export interface AgentConfig {
   // exact snippet. Opt-in per agent — it helps most on weaker / cheaper models; measure it with
   // scripts/eval before turning it on for a model (see applyAnchoredEdit in tools.ts).
   editFormat?: "hashline";
+  // How the harness talks to this model (src/agent/profile.ts). Unset: "local" for models on this
+  // Mac (provider local, ollama, lmstudio, or a loopback baseURL), "standard" for everything else.
+  profile?: "local" | "standard";
 }
 
 interface AgentDeps {
@@ -462,6 +468,11 @@ export class Agent {
     return this.inFlightCount > 0;
   }
 
+  // Read per use, not fixed at construction: /model can move an agent between the cloud and this Mac.
+  get profile(): Profile {
+    return profileFor(this.config);
+  }
+
   // Runs one task as an agentic loop: model call → execute any tool calls (sandboxed) → feed
   // results back → repeat until the model stops calling tools or the turn cap is hit.
   async run(task: string, opts: RunOptions = {}): Promise<RunOutcome> {
@@ -498,6 +509,8 @@ export class Agent {
     let quotaWarned = false;
     let verifyRounds = 0;
     const stall = new StallGuard();
+    const guard = this.profile.repeatGuard;
+    const repeat = guard ? new RepeatGuard(guard.nudge, guard.stop) : undefined;
     this.inFlightCount++;
     try {
       for (let i = 0; i < this.maxTurns; i++) {
@@ -530,7 +543,7 @@ export class Agent {
           }
 
           // Pre-emptive heads-up: fire once when the conversation nears the context window.
-          if (!warned && reply.usage && overContextThreshold(this.contextFill(reply.usage), context)) {
+          if (!warned && reply.usage && overContextThreshold(this.contextFill(reply.usage), context, this.profile.warnRatio)) {
             warned = true;
             const fill = this.contextFill(reply.usage);
             const pct = Math.round((fill / context) * 100);
@@ -637,6 +650,17 @@ export class Agent {
             this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
             return { outcome: "exhausted", text: finalText, error };
           }
+          const looping = repeat?.observe(reply.toolCalls) ?? "ok";
+          if (looping === "stop") {
+            error = `looping: called ${repeat!.name} with the same arguments ${repeat!.count} times, even after being told to change course`;
+            if (sessionId) this.store?.setStatus(sessionId, "exhausted");
+            this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+            return { outcome: "exhausted", text: finalText, error };
+          }
+          if (looping === "nudge") {
+            this.bus.publish({ agentId: id, type: "warning", payload: `${repeat!.name} called ${repeat!.count} times with the same arguments — telling the agent to change course`, time: Date.now() });
+            this.push(turns, { role: "user", text: repeatNudge(repeat!.name, repeat!.count) }, sessionId);
+          }
           if (verdict === "nudge") {
             const recurring = stall.kind === "recurring";
             this.bus.publish({ agentId: id, type: "warning", payload: recurring ? `the same failure keeps coming back after edits — telling the agent to change approach` : `${stall.rounds} rounds without changing a file — telling the agent to act`, time: Date.now() });
@@ -680,13 +704,28 @@ export class Agent {
   // instead of failing the call: a 429 used to restart a whole task from scratch, and ended a
   // question, a plan or a debate outright. Interrupting still stops the wait at once.
   // `system` is overridden only by compaction, whose summarizer has its own prompt.
-  private async send(turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, system = this.config.systemPrompt): Promise<ProviderReply> {
+  private async send(turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, system = this.config.systemPrompt, format?: "json"): Promise<ProviderReply> {
+    return this.recoverTextCalls(await this.sendRaw(turns, tools, onDelta, system, format), tools);
+  }
+
+  // A model that wrote its tool call into the reply as text (the local profile's models do, now and
+  // then) gets it run as the call it meant — and the call goes into the history in the proper form,
+  // which is the example it follows next turn.
+  private recoverTextCalls(reply: ProviderReply, tools: ToolSpec[]): ProviderReply {
+    if (!this.profile.textToolCalls || reply.toolCalls.length > 0 || !reply.text || tools.length === 0) return reply;
+    const found = extractTextToolCalls(reply.text, tools.map((t) => t.name));
+    if (!found) return reply;
+    this.bus.publish({ agentId: this.config.id, type: "thought", payload: `read ${found.calls.length} tool call(s) the model wrote as text`, time: Date.now() });
+    return { ...reply, text: found.rest, toolCalls: found.calls, raw: undefined };
+  }
+
+  private async sendRaw(turns: Turn[], tools: ToolSpec[], onDelta: OnDelta | undefined, system: string, format?: "json"): Promise<ProviderReply> {
     for (let attempt = 0; ; attempt++) {
       const signal = this.signal();
       if (signal.aborted) throw new Error("interrupted");
       try {
         // thinkingMode is read live, per call — POST /settings flips it mid-run.
-        const call = this.provider.send(system, turns, tools, onDelta, signal, this.settings.thinkingMode);
+        const call = this.provider.send(system, turns, tools, onDelta, signal, this.settings.thinkingMode, format);
         return await Promise.race([
           call,
           new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("interrupted")), { once: true })),
@@ -810,14 +849,16 @@ export class Agent {
   }
 
   // Raw single call, no tools/events — used by the orchestrator to plan and to integrate.
-  async ask(prompt: string): Promise<string> {
+  // `json`: the caller parses the reply as JSON (planner, replan, integrate, the goal judge). The
+  // local profile has the runtime constrain the output to JSON, so it parses on the first try.
+  async ask(prompt: string, opts: { json?: boolean } = {}): Promise<string> {
     // Counted as busy like run()/respond(): the lead planning is the lead working. Without it, a
     // message typed while the plan was being made was refused ("isn't running") and lost; now it
     // queues and is read when this agent's work starts.
     this.inFlightCount++;
     let reply: ProviderReply;
     try {
-      reply = await this.send([{ role: "user", text: prompt }], []);
+      reply = await this.send([{ role: "user", text: prompt }], [], undefined, undefined, opts.json && this.profile.jsonAsks ? "json" : undefined);
     } finally {
       this.inFlightCount--;
     }
@@ -843,7 +884,7 @@ export class Agent {
   // for a whole extra billed summarization whose result nothing read. The summary call goes through
   // send(), so a rate limit is waited out and /cancel interrupts it like any other call.
   private async compact(turns: Turn[], ctx: LoopCtx, reply: ProviderReply, context: number, label: string): Promise<boolean> {
-    if (reply.toolCalls.length === 0 || !reply.usage || !shouldAutoCompact(this.settings.autoCompact, this.contextFill(reply.usage), context, COMPACT_RATIO)) return false;
+    if (reply.toolCalls.length === 0 || !reply.usage || !shouldAutoCompact(this.settings.autoCompact, this.contextFill(reply.usage), context, this.profile.compactRatio)) return false;
     const before = turns.length;
     const summarizer: Provider = { send: (system, t, tools) => this.send(t, tools, undefined, system) };
     turns.splice(0, turns.length, ...(await compactTurns(turns, summarizer, undefined, (u) => this.record(u, undefined, false))));
@@ -968,7 +1009,8 @@ export class Agent {
   // peers exist) the coordination tools. ask_agent disappears once the ask-depth cap is reached.
   // `mcp` grants every MCP tool; otherwise a namespaced name has to be listed explicitly.
   private mcpAllowed(allowed: string[], name: string): boolean {
-    return allowed.includes("mcp") || allowed.includes(name);
+    // A blanket `mcp` is too many tools for a small model: the local profile takes named ones only.
+    return (this.profile.mcpBlanket && allowed.includes("mcp")) || allowed.includes(name);
   }
 
   private allowedMcpSpecs(allowed: string[]): ToolSpec[] {
@@ -977,7 +1019,8 @@ export class Agent {
 
   private buildTools(allowed: string[], ctx: LoopCtx): ToolSpec[] {
     const peers = this.messenger?.peers(this.config.id) ?? [];
-    const key = [allowed.join(","), ctx.forkDepth, ctx.askDepth, peers.map((p) => p.id).join(",")].join("|");
+    const profile = this.profile;
+    const key = [profile.name, allowed.join(","), ctx.forkDepth, ctx.askDepth, peers.map((p) => p.id).join(",")].join("|");
     if (this.toolsCache?.key === key) return this.toolsCache.specs;
 
     // Three independent tool sources, concatenated: the sandbox, MCP servers, and LSP servers.
@@ -987,11 +1030,11 @@ export class Agent {
     // entirely, so an agent restricted to `read_file` was still handed every write tool of every
     // configured MCP server — a field named allowedTools that did not bound the tools.
     // `"mcp"` in the list is the opt-in for "all of them", so the common case stays one word.
-    const specs = [...toolSpecs(allowed, { hashline: this.config.editFormat === "hashline" }), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)];
+    const specs = [...toolSpecs(allowed, { hashline: this.config.editFormat === "hashline" }), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)].filter((t) => !profile.dropTools.includes(t.name));
     // Offered even once the breadth budget is spent — fork() refuses it at call time instead.
     // Dropping it mid-task changed the tool list, which sits first in Anthropic's cache prefix, so
     // the whole cached conversation was rewritten at 1.25× on the next call.
-    if (ctx.forkDepth < MAX_FORK_DEPTH) {
+    if (profile.forks && ctx.forkDepth < MAX_FORK_DEPTH) {
       specs.push({
         name: "spawn_fork",
         description:
@@ -1088,7 +1131,7 @@ export class Agent {
   // keeps the full log of what happened. A masked read can no longer be pointed back to, so the
   // repeat-read record is dropped with it: the next read of that file comes back in full.
   private maskOldObservations(turns: Turn[], ctx: LoopCtx): void {
-    const { masked, savedChars } = maskObservations(turns);
+    const { masked, savedChars } = maskObservations(turns, { highWater: this.profile.maskHighWater });
     if (masked === 0) return;
     ctx.reads?.clear();
     this.bus.publish({ agentId: this.config.id, type: "thought", payload: `masked ${masked} old tool output(s), ~${Math.round(savedChars / 3)} tokens off every later turn`, time: Date.now() });
@@ -1098,13 +1141,14 @@ export class Agent {
   // usage figure describes a history that no longer exists, so only the fixed ceiling applies.
   private resultBudgetFor(reply: { usage?: Usage; toolCalls: ToolCall[] }, context: number, compacted: boolean): number | undefined {
     if (compacted || !reply.usage) return undefined;
-    return resultBudgetChars(this.contextFill(reply.usage) + reply.usage.outputTokens, context, COMPACT_RATIO, reply.toolCalls.length);
+    return resultBudgetChars(this.contextFill(reply.usage) + reply.usage.outputTokens, context, this.profile.compactRatio, reply.toolCalls.length);
   }
 
   // Bound one tool result before it enters the history (where it is re-sent on every later turn),
   // and answer a repeat of an unchanged read_file with a pointer to the copy already there.
   private admit(call: ToolCall, output: string, ctx: LoopCtx): string {
-    const limit = Math.min(ctx.resultBudget ?? MAX_RESULT_CHARS, MAX_RESULT_CHARS);
+    const max = this.profile.maxResultChars;
+    const limit = Math.min(ctx.resultBudget ?? max, max);
     let key: string | undefined;
     let hash: string | undefined;
     if (call.name === "read_file" && !output.startsWith("error:") && output.length >= 800) {
@@ -1295,6 +1339,25 @@ export class Agent {
   private async execToolInner(call: ToolCall, allowed: string[], ctx: LoopCtx, started: number): Promise<string> {
     const id = this.config.id;
     const sessionId = ctx.sessionId;
+    // A call the model got wrong in shape is answered with what to fix, before anything runs or
+    // anyone is asked to approve it.
+    const refuse = (message: string, shown: string) => {
+      this.bus.publish({ agentId: id, type: "error", payload: shown, time: Date.now(), ...this.endOf(call, started, false) });
+      return message;
+    };
+    if (call.parseError) return refuse(`error: ${call.name}: ${call.parseError}. Send the call again with a valid JSON object of arguments.`, `${call.name}: ${call.parseError}`);
+    // The list this loop offered (cached per loop shape — a task and a peer's question running at
+    // once on one agent are offered different tools).
+    const offered = this.buildTools(allowed, ctx);
+    const spec = offered.find((t) => t.name === call.name);
+    if (spec) {
+      const bad = checkArgs(spec, call.input);
+      if (bad) return refuse(bad, bad.replace(/^error: /, ""));
+    } else if (!(this.mcp?.has(call.name) ?? false) && !BUILTIN_TOOLS.has(call.name) && !LSP_TOOLS.has(call.name)) {
+      // A name that is no tool at all. A real tool this agent wasn't given falls through to the
+      // allowedTools gate below, which says exactly that.
+      return refuse(unknownToolMessage(call.name, offered.map((t) => t.name)), `${call.name}: not a tool this agent has`);
+    }
     try {
       canonicalizeShellCall(call);
     } catch (err) {

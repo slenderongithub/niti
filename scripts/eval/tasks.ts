@@ -8,10 +8,16 @@
 //   edit      — can it change existing code without clobbering it?
 //   verify    — does it notice and fix its own broken output?
 //   restraint — does it leave alone what it was not asked to touch?
+//   multistep — can it carry one change through several files without losing the thread?
+//
+// Tasks marked `suite: "local"` aim at what small local models get wrong (losing track across
+// files, editing before finding). They run with --suite local, or by default under the local
+// profile; the default suite stays the original seven so cloud baselines stay comparable.
 
 export interface Task {
   name: string;
-  tests: "navigate" | "edit" | "verify" | "restraint";
+  tests: "navigate" | "edit" | "verify" | "restraint" | "multistep";
+  suite?: "local";
   files: Record<string, string>;
   prompt: string;
   // Returns null when the task passed, or a one-line reason it failed. `read` is project-relative
@@ -186,6 +192,46 @@ export const TASKS: Task[] = [
       const index = read("src/routes/index.ts");
       if (!index?.includes("comments")) return "the new route was never exported from index.ts";
       if (!index.includes("users") || !index.includes("posts")) return "index.ts lost its existing exports";
+      return null;
+    },
+  },
+  {
+    name: "carry-a-rename-through-three-files",
+    tests: "multistep",
+    suite: "local",
+    files: {
+      "package.json": PKG,
+      "src/cli.ts": "import { help } from './help.ts';\n\nexport function parse(argv: string[]) {\n  return { verbose: argv.includes('--verbose'), help: argv.includes('--help') ? help() : '' };\n}\n",
+      "src/help.ts": "export function help(): string {\n  return 'usage: tool [--verbose] [--help]\\n  --verbose  print every step';\n}\n",
+      "README.md": "# tool\n\nRun `tool --verbose` to print every step.\n",
+    },
+    prompt: "Rename the --verbose flag to --debug everywhere: the parser, the help text and the README. Keep everything else as it is.",
+    check: (read) => {
+      for (const f of ["src/cli.ts", "src/help.ts", "README.md"]) {
+        const t = read(f) ?? "";
+        if (t.includes("--verbose")) return `${f} still mentions --verbose`;
+        if (!t.includes("--debug")) return `${f} never got --debug`;
+      }
+      if (!read("src/cli.ts")!.includes("--help")) return "src/cli.ts lost --help";
+      if (!read("src/help.ts")!.includes("print every step")) return "the help text lost its description";
+      return null;
+    },
+  },
+  {
+    name: "find-the-check-before-fixing-it",
+    tests: "navigate",
+    suite: "local",
+    files: {
+      "package.json": PKG,
+      ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`src/orders/step-${i}.ts`, `export const step${i} = (n: number) => n * ${i + 1};\n`])),
+      "src/orders/validate.ts": "export function validate(order: { quantity: number }): void {\n  if (order.quantity < 0) throw new Error('invalid quantity');\n}\n",
+    },
+    prompt: "Orders with a quantity of 0 are accepted, but they should be rejected with the 'invalid quantity' error like negative ones are. Fix it.",
+    check: (read) => {
+      const v = read("src/orders/validate.ts") ?? "";
+      if (!/quantity\s*(<=\s*0|<\s*1)/.test(v)) return "validate.ts still accepts a quantity of 0";
+      if (!v.includes("invalid quantity")) return "the error message changed";
+      for (let i = 0; i < 12; i++) if (!(read(`src/orders/step-${i}.ts`) ?? "").includes(`n * ${i + 1}`)) return `step-${i}.ts was changed`;
       return null;
     },
   },

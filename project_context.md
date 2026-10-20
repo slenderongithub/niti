@@ -77,6 +77,18 @@ in one disappears from the others (the core answers by id; a second answer gets 
    context compaction near the ceiling (`agent/context.ts`), a todo list (`agent/todo.ts`),
    per-model-family steering (`agent/steering.ts`), a PageRank repo map in the system prompt
    (`agent/repomap.ts`), and forks (`spawn_fork`, same tools and permissions, depth-capped).
+   Malformed calls are answered, never run blind (`agent/toolcalls.ts`): arguments are repaired when
+   they are nearly JSON and otherwise refused with the parse error; a missing or mistyped required
+   argument is named; a tool that doesn't exist gets the nearest real one.
+   **Profiles** (`agent/profile.ts`): how the harness talks to a model. `standard` (cloud) is the
+   above unchanged. `local` (provider `local`, `ollama`, `lmstudio`, or `profile: local` on the agent)
+   is for 4–30B models on a laptop: a short `LOCAL_GUIDANCE` instead of `TOOL_GUIDANCE` (one call at a
+   time, no batching or forks), project instructions capped at 6k characters with a pointer to the
+   file, a 12-file map, no `list_dir`/`repo_map`/`hover`/`spawn_fork` and only named MCP tools,
+   warning at 65% and compacting at 75% of the real window, 16k-character results, a repeat guard
+   (the same call 3× is nudged, 5× ends the run), tool calls written as text (`<tool_call>`,
+   `<function=…>`, a bare JSON call) run as real ones, and the planner, replanner, integrate and goal
+   judge get grammar-constrained JSON. `/model` rebuilds the prompt for the new model's profile.
 4. **Interrupting one agent.** Each agent has its own abort controller and step counter on top of the
    run's: `Engine.interruptAgent` stops the agent that owns an in-progress task mid-call, denies its
    pending approvals, and it carries on from your message. Cancel stops the whole run.
@@ -187,6 +199,7 @@ agents:
     lead: boolean           # plans goals into tasks
     allowedTools, autoApprove: string[]
     baseURL: string         # custom OpenAI-compatible endpoint
+    profile: local|standard # how the harness talks to it; default from the provider
     permissions: {tool: {pattern: allow|ask|deny}}
 permissions: {tool: {pattern: allow|ask|deny}}   # project default
 lsp: {name: {command, args?, extensions}}
@@ -271,7 +284,7 @@ fixture (`NITI_HF_URL`, or an injected fetch).
 | Desktop app (typecheck, tests, build, live, smoke, audit, perf) | `cd niti-app && npm run check` |
 | Relay | `cd niti-relay && bun test && bunx tsc --noEmit` |
 | Mobile | `cd niti-mobile && npm run typecheck && bun test ./src && npx expo export --platform ios` |
-| Agent quality (before and after any agent-loop or tool change) | `bun run scripts/eval/run.ts --repeat 3` |
+| Agent quality (before and after any agent-loop or tool change) | `bun run scripts/eval/run.ts --repeat 3` (cloud) · `--provider local --model <repo>:<quant>` or `--base-url <url> --profile local` (a local model; adds the `suite: local` tasks) |
 
 ## Releasing
 

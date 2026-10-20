@@ -602,3 +602,24 @@ test("a live model switch is saved, so a restart doesn't put the agent back on i
   expect(failing.configs[0]!.model).toBe("newer");
   expect(warnings.some((w) => w.includes("not saved"))).toBe(true);
 });
+
+test("each agent's system prompt follows its profile, and /model rebuilds it for the new model", () => {
+  const fake: Provider = { send: async () => ({ text: "ok", toolCalls: [] }) };
+  const configs: AgentConfig[] = [
+    { id: "cloud", provider: "anthropic", model: "claude-x", role: "r", systemPrompt: "You are cloud." },
+    { id: "mac", provider: "local", model: "a/b-GGUF:Q4_K_M", role: "r", systemPrompt: "You are local." },
+  ];
+  const long = "# Project instructions (AGENTS.md)\n" + "do the thing carefully.\n".repeat(1000);
+  const engine = new Engine({ configs, makeProvider: () => fake, interactive: false, repoMap: false, systemSuffix: long });
+  const prompt = (id: string) => (engine as unknown as { byId: Map<string, { config: AgentConfig }> }).byId.get(id)!.config.systemPrompt;
+  expect(prompt("cloud")).toContain("Batch your reads");
+  expect(prompt("cloud")).toContain(long);
+  expect(prompt("mac")).toContain("one tool call at a time");
+  expect(prompt("mac")).not.toContain("Batch your reads");
+  expect(prompt("mac").length).toBeLessThan(9000);
+  expect(engine.switchModel("cloud", "local", "a/b-GGUF:Q4_K_M")).toBeUndefined();
+  expect(prompt("cloud").startsWith("You are cloud.")).toBe(true);
+  expect(prompt("cloud")).toContain("one tool call at a time");
+  // The declared prompt the dashboard edits is still the one from agents.yaml.
+  expect(engine.configs.find((c) => c.id === "cloud")!.systemPrompt).toBe("You are cloud.");
+});

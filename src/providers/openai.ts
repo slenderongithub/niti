@@ -1,14 +1,14 @@
 import OpenAI from "openai";
 import type { Provider, Turn, ToolSpec, ToolCall, ProviderReply, OnDelta, RateLimit, Reasoning } from "./provider.ts";
 import { rateLimitFetch, cacheBreakpoints } from "./provider.ts";
+import { parseToolArgs, splitThinking } from "../agent/toolcalls.ts";
 
-function parseArgs(s: string | undefined): Record<string, unknown> {
-  if (!s) return {};
-  try {
-    return JSON.parse(s);
-  } catch {
-    return {};
-  }
+// Runtimes on this Mac, whose output gets the extra inline-thinking handling (see splitThinking).
+const LOCAL_VENDORS = new Set(["local", "ollama", "lmstudio"]);
+
+function toCall(id: string, name: string, args: string | undefined): ToolCall {
+  const { input, error } = parseToolArgs(args);
+  return { id, name, input, ...(error ? { parseError: error } : {}) };
 }
 
 // What an OpenAI-compatible reasoning model returned alongside its answer, kept on the assistant
@@ -160,12 +160,13 @@ export class OpenAIProvider implements Provider {
     if (!onDelta) {
       const res = await this.client.chat.completions.create(params, { signal });
       const msg = res.choices[0]?.message as (OpenAI.Chat.Completions.ChatCompletionMessage & ReasoningFields) | undefined;
-      const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).flatMap((tc) =>
-        tc.type === "function" ? [{ id: tc.id, name: tc.function.name, input: parseArgs(tc.function.arguments) }] : [],
-      );
+      const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).flatMap((tc) => (tc.type === "function" ? [toCall(tc.id, tc.function.name, tc.function.arguments)] : []));
+      // Inline thinking is dropped, not replayed as reasoning_content: a runtime that put it in the
+      // content has no such field, and chat templates strip earlier turns' thinking anyway.
+      const { answer } = splitThinking(msg?.content ?? "", LOCAL_VENDORS.has(tag));
       const raw = captureReasoning(tag, msg?.reasoning_content ?? msg?.reasoning ?? "", Array.isArray(msg?.reasoning_details) ? msg.reasoning_details : []);
       const truncated = res.choices[0]?.finish_reason === "length";
-      return { text: msg?.content ?? "", toolCalls, usage: mapUsage(res.usage), rateLimit: this.lastRateLimit, truncated, ...(raw ? { raw } : {}) };
+      return { text: answer, toolCalls, usage: mapUsage(res.usage), rateLimit: this.lastRateLimit, truncated, ...(raw ? { raw } : {}) };
     }
 
     // Streaming: accumulate text (emitted live) and tool-call fragments (arrive by index).
@@ -179,6 +180,7 @@ export class OpenAIProvider implements Provider {
       ...(this.supportsUsageOption ? { stream_options: { include_usage: true } } : {}),
     }, { signal });
     let text = "";
+    let shown = 0; // characters of the answer already streamed (thinking excluded)
     let reasoning = "";
     const details: Record<string, unknown>[] = [];
     let usage: ReturnType<typeof mapUsage>;
@@ -195,7 +197,14 @@ export class OpenAIProvider implements Provider {
       if (d?.reasoning_details) mergeDetails(details, d.reasoning_details);
       if (d?.content) {
         text += d.content;
-        onDelta(d.content);
+        // Inline thinking is held back from the live stream: only the answer after it is shown —
+        // and so is a start that may still become "<think>" once its next chunk arrives.
+        const head = text.trimStart();
+        const visible = head.length < 7 && "<think>".startsWith(head) ? "" : splitThinking(text, LOCAL_VENDORS.has(tag)).answer;
+        if (visible.length > shown) {
+          onDelta(visible.slice(shown));
+          shown = visible.length;
+        }
       }
       for (const tc of d?.tool_calls ?? []) {
         const a = (acc[tc.index] ??= { args: "" });
@@ -208,9 +217,10 @@ export class OpenAIProvider implements Provider {
       .filter((a) => a.name)
       // A runtime that sends no id: one unique per call, never the bare name — ids are what results,
       // the UI's live blocks and observation masking pair on, across the whole conversation.
-      .map((a) => ({ id: a.id ?? `${a.name}-${crypto.randomUUID().slice(0, 8)}`, name: a.name!, input: parseArgs(a.args) }));
+      .map((a) => toCall(a.id ?? `${a.name}-${crypto.randomUUID().slice(0, 8)}`, a.name!, a.args));
+    const { answer } = splitThinking(text, LOCAL_VENDORS.has(tag));
     const raw = captureReasoning(tag, reasoning, details);
-    return { text, toolCalls, usage, rateLimit: this.lastRateLimit, truncated, ...(raw ? { raw } : {}) };
+    return { text: answer, toolCalls, usage, rateLimit: this.lastRateLimit, truncated, ...(raw ? { raw } : {}) };
   }
 }
 

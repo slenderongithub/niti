@@ -405,6 +405,7 @@ export async function schedule(tasks: TaskNode[], agents: Agent[], deps: Schedul
           `Reply with ONLY JSON: {"summary": ["…", "…"], "next": ["…"]}.\n` +
           `- summary: 2-6 short bullet lines for the user — what changed (name files), what was verified, what is still open. No preamble.\n` +
           `- next: up to 3 short next requests the user is likely to send now (imperative, under 60 characters each, e.g. "run the full test suite"). Empty if the work is plainly finished.`,
+        { json: true },
       );
       const { summary, next } = parseIntegrate(raw);
       bus?.publish({ agentId: lead.config.id, type: "message", payload: summary, time: Date.now() });

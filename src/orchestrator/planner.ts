@@ -25,7 +25,7 @@ export interface Exchange {
 // Minimal shape the planner needs — Agent satisfies it, and tests can pass a fake.
 export interface PlannerAgent {
   config: { id: string; role?: string };
-  ask(prompt: string): Promise<string>;
+  ask(prompt: string, opts?: { json?: boolean }): Promise<string>;
 }
 
 export interface RoleInfo {
@@ -211,7 +211,7 @@ export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo
   for (let attempt = 0; attempt < MAX_PLAN_ATTEMPTS; attempt++) {
     let raw: string;
     try {
-      raw = await lead.ask(plannerPrompt(goal, roles, correction, history, unfinished));
+      raw = await lead.ask(plannerPrompt(goal, roles, correction, history, unfinished), { json: true });
       answered = true;
     } catch (err) {
       lastError = err;
@@ -284,7 +284,7 @@ export async function replan(
   for (let attempt = 0; attempt < MAX_REPLAN_PLANNER_ATTEMPTS; attempt++) {
     let raw: string;
     try {
-      raw = await lead.ask(replanPrompt(ctx, correction));
+      raw = await lead.ask(replanPrompt(ctx, correction), { json: true });
     } catch (err) {
       correction = summarizeError(err);
       continue;

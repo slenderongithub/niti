@@ -49,12 +49,15 @@ test("a tool call round-trips: our Turn[] out, OpenAI's tool_calls back in", asy
   expect(out.text).toBe("");
 });
 
-test("malformed tool arguments degrade to an empty input instead of throwing", async () => {
-  // A model emitting truncated JSON must not take the whole agent loop down with it.
+test("malformed tool arguments don't throw: repaired when possible, otherwise the call says why", async () => {
+  // A model emitting truncated JSON must not take the whole agent loop down with it — and must be
+  // told, rather than having its call run with empty arguments.
   const p = new OpenAIProvider("gpt-4o", "k");
   withStub(p, reply({ content: null, tool_calls: [{ id: "c", type: "function", function: { name: "shell", arguments: '{"command":' } }] }));
   const out = await p.send("s", [{ role: "user", text: "go" }], []);
-  expect(out.toolCalls).toEqual([{ id: "c", name: "shell", input: {} }]);
+  expect(out.toolCalls).toEqual([{ id: "c", name: "shell", input: {}, parseError: expect.stringContaining("not valid JSON") }]);
+  withStub(p, reply({ content: null, tool_calls: [{ id: "d", type: "function", function: { name: "read_file", arguments: '```json\n{"path": "a.ts",}\n```' } }] }));
+  expect((await p.send("s", [{ role: "user", text: "go" }], [])).toolCalls).toEqual([{ id: "d", name: "read_file", input: { path: "a.ts" } }]);
 });
 
 test("usage is normalised, and a reply with no choices is empty rather than a crash", async () => {
@@ -256,4 +259,30 @@ test("a reply stopped at the length limit is flagged truncated", async () => {
   const p = new OpenAIProvider("gpt-4o", "k");
   withStub(p, { choices: [{ message: { content: "half" }, finish_reason: "length" }] });
   expect((await p.send("S", [{ role: "user", text: "hi" }], [])).truncated).toBe(true);
+});
+
+test("inline <think> is kept out of the answer; a bare </think> only for runtimes on this Mac", async () => {
+  const p = new OpenAIProvider("qwen", "k", undefined, undefined, undefined, { vendor: "ollama" });
+  withStub(p, reply({ content: "<think>plan it</think>\n\nThe answer." }));
+  expect((await p.send("s", [{ role: "user", text: "go" }], [])).text).toBe("The answer.");
+  withStub(p, reply({ content: "reasoning that the template opened</think>Done." }));
+  expect((await p.send("s", [{ role: "user", text: "go" }], [])).text).toBe("Done.");
+  const hosted = new OpenAIProvider("x", "k", undefined, undefined, undefined, { vendor: "groq" });
+  withStub(hosted, reply({ content: "close tags look like `</think>` in XML" }));
+  expect((await hosted.send("s", [{ role: "user", text: "go" }], [])).text).toBe("close tags look like `</think>` in XML");
+});
+
+test("a streamed reply's inline thinking never reaches the live deltas", async () => {
+  const p = new OpenAIProvider("qwen", "k", undefined, undefined, undefined, { vendor: "local" });
+  const chunks = ["<thi", "nk>hmm", " let me see</think>", "Hel", "lo"].map((c) => ({ choices: [{ delta: { content: c } }] }));
+  chunks.push({ choices: [], timings: { prompt_n: 30, predicted_n: 5, cache_n: 70 } } as never);
+  (p as unknown as { client: unknown }).client = {
+    chat: { completions: { create: async () => (async function* () { yield* chunks; })() } },
+  };
+  const deltas: string[] = [];
+  const out = await p.send("s", [{ role: "user", text: "go" }], [], (d) => deltas.push(d));
+  expect(deltas.join("")).toBe("Hello");
+  expect(out.text).toBe("Hello");
+  // llama-server's timings stand in for usage: the cached prefix counts as prompt.
+  expect(out.usage).toMatchObject({ inputTokens: 100, outputTokens: 5, cacheReadTokens: 70 });
 });

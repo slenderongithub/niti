@@ -47,6 +47,9 @@ export interface ToolCall {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  // The arguments arrived but couldn't be read (not JSON, even after repair). The call is answered
+  // with this instead of being run with empty arguments.
+  parseError?: string;
 }
 
 export interface ToolResult {
@@ -125,7 +128,10 @@ export interface Provider {
   // `thinking`: the user's thinking-mode switch, per call. false → omit every reasoning/thinking
   // parameter, even one configured on the agent. (It was a setter on the provider once, which only
   // the task loops called — planning, debate and compaction ran on whatever value was left over.)
-  send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking?: boolean): Promise<ProviderReply>;
+  // `format: "json"`: the reply must be one JSON value (the planner, the judge). Providers that can
+  // constrain their output to it do (the local runtime, by grammar); the rest ignore it, and the
+  // caller still parses and validates what comes back.
+  send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking?: boolean, format?: "json"): Promise<ProviderReply>;
   // Optional: not every provider has an embeddings API (Anthropic doesn't at all). Callers that
   // want semantic search (see niti IDE's codebase index) must check for this before calling it,
   // and fall back to a non-semantic strategy when it's absent — never assume every provider has it.

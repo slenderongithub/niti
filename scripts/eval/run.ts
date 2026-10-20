@@ -7,6 +7,9 @@
 //   bun run scripts/eval/run.ts --repeat 3 --save-tokens base.json   (then --gate-tokens base.json after a change)
 //   bun run scripts/eval/run.ts --repeat 3 --repo-map off            (A/B the map in the system prompt)
 //   bun run scripts/eval/run.ts --repeat 3 --edit-format hashline    (A/B anchored edits for this model)
+//   bun run scripts/eval/run.ts --provider local --model unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M --repeat 3
+//                                                                    (a downloaded model, through niti's own runtime)
+//   bun run scripts/eval/run.ts --provider custom --base-url http://127.0.0.1:8080/v1 --model x --profile local
 //
 // Use --repeat 3 or more for any comparison you intend to act on. A single pass is a smoke test:
 // the same fixture on an unchanged harness scored 4/5 across five runs, so one run of the suite
@@ -26,7 +29,8 @@ import { UsageTracker } from "../../src/usage.ts";
 import { makeProvider } from "../../src/providers/factory.ts";
 import type { Provider } from "../../src/providers/provider.ts";
 import { detectChecks } from "../../src/agent/verify.ts";
-import { TOOL_GUIDANCE, HASHLINE_GUIDANCE } from "../../src/tools/tools.ts";
+import { HASHLINE_GUIDANCE } from "../../src/tools/tools.ts";
+import { profileFor } from "../../src/agent/profile.ts";
 import { steeringFor } from "../../src/agent/steering.ts";
 import { repoMapSection } from "../../src/agent/repomap.ts";
 import { costOf, inputIncludesCache } from "../../src/providers/pricing.ts";
@@ -41,6 +45,12 @@ const flag = (name: string, fallback: string): string => {
 const provider = flag("provider", "google");
 const model = flag("model", "gemini-flash-latest");
 const repeat = Math.max(1, Number(flag("repeat", "1")));
+// --base-url: any OpenAI-compatible server (a llama-server you started yourself, vLLM, …).
+const baseURL = flag("base-url", "") || undefined;
+// --profile local|standard: override the profile the provider implies (src/agent/profile.ts) —
+// e.g. a custom endpoint serving a small model, or A/B-ing the local profile on one model.
+const profileFlag = flag("profile", "");
+const profileName = profileFlag === "local" || profileFlag === "standard" ? profileFlag : undefined;
 const only = flag("only", "");
 // --edit-format hashline: run the suite with anchored edits instead of str_replace, to decide per
 // model whether to turn it on (agents.yaml `editFormat: hashline`).
@@ -168,17 +178,20 @@ function paced(inner: Provider): Provider {
 async function runOne(task: Task): Promise<Attempt> {
   const dir = setup(task);
   const usage = new TracingUsage();
+  const prof = profileFor({ provider, profile: profileName });
   const cfg: AgentConfig = {
     id: "eval",
     provider,
     model,
     role: "Engineer",
-    // Same prompt the Engine assembles. repoMapSection is empty below its file threshold, so the
-    // small fixtures run map-less exactly as they would under the Engine, and the larger one gets
-    // the map. Leaving the per-model steering out would measure a harness nobody runs.
-    systemPrompt: SYSTEM_PROMPT + (repoMap ? repoMapSection(dir) : "") + TOOL_GUIDANCE + (editFormat ? HASHLINE_GUIDANCE : "") + steeringFor(provider, model),
+    // Same prompt the Engine assembles, for the same profile. repoMapSection is empty below its file
+    // threshold, so the small fixtures run map-less exactly as they would under the Engine, and the
+    // larger one gets the map. Leaving the per-model steering out would measure a harness nobody runs.
+    systemPrompt: SYSTEM_PROMPT + (repoMap ? repoMapSection(dir, prof.repoMap, prof.repoMap.hint) : "") + prof.guidance + (editFormat ? HASHLINE_GUIDANCE : "") + steeringFor(provider, model),
     allowedTools: ["read_file", "write_file", "edit", "shell"],
     ...(editFormat ? { editFormat } : {}),
+    ...(baseURL ? { baseURL } : {}),
+    ...(profileName ? { profile: profileName } : {}),
   };
   const bus = new Bus();
   // Tool names for the trace. file_edit is what a write tool publishes instead of tool_call.
@@ -244,13 +257,16 @@ function wilson(k: number, n: number): [number, number] {
   return [Math.round(Math.max(0, c - m) * 100), Math.round(Math.min(1, c + m) * 100)];
 }
 
-const selected = only ? TASKS.filter((t) => t.tests === only || t.name.includes(only)) : TASKS;
+// --suite local|all: the local-model tasks run by default under the local profile, else only on request.
+const suite = flag("suite", profileFor({ provider, profile: profileName }).name === "local" ? "all" : "default");
+const inSuite = TASKS.filter((t) => suite === "all" || (suite === "local" ? t.suite === "local" : !t.suite));
+const selected = only ? inSuite.filter((t) => t.tests === only || t.name.includes(only)) : inSuite;
 if (selected.length === 0) {
   console.error(`no tasks match '${only}'. Tasks: ${TASKS.map((t) => t.name).join(", ")}`);
   process.exit(1);
 }
 
-console.log(`\n  ${provider}/${model}${editFormat ? " · hashline edits" : ""}${repoMap ? "" : " · no repo map"} · ${selected.length} tasks${repeat > 1 ? ` × ${repeat}` : ""}\n`);
+console.log(`\n  ${provider}/${model} · ${profileFor({ provider, profile: profileName }).name} profile${editFormat ? " · hashline edits" : ""}${repoMap ? "" : " · no repo map"} · ${selected.length} tasks${repeat > 1 ? ` × ${repeat}` : ""}\n`);
 
 let passed = 0;
 let scored = 0;

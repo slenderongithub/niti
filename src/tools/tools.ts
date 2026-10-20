@@ -939,7 +939,12 @@ const SPECS: Record<string, ToolSpec> = {
   },
 };
 
-// Appended to every agent's system prompt. Git awareness is guidance, not a tool: `shell` already
+// Every sandbox tool's name, offered or not: the agent tells a tool it wasn't given apart from one
+// that doesn't exist.
+export const BUILTIN_TOOLS: ReadonlySet<string> = new Set(Object.keys(SPECS));
+
+// Appended to the system prompt of every agent on the standard profile (cloud models; a model on this
+// Mac gets the shorter LOCAL_GUIDANCE, see agent/profile.ts). Git awareness is guidance, not a tool: `shell` already
 // runs git, and a project can make it silent with `permissions: { shell: { "git diff*": allow } }`
 // in .niti/agents.yaml — a dedicated git_diff tool would be a second path to the same place.
 export const TOOL_GUIDANCE = `

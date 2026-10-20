@@ -25,7 +25,7 @@ const ITERATIONS = 12; // converges well before this on graphs of a few hundred 
 // files tells it nothing it will not see immediately.
 const MIN_FILES = 12;
 
-interface RepoMapOptions {
+export interface RepoMapOptions {
   maxFiles?: number; // how many ranked files to show
   maxChars?: number; // hard ceiling on the rendered map
   path?: string; // only show files under this project-relative directory (the repo_map tool's zoom)
@@ -168,7 +168,8 @@ export function buildRepoMap(root: string, opts: RepoMapOptions = {}): string {
 
 // Wrapped for the system prompt. Empty when there is no map worth showing, so the caller can
 // concatenate unconditionally.
-export function repoMapSection(root: string, opts: RepoMapOptions = {}): string {
+// `hint: false` for an agent without the repo_map tool (the local profile), which can't follow it.
+export function repoMapSection(root: string, opts: RepoMapOptions = {}, hint = true): string {
   const map = buildRepoMap(root, opts);
-  return map ? `\n\n# Project map (generated at session start, may be stale — call repo_map for a fresh one)\n\n${map}` : "";
+  return map ? `\n\n# Project map (generated at session start, may be stale${hint ? " — call repo_map for a fresh one" : ""})\n\n${map}` : "";
 }

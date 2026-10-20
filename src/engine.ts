@@ -26,7 +26,8 @@ import type { SessionStore } from "./store/session-store.ts";
 import type { AuditLog } from "./store/audit-log.ts";
 import { AUTO_RULES, type PermissionRules } from "./permissions.ts";
 import { watchProject, type ProjectWatcher } from "./watch.ts";
-import { TOOL_GUIDANCE, HASHLINE_GUIDANCE } from "./tools/tools.ts";
+import { HASHLINE_GUIDANCE } from "./tools/tools.ts";
+import { profileFor, capInstructions, type Profile } from "./agent/profile.ts";
 import { saveTasks, resumeConversation } from "./session.ts";
 import { release as releaseAwake } from "./awake.ts";
 import { GoalLoop, type GoalHost, type RoundResult } from "./goal.ts";
@@ -103,6 +104,9 @@ export class Engine {
   private byId = new Map<string, Agent>();
   // agent id → the systemPrompt as written in agents.yaml, before any suffix was appended.
   private declaredPrompts = new Map<string, string>();
+  // The finished system prompt for a config: its own prompt, the project's instructions, the map and
+  // the guidance for its profile and model family. Kept so /model can rebuild it for the new model.
+  private composePrompt: (c: AgentConfig) => string = (c) => c.systemPrompt;
   private readonly permissionLayers: PermissionRules[];
   private busy = false;
   private cancelled = false;
@@ -190,13 +194,27 @@ export class Engine {
     // Built once, not per agent: it walks the tree and shells out to git, and every agent gets the
     // same map. Placed in the system prompt (ahead of the conversation) so a provider's cache
     // prefix still matches call to call — see anthropic.ts's cache_control placement.
-    const mapSection = opts.repoMap === false || broadRoot ? "" : repoMapSection(this.root);
+    // One map per profile (a local model gets a shorter one), built on first need.
+    const maps = new Map<string, string>();
+    const mapFor = (p: Profile) => {
+      if (opts.repoMap === false || broadRoot) return "";
+      if (!maps.has(p.name)) {
+        const { hint, ...mapOpts } = p.repoMap;
+        maps.set(p.name, repoMapSection(this.root, mapOpts, hint));
+      }
+      return maps.get(p.name)!;
+    };
+    // Per agent, because two agents on the same team routinely run different model families — and
+    // since profiles, some on this Mac and some in the cloud. The steering is appended last so it
+    // qualifies the shared guidance rather than being buried above it.
+    this.composePrompt = (c) => {
+      const p = profileFor(c);
+      return (this.declaredPrompts.get(c.id) ?? c.systemPrompt) + capInstructions(opts.systemSuffix ?? "", p.instructionsMax) + mapFor(p) + p.guidance + (c.editFormat === "hashline" ? HASHLINE_GUIDANCE : "") + steeringFor(c.provider, c.model);
+    };
 
     for (const c of opts.configs) {
       this.declaredPrompts.set(c.id, c.systemPrompt);
-      // Per agent, because two agents on the same team routinely run different model families.
-      // Appended last so it qualifies the shared guidance rather than being buried above it.
-      const cfg = { ...c, systemPrompt: c.systemPrompt + (opts.systemSuffix ?? "") + mapSection + TOOL_GUIDANCE + (c.editFormat === "hashline" ? HASHLINE_GUIDANCE : "") + steeringFor(c.provider, c.model) };
+      const cfg = { ...c, systemPrompt: this.composePrompt(c) };
       // A missing key (revoked, keychain wiped, never set) must not take the whole server down —
       // that would crash boot before the handshake line prints, leaving the TUI staring at an EOF
       // with no way back in short of editing agents.yaml by hand. Defer the failure to first use,
@@ -762,6 +780,9 @@ export class Engine {
     try {
       const p = this.makeProvider({ ...agent.config, provider, model, baseURL: url });
       agent.reconfigure(provider, model, p, url);
+      // The guidance, map and steering follow the model: a switch to (or from) a model on this Mac
+      // changes the profile, and a switch between families changes the steering.
+      agent.config.systemPrompt = this.composePrompt(agent.config);
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }
