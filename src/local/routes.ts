@@ -9,6 +9,7 @@ import { findLlamaServer, localRuntime, type RuntimeStatus } from "./runtime.ts"
 
 export interface LocalApi {
   handle(p: string, method: string, u: URL, body: () => Promise<any>): Promise<Response | undefined>;
+  downloads: DownloadManager;
 }
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -19,6 +20,7 @@ export function localApi(publish: { download: (p: DownloadProgress) => void; run
   const downloads = new DownloadManager(publish.download, dev, fetchImpl);
 
   return {
+    downloads,
     async handle(p, method, u, body) {
       if (!p.startsWith("/local/")) return undefined;
 

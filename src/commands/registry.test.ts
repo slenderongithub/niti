@@ -217,7 +217,7 @@ test("list() is what a client renders for autocomplete", () => {
   // Order matters: it's the order the TUI's "/" menu offers them in, and /help is appended last.
   expect(names).toEqual([
     "usage", "auto", "manual", "cancel", "awake", "remote", "goal", "rewind", "branch", "model", "sessions",
-    "agents", "tasks", "skills", "mcp", "lsp", "permissions", "cost", "status", "debate", "export", "resume", "clear", "init",
+    "agents", "tasks", "skills", "models", "mcp", "lsp", "permissions", "cost", "status", "debate", "export", "resume", "clear", "init",
     "help",
   ]);
   expect(new Set(names).size).toBe(names.length); // every name unique — one keystroke, one command

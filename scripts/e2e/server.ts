@@ -292,6 +292,9 @@ try {
   for (let i = 0; i < 50 && !events.some((e) => e.kind === "local_download" && e.download?.state === "done"); i++) await sleep(100);
   check("download finished and was announced", events.some((e) => e.kind === "local_download" && e.download?.id === id && e.download?.state === "done"));
   check("installed model is listed for the picker", ((await (await get("/models?provider=local")).json()) as any).models?.includes(id));
+  check("/models list shows it", (await cmd("models", "list")).message.includes(id));
+  const recCmd = await cmd("models");
+  check("/models recommends what runs here", recCmd.ok && recCmd.message.includes("fake-org/Tiny-Coder-GGUF") && recCmd.message.includes("/models get"), recCmd.message);
   check("an agent switches to the local model", (await post("/model", { agentId: "backend", provider: "local", model: id })).status === 200);
   approvePolicy = () => true;
   const mark = events.length;

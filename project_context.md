@@ -252,7 +252,7 @@ Events (`server/events.ts`, kind): `agent_event`, `agent_message`, `orchestratio
 event must keep that event's type: nest new data rather than adding top-level fields.
 
 Slash commands (`commands/registry.ts`): `/goal /cancel /awake /remote /auto /manual /rewind /branch
-/model /agents /tasks /status /cost /sessions /skills /mcp /lsp /permissions /debate /export /resume
+/model /agents /tasks /status /cost /sessions /skills /models /mcp /lsp /permissions /debate /export /resume
 /clear /init /help`, plus each client's own (`/theme`, `/quit`…) and project commands.
 
 ## Remote control (`src/remote/`, `niti-relay/`, `niti-mobile/`)

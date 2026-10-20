@@ -125,6 +125,7 @@ export function startServer(
     },
     opts.localFetch,
   );
+  engine.localDownloads = local.downloads;
 
   // buildFileGraph walks the project and reads every source file to extract imports — synchronously,
   // on the event loop. The graph page polls this, so a large repo stalled every other route

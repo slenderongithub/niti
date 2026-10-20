@@ -59,7 +59,7 @@ The published package (`@slenderbuilds/niti` on npm) ships per-platform binaries
 
 **Commands** come from the engine, so every front end has the same ones: `/goal`, `/cancel`, `/awake`,
 `/remote`, `/auto`, `/manual`, `/rewind`, `/branch`, `/model`, `/agents`, `/tasks`, `/status`, `/cost`,
-`/sessions`, `/skills`, `/mcp`, `/lsp`, `/permissions`, `/debate`, `/export`, `/resume`, `/clear`, `/init`,
+`/sessions`, `/skills`, `/models`, `/mcp`, `/lsp`, `/permissions`, `/debate`, `/export`, `/resume`, `/clear`, `/init`,
 `/help`, plus project commands in `.niti/commands/*.md`. While a goal runs, what you type is a note to
 its next round, and the header shows the round.
 

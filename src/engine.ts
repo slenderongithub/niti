@@ -94,6 +94,9 @@ export class Engine {
   readonly bootId = crypto.randomUUID().slice(0, 8);
   // Remote control (src/remote/bridge.ts), when the server started it.
   remote?: RemoteBridge;
+  // The server's local-model downloads (src/local/routes.ts), so /models get reports through the
+  // same progress events the app's Models page shows. Absent in headless runs.
+  localDownloads?: { start(repo: string, quant: string): Promise<{ id: string; total: number }> };
   // Headless only: tool calls refused because there was no one to approve them. A model can still
   // report its task "done" after every write was refused, so the CLI's exit code reads this rather
   // than trusting the task statuses alone.

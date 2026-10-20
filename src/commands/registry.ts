@@ -235,6 +235,33 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
+    name: "models",
+    description: "Models that run on this Mac: /models [search <q> | get <repo>[:<quant>] | list | rm <repo>:<quant>]",
+    async run(engine, args, ctx) {
+      // Gigabytes of downloads and deletes are decided at the Mac (the bridge doesn't forward this
+      // command either; this is the second lock).
+      if (ctx?.origin === "remote") return { ok: false, message: "/models can only be run on the Mac" };
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const { modelsCommand } = await import("../local/cli.ts");
+      if (parts[0] === "get" && engine.localDownloads) {
+        const { parseModelId } = await import("../local/store.ts");
+        const { modelDetail } = await import("../local/catalog.ts");
+        const { device } = await import("../local/fit.ts");
+        const target = parts[1] ?? "";
+        const parsed = parseModelId(target);
+        const repo = parsed?.repo ?? target;
+        if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return { ok: false, message: "usage: /models get <repo>[:<quant>]" };
+        const quant = parsed?.quant ?? (await modelDetail(repo, device())).pick?.quant;
+        if (!quant) return { ok: false, message: `${repo} has no quantization that fits this Mac` };
+        const d = await engine.localDownloads.start(repo, quant);
+        return { ok: true, message: `downloading ${d.id}${d.total ? ` (${(d.total / 1e9).toFixed(1)} GB)` : ""} in the background — /models list shows it once it's installed; use it with /model <agent> local/${d.id}` };
+      }
+      const lines: string[] = [];
+      const code = await modelsCommand(parts, (s) => lines.push(s.replaceAll("niti-core models", "/models")));
+      return { ok: code === 0, message: lines.join("\n") };
+    },
+  },
+  {
     name: "mcp",
     description: "List connected MCP servers and how many tools each contributes",
     async run(engine) {
