@@ -314,6 +314,23 @@ test("a local agent starts the runtime on first call, learns its context, and ta
   }
 });
 
+test("a server a killed core left behind is stopped by the next runtime", async () => {
+  process.env.NITI_LLAMA_SERVER = FAKE;
+  const { reapOrphans } = await import("./runtime.ts");
+  const id = "unsloth/Qwen3-4B-GGUF:Q4_K_M";
+  if (!getInstalled(id)) saveManifest({ id, repo: "unsloth/Qwen3-4B-GGUF", quant: "Q4_K_M", files: ["Qwen3-4B-Q4_K_M.gguf"], bytes: 1, installedAt: 0 });
+  writeFileSync(join(repoDir("unsloth/Qwen3-4B-GGUF"), "Qwen3-4B-Q4_K_M.gguf"), "GGUF");
+  const rt = new LocalRuntime();
+  await rt.ensure(id, "a");
+  const pid = (rt as unknown as { servers: Map<string, { proc: { pid: number } }> }).servers.get(id)!.proc.pid;
+  // Pretend the core that started it died without cleaning up: its record names a dead owner.
+  writeFileSync(join(process.env.NITI_LOCAL_MODELS_DIR!, "runtime.pids"), JSON.stringify({ owner: 999_999, pids: [pid] }));
+  expect(reapOrphans()).toBe(1);
+  await Bun.sleep(300);
+  expect(() => process.kill(pid, 0)).toThrow();
+  delete process.env.NITI_LLAMA_SERVER;
+});
+
 test("a model that isn't installed fails with where to get it", async () => {
   const rt = new LocalRuntime();
   await expect(new LocalProvider("nobody/none-GGUF:Q4_K_M", "a", undefined, undefined, rt).send("s", [], [])).rejects.toThrow("not installed");

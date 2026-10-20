@@ -3,7 +3,7 @@
 // turns (re-reading a 20k-token conversation costs tens of seconds on a laptop; a cache hit costs
 // nothing). Started on first use, stopped after a quiet spell and when the core exits. It listens on
 // 127.0.0.1 only, on a free port, so nothing off this Mac can reach it.
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Subprocess } from "bun";
 import { getInstalled, modelPath, modelsDir, updateManifest, type InstalledModel } from "./store.ts";
@@ -97,6 +97,7 @@ export class LocalRuntime {
 
   constructor(public onStatus: (s: RuntimeStatus) => void = () => {}) {
     process.on("exit", () => this.stopAll());
+    reapOrphans();
   }
 
   // Agents announce which model they use before their first call, so the server starts with one
@@ -163,6 +164,7 @@ export class LocalRuntime {
     this.servers.set(m.id, s);
     this.onStatus({ model: m.id, state: "loading", ctx, slots });
     s.proc = Bun.spawn(cmd, { stdout: "ignore", stderr: "pipe" });
+    recordPids([...this.servers.values()].map((x) => x.proc?.pid).filter((p): p is number => !!p));
     const stderr = collect(s.proc.stderr as ReadableStream<Uint8Array>);
     s.ready = (async () => {
       const deadline = Date.now() + Number(process.env.NITI_LOCAL_LOAD_MS ?? 300_000);
@@ -239,12 +241,56 @@ export class LocalRuntime {
     if (!s) return;
     s.proc?.kill();
     this.servers.delete(model);
+    recordPids([...this.servers.values()].map((x) => x.proc?.pid).filter((p): p is number => !!p));
     this.onStatus({ model, state: "stopped" });
   }
 
   stopAll(): void {
     for (const m of [...this.servers.keys()]) this.stop(m);
   }
+}
+
+// A core killed outright (SIGKILL, a crash) never runs its exit hook, and the llama-server it
+// started would hold gigabytes of memory until reboot. The running servers' pids are kept beside the
+// models; the next runtime stops any that are still llama-server processes (checked by name, so a
+// recycled pid belonging to something else is never touched).
+const pidFile = () => join(modelsDir(), "runtime.pids");
+
+function recordPids(pids: number[]): void {
+  try {
+    mkdirSync(modelsDir(), { recursive: true });
+    writeFileSync(pidFile(), JSON.stringify({ owner: process.pid, pids }));
+  } catch {
+    // best effort
+  }
+}
+
+export function reapOrphans(): number {
+  let reaped = 0;
+  try {
+    const { owner, pids } = JSON.parse(readFileSync(pidFile(), "utf8")) as { owner: number; pids: number[] };
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    // Another core that is still running owns these: leave them.
+    if (owner !== process.pid && alive(owner)) return 0;
+    for (const pid of pids) {
+      if (!alive(pid)) continue;
+      const comm = Bun.spawnSync(["ps", "-p", String(pid), "-o", "command="]).stdout.toString();
+      if (!/llama-server|fakellama/.test(comm)) continue;
+      process.kill(pid, "SIGTERM");
+      reaped++;
+    }
+    recordPids([]);
+  } catch {
+    // no record, or unreadable: nothing to reap
+  }
+  return reaped;
 }
 
 function collect(stream: ReadableStream<Uint8Array> | undefined): { text: () => string } {
