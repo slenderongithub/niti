@@ -606,7 +606,7 @@ test("a model that never calls a tool is chat only, with the reason", async () =
   saveManifest({ id, repo: "quiet/Talker-GGUF", quant: "Q4_K_M", files: ["t.gguf"], bytes: 1, installedAt: 0 });
   writeFileSync(join(repoDir("quiet/Talker-GGUF"), "t.gguf"), "GGUF");
   // A runtime whose "server" only ever talks (a stand-in, never started).
-  const rt = { ensure: async () => ({ baseURL: "http://127.0.0.1:1/v1", apiKey: "k", slot: 0, ctx: 8192, manifest: getInstalled(id)! }), begin() {}, end() {}, stop() {}, register() {}, unregister() {}, onStatus() {} } as never;
+  const rt = { ensure: async () => ({ baseURL: "http://127.0.0.1:1/v1", apiKey: "k", slot: 0, ctx: 8192, manifest: getInstalled(id)! }), begin() {}, end() {}, stop() {}, register() {}, unregister() {}, release() {}, onStatus() {} } as never;
   const realSend = LocalProvider.prototype.send;
   LocalProvider.prototype.send = async function () {
     return { text: "I would create hello.txt with the text hi. Here's how you can do it yourself…", toolCalls: [] };

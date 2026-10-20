@@ -1,3 +1,4 @@
+import { personaOf, zooReply } from "./fakezoo.ts";
 // A scripted OpenAI-compatible chat server for end-to-end tests of niti. No network, no cost.
 // Behaviour: planner prompts get a 2-task plan; a worker with no tool result yet writes a file;
 // after a tool result it finishes; /goal's judge says "not yet" once, then "done"; anything else
@@ -8,7 +9,16 @@ let judged = 0; // /goal's judge: "not yet" the first time, "done" after that
 
 // A local agent (the action protocol offers `finish`) ends a task by calling it, as a well-behaved
 // local model does; anything else ends on text.
+// A zoo persona (fakezoo.ts) when the fake engine was started for one; stop sequences honoured as a
+// real engine would.
+const persona = process.env.NITI_FAKE_PERSONA ? personaOf(`zoo/${process.env.NITI_FAKE_PERSONA}-GGUF`) : undefined;
+
 function reply(body: any): { text?: string; tool?: { name: string; args: unknown } } {
+  if (persona) {
+    const r = zooReply(persona, body);
+    if (r.text !== undefined) for (const s of body.stop ?? []) if (r.text.includes(s)) r.text = r.text.slice(0, r.text.indexOf(s));
+    return r;
+  }
   const r = script(body);
   const tools: string[] = (body.tools ?? []).map((t: any) => t.function?.name);
   return r.text !== undefined && tools.includes("finish") ? { tool: { name: "finish", args: { summary: r.text } } } : r;

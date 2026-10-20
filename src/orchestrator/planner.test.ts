@@ -187,3 +187,10 @@ test("a plan that falls back says why", async () => {
   expect(plan.tasks.length).toBe(1);
   expect(plan.fallback).toContain("expected");
 });
+
+test("a team with no model that can change files is told so, instead of getting tasks", async () => {
+  const roles = team.map((r) => ({ ...r, ready: false }));
+  const plan = await makePlan(localLead(["work"]) as never, "build the site", roles);
+  expect(plan.tasks).toEqual([]);
+  expect(plan.reply).toContain("None of this team's models can change files");
+});

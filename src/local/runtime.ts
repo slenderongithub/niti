@@ -197,6 +197,12 @@ export class LocalRuntime {
     return { baseURL: `http://127.0.0.1:${s.port}/v1`, apiKey: s.apiKey, slot, ctx: s.ctx, manifest: getInstalled(model) ?? manifest };
   }
 
+  // Done with it for now: it gives way to a model waiting for room without the swap grace.
+  release(model: string): void {
+    const s = this.servers.get(model);
+    if (s && s.inFlight === 0) s.lastUsed = 0;
+  }
+
   begin(model: string): void {
     const s = this.servers.get(model);
     if (s) s.inFlight++;

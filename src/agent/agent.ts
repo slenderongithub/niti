@@ -609,7 +609,9 @@ export class Agent {
           this.injectNotes(turns, sessionId);
           this.restateTodos(turns, ctx);
           this.maskOldObservations(turns, ctx);
-          const tools = this.buildTools(allowed, ctx);
+          // A checklist is written once; until something is done, the tool to rewrite it isn't offered
+          // (a forced turn could otherwise pick it again and again).
+          const tools = protocol && (ctx.todoCalls ?? 0) > 0 && !acted ? this.buildTools(allowed, ctx).filter((t) => t.name !== "todo") : this.buildTools(allowed, ctx);
           const reply = protocol ? await this.localTurn(turns, tools, onDelta, i === 0 || rejected > 0) : await this.send(turns, tools, onDelta);
           // Under the protocol a reply with no call is either refused (and must not reach the chat)
           // or never happens; finish's summary is published where it's read, below.
@@ -861,6 +863,13 @@ export class Agent {
     if (!found) return reply;
     this.bus.publish({ agentId: this.config.id, type: "thought", payload: `read ${found.calls.length} tool call(s) the model wrote as text`, time: Date.now() });
     return { ...reply, text: found.rest, toolCalls: found.calls, raw: undefined };
+  }
+
+  // Runs the model check now if this agent's local model hasn't had it — before planning, so the
+  // planner knows which teammates can build.
+  async checkModel(): Promise<void> {
+    if (!(this.provider instanceof LocalProvider)) return;
+    await this.provider.check();
   }
 
   // What the model check (src/local/probe.ts) found out about this agent's local model, if any.

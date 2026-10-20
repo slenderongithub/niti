@@ -67,13 +67,16 @@ export class LocalProvider implements Provider {
     runtime.register(agentId, model);
   }
 
+  // The one-time model check, if this model hasn't had it (see send).
+  async check(): Promise<void> {
+    const m = getInstalled(this.model);
+    if (m && (!m.probe || m.probe.version !== PROBE_VERSION)) await ensureProbed(m, { runtime: this.runtime });
+  }
+
   async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true, format?: "json", retried = false): Promise<ProviderReply> {
     // A model's first agent request waits for its one-time check (probe.ts), so niti knows how to
     // drive it before it is given work. The check's own requests skip this.
-    if (!this.agentId.startsWith("probe:")) {
-      const m = getInstalled(this.model);
-      if (m && (!m.probe || m.probe.version !== PROBE_VERSION)) await ensureProbed(m, { runtime: this.runtime });
-    }
+    if (!this.agentId.startsWith("probe:")) await this.check();
     const { baseURL, apiKey, slot, manifest } = await this.runtime.ensure(this.model, this.agentId);
     const turn = this.next ?? {};
     this.next = undefined;

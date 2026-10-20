@@ -9,5 +9,9 @@ const log = args.includes("--log-file") ? args[args.indexOf("--log-file") + 1]! 
 if (args.includes("--api-key")) process.env.NITI_FAKE_API_KEY = args[args.indexOf("--api-key") + 1];
 // What the runtime launched us with, for tests that check the flags.
 await Bun.write(`${log}.args`, JSON.stringify(args));
+// A model from the fake zoo (fakezoo.ts) answers as its persona: zoo/<persona>-GGUF:<quant>.
+const alias = args.includes("-a") ? args[args.indexOf("-a") + 1]! : "";
+const zoo = /zoo\/([a-z0-9]+)-GGUF/i.exec(alias);
+if (zoo) process.env.NITI_FAKE_PERSONA = zoo[1];
 process.argv = [process.argv[0]!, "fakellm.ts", port, log.slice(0, log.lastIndexOf("/"))];
 await import("./fakellm.ts");

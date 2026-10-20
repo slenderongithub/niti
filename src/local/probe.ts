@@ -163,6 +163,7 @@ export async function probeModel(id: string, deps: ProbeDeps = {}): Promise<Prob
   };
   updateManifest(id, { probe: result });
   runtime.unregister(`probe:${id}`);
+  runtime.release(id); // the check doesn't hold the memory: another model may load right away
   runtime.onStatus({ model: id, engine: result.engine, state: "ready" });
   return result;
 }

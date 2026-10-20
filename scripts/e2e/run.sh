@@ -1,7 +1,8 @@
 #!/bin/zsh
 # The full end-to-end check of the CLI product against a scripted fake model (no network, no cost):
-# unit suites, the core server and every slash command, the headless CLI, the TUI model against a
-# live core, and the compiled binaries in a real terminal. Exit 0 only if everything passed.
+# unit suites, the core server and every slash command, local teams on every kind of fake local
+# model, the headless CLI, the TUI model against a live core, and the compiled binaries in a real
+# terminal. Exit 0 only if everything passed.
 #   zsh scripts/e2e/run.sh
 set -u
 E2E=${0:A:h}; NITI=${E2E:h:h}
@@ -15,6 +16,7 @@ step "tui unit tests" zsh -c "cd $NITI/tui && go vet ./... && go test ./..."
 step "build binaries" zsh -c "cd $NITI/tui && go build -o $BIN/niti ./cmd/niti && cd $NITI && bun build --compile src/cli.ts --outfile $BIN/niti-core >/dev/null"
 step "core server + slash commands" bun $E2E/server.ts
 step "remote control: core + relay + phone" bun $E2E/remote.ts
+step "local models: the fake zoo matrix" bun $E2E/local-matrix.ts --jobs=6
 step "headless cli" zsh $E2E/cli.sh
 step "tui against a live core" zsh $E2E/tui.sh
 step "real terminal" env NITI_E2E_BIN=$BIN python3 $E2E/terminal.py

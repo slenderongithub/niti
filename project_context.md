@@ -377,10 +377,36 @@ Test cores never touch your real files: every harness sets the isolation env (`N
 MLX engine (`NITI_MLX_SERVER`), the Hub is a fixture (`NITI_HF_URL`, or an injected fetch), and
 `NITI_DISCOVER_DIRS` replaces the folders "Found on this Mac" scans (empty in every harness).
 
+**The fake zoo** (`scripts/e2e/fakezoo.ts`): local models that each fail the way a real one did. A
+fake engine started for `zoo/<persona>-GGUF` or `zoo/<persona>-MLX-4bit` answers as that persona.
+The personas:
+- `native`: calls tools through the API (the good case);
+- `jsonline`: writes the call as a JSON line after a sentence;
+- `qwen3xml`: writes calls in Qwen3-Coder's XML;
+- `fence`: pastes labelled files into its reply;
+- `prosefirst`: opens each task with a plan in prose;
+- `empty`: goes silent instead of calling finish;
+- `leaker`: leaks template tokens;
+- `thinker`: puts its thinking in front of what it says;
+- `badplanner`: can't route or split work;
+- `todo`: rewrites its checklist instead of working;
+- `lazy`: ships Arial first and fixes it when the checks say so;
+- `chatty`: never calls a tool, even forced.
+Forced turns behave as on the real engines. `scripts/e2e/local-matrix.ts` runs a real core on the
+coffee-shop goal with a two-agent team of them. It checks:
+- a plan with work for every teammate that can build, before work starts;
+- every task done and the project passing the acceptance checks, or an all-chat-only team told so;
+- no prose, tokens or thinking in the chat;
+- chat-only models get no task;
+- never two models loaded that don't fit together (`NITI_GPU_BUDGET`, 10 GB).
+By default each persona leads once and works once per engine (in `run.sh`). `--full` runs every
+lead × worker on both engines (288 runs, about 2 minutes); `--only=<lead>,<worker>` runs one pair.
+
 | What | Command |
 |---|---|
 | Engine and dashboard unit tests | `bun test ./src ./web` · `bun run typecheck` |
-| The whole CLI, end to end (core API, remote path, CLI, TUI, a real terminal, relay) | `zsh scripts/e2e/run.sh` |
+| The whole CLI, end to end (core API, remote path, local-model matrix, CLI, TUI, a real terminal, relay) | `zsh scripts/e2e/run.sh` |
+| Every lead × worker of the fake local models, both engines | `bun scripts/e2e/local-matrix.ts --full` |
 | Desktop app (typecheck, tests, build, live, smoke, audit, perf) | `cd niti-app && npm run check` |
 | Relay | `cd niti-relay && bun test && bunx tsc --noEmit` |
 | Mobile | `cd niti-mobile && npm run typecheck && bun test ./src && npx expo export --platform ios` |

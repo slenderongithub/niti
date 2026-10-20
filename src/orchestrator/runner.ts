@@ -55,6 +55,9 @@ export async function runProject(
   deps: RunnerDeps = {},
 ): Promise<RunResult> {
   const lead = leadOf(agents);
+  // Each local model's one-time check, before the plan: it says which teammates can build. One at a
+  // time — two models that don't fit together take turns anyway.
+  for (const a of agents) await a.checkModel().catch(() => {});
   // A teammate on a local model its check found can't call tools is "chat only": it gets answers and
   // reviews, never a task that changes files.
   const roles: RoleInfo[] = agents.map((a) => ({ id: a.config.id, role: a.config.role, description: a.config.systemPrompt.slice(0, 140), ...(a.localProbe()?.verdict === "chat-only" ? { ready: false } : {}) }));

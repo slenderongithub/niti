@@ -328,6 +328,10 @@ const linesPrompt = (goal: string, ready: RoleInfo[], history: Exchange[], unfin
   (correction ? `Your previous answer couldn't be used: ${correction}. Use the exact form above.\n\n` : "") +
   `Your lines:`;
 
+export const NO_BUILDERS =
+  "None of this team's models can change files: their check found they don't call tools, so they can answer questions and review, not build. " +
+  "To build this, give a teammate a model marked Ready on the Models page (or `niti-core models check <id>` to see why).";
+
 // The planner for a lead on a small local model, in the stages such a model can do: say what kind of
 // message it is (one line), then give each ready teammate one line of work. niti builds the task graph
 // from the lines itself — parallel parts, then an integration task — instead of asking a 7B model for
@@ -338,6 +342,8 @@ async function makeLocalPlan(lead: PlannerAgent, goal: string, roles: RoleInfo[]
   if (route.kind === "chat") return { goal, tasks: [], reply: route.reply };
   if (route.kind === "question") return { goal, tasks: [], question: route.question };
   const ready = roles.filter((r) => r.ready !== false);
+  // Nobody here can change a file: say so, rather than hand the work to a model that will only talk.
+  if (ready.length === 0) return { goal, tasks: [], reply: NO_BUILDERS };
   const leadId = ready.find((r) => r.id === lead.config.id)?.id ?? ready[0]?.id ?? lead.config.id;
   if (ready.length <= 1) return { goal, tasks: [{ id: "t1", description: goal, status: "pending", role: leadId, assignedTo: leadId, dependsOn: [], handoffTo: [] }] };
   let correction: string | undefined;
