@@ -2232,3 +2232,16 @@ test("writing another tool's MCP or agent config always asks", () => {
   expect(isSensitiveConfigWrite("write_file", { path: "src/mcp.json" }, "/p")).toBe(false);
   expect(isSensitiveConfigWrite("write_file", { path: ".vscode/launch.json" }, "/p")).toBe(false);
 });
+
+test("the lead's JSON asks are recorded, so a plan that went wrong can be read afterwards", async () => {
+  const db = openDb(":memory:");
+  const store = new SessionStore(db);
+  const p: Provider = { send: async () => ({ text: '[{"description":"x","role":"a"}]', toolCalls: [] }) };
+  const a = new Agent(cfg, p, new Bus(), { store });
+  await a.ask("plan this", { json: true });
+  await a.ask("just talk");
+  const sessions = store.listSessions({ agentId: "a" });
+  expect(sessions.map((s) => s.kind)).toEqual(["plan"]);
+  const msgs = store.loadTurns(sessions[0]!.id);
+  expect(msgs.map((m) => (m.role === "tool" ? "" : m.text))).toEqual(["plan this", '[{"description":"x","role":"a"}]']);
+});

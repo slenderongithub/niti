@@ -47,6 +47,11 @@ export interface AgentEvent {
   removed?: number;
   more?: number; // diff lines beyond what hunks carries
   todos?: { text: string; status: string }[]; // "todo"
+  // What kind of harness intervention a warning/thought/error is, for clients that show them as
+  // their own rows and for `niti-core models doctor`: a turn refused for not being an action, a file
+  // saved out of a reply, an acceptance check that failed, a model swapped in or out, a plan that
+  // fell back, a model being checked.
+  protocol?: "rejected_turn" | "salvaged" | "check_failed" | "model_swap" | "plan_fallback" | "probe";
 }
 
 // Thin typed wrapper over node:events. Many agents publish; the log/TUI subscribes.

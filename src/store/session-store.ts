@@ -5,7 +5,9 @@ import type { Database } from "bun:sqlite";
 import type { Turn, ToolCall, ToolResult, Usage } from "../providers/provider.ts";
 import type { AgentMessage } from "../messaging/message-bus.ts";
 
-export type SessionKind = "task" | "fork" | "ask" | "respond";
+// "plan": the lead's planning, replanning, integrate and judge calls — recorded so a plan that fell
+// back can be read afterwards (they used to leave no trace at all).
+export type SessionKind = "task" | "fork" | "ask" | "respond" | "plan";
 type SessionStatus = "active" | "done" | "failed" | "exhausted";
 type PartType = "text" | "tool_call" | "tool_result" | "raw" | "file_ref";
 

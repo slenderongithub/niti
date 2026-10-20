@@ -76,6 +76,9 @@ export async function runProject(
       bus.publish({ agentId: lead.config.id, type: "message", payload: answer, time: Date.now() });
       return { kind: "answer", text: answer };
     }
+    if (plan.fallback) {
+      bus.publish({ agentId: lead.config.id, type: "warning", protocol: "plan_fallback", payload: `the plan fell back to one task on ${lead.config.id}: ${plan.fallback}`, time: Date.now() });
+    }
     orch.load(plan.tasks); // shares the Task objects — scheduler mutates them, orch/UI/resume see updates
     for (const t of plan.tasks) {
       bus.publish({ agentId: lead.config.id, type: "thought", payload: `queued ${t.id} → ${t.assignedTo}: ${t.description}`, time: Date.now() });

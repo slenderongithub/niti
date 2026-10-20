@@ -156,3 +156,10 @@ test("a local lead is told how to plan for a small model; a cloud lead isn't", a
     expect(prompt.includes("small model on this computer")).toBe(expectBrief);
   }
 });
+
+test("a plan that falls back says why", async () => {
+  const lead = { config: { id: "lead" }, ask: async () => "Sure! Here is my plan: first I will…" };
+  const plan = await makePlan(lead as never, "build it", [{ id: "lead", role: "Lead" }]);
+  expect(plan.tasks.length).toBe(1);
+  expect(plan.fallback).toContain("expected");
+});

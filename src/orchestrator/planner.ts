@@ -15,6 +15,9 @@ interface Plan {
   // and only a request to change something gets `tasks`. Exactly one of the three is set.
   reply?: string;
   question?: string;
+  // Set when no usable plan came back and the fallback was used: why (the last parse error or the
+  // provider's error), so the run can say so instead of silently putting everything on the lead.
+  fallback?: string;
 }
 
 // One earlier exchange, so a follow-up ("now add tests") can refer back to what "it" was.
@@ -280,6 +283,7 @@ export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo
   // Fallback: one task, whole goal, on the lead.
   const role = lead.config.id;
   return {
+    fallback: correction ?? "no usable plan",
     goal,
     tasks: [{ id: "t1", description: goal, status: "pending", role, assignedTo: role, dependsOn: [], handoffTo: [] }],
   };

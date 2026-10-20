@@ -205,7 +205,9 @@ in one disappears from the others (the core answers by id; a second answer gets 
 ```
 <project>/.niti/
   agents.yaml        the team and options (below); meant to be committed
-  niti.db            sessions, messages, parts, checkpoints, audit log (SQLite, WAL)
+  niti.db            sessions (task, fork, ask, respond, and "plan": every JSON ask of the lead —
+                     plan, replan, integrate, judge — with its raw reply), messages, parts,
+                     checkpoints, audit log (SQLite, WAL)
   session.json       the task board
   goal.json          the current /goal (atomic writes)
   worktrees/         per-run git worktrees

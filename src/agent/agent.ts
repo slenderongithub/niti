@@ -964,10 +964,21 @@ export class Agent {
     // queues and is read when this agent's work starts.
     this.inFlightCount++;
     let reply: ProviderReply;
+    // A JSON ask is the lead deciding something (a plan, a recovery, a verdict): kept, so that when
+    // it goes wrong the reply that caused it can be read.
+    const sessionId = opts.json ? this.store?.createSession({ agentId: this.config.id, kind: "plan", provider: this.config.provider, model: this.config.model }) : undefined;
     try {
       reply = await this.send([{ role: "user", text: prompt }], [], undefined, undefined, opts.json && this.profile.jsonAsks ? "json" : undefined);
+    } catch (err) {
+      if (sessionId) this.store?.setStatus(sessionId, "failed");
+      throw err;
     } finally {
       this.inFlightCount--;
+    }
+    if (sessionId) {
+      this.store?.appendMessage(sessionId, "user", toParts({ role: "user", text: prompt }));
+      this.store?.appendMessage(sessionId, "assistant", toParts({ role: "assistant", text: reply.text, toolCalls: [] }), reply.usage);
+      this.store?.setStatus(sessionId, "done");
     }
     // Recorded like every other call: the lead's planning, replanning, integrate and /debate turns
     // are usually the most expensive model on the team, and once went entirely off the books.
