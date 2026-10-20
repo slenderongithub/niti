@@ -11,7 +11,8 @@ import { ensureMlxEngine } from "./mlx.ts";
 import { fitModel, device, MIN_CONTEXT } from "./fit.ts";
 import { learnContext } from "../providers/catalog.ts";
 
-export type RuntimeState = "installing" | "loading" | "checking" | "ready" | "stopped" | "error";
+// "waiting": this model doesn't fit beside the ones in use; it loads when they're idle (`waitingFor`).
+export type RuntimeState = "installing" | "waiting" | "loading" | "checking" | "ready" | "stopped" | "error";
 
 export interface RuntimeStatus {
   model: string;
@@ -24,6 +25,9 @@ export interface RuntimeStatus {
   stage?: "python" | "packages";
   received?: number;
   total?: number;
+  waitingFor?: string[]; // "waiting": the models holding the memory
+  // "stopped": why — "swap" when it made room for another model, "idle" after a quiet spell.
+  reason?: "swap" | "idle";
 }
 
 // Where the server binary is, in the order a user would expect to be honoured: an explicit
@@ -114,13 +118,23 @@ interface Server {
   lastUsed: number;
   slotOf: Map<string, number>; // agent id → slot
   error?: string;
+  need: number; // bytes it holds: weights, KV for its slots, overhead (fit.ts)
 }
 
 const IDLE_MS = Number(process.env.NITI_LOCAL_IDLE_MS ?? 15 * 60_000);
+// A loaded model keeps its memory while its agents are working: through a request, and for this long
+// after one (the tool runs between turns). A model waiting for room takes it after that — also when
+// the holder is stuck waiting on something else (an approval, a teammate's answer), so two agents
+// waiting on each other can't hold the memory forever.
+const swapGraceMs = () => Number(process.env.NITI_LOCAL_SWAP_GRACE_MS ?? 30_000);
 
 export class LocalRuntime {
   private servers = new Map<string, Server>();
   private wanted = new Map<string, Set<string>>(); // model → agent ids that use it
+  private starting = new Map<string, Promise<Server>>(); // one start per model, however many agents ask
+  // Admission and start, one model at a time: two models admitted side by side would each see the
+  // memory the other is about to take as free. Also first come, first served.
+  private gate: Promise<void> = Promise.resolve();
   private timer?: ReturnType<typeof setInterval>;
 
   constructor(public onStatus: (s: RuntimeStatus) => void = () => {}) {
@@ -153,7 +167,25 @@ export class LocalRuntime {
     if (!manifest) throw new Error(`local model '${model}' is not installed — download it from the Models page (or /models in the CLI)`);
     if (!this.wanted.get(model)?.has(agentId)) this.register(agentId, model);
     let s = this.servers.get(model);
-    if (!s || s.state === "stopped" || s.state === "error") s = await this.start(manifest);
+    if (!s || s.state === "stopped" || s.state === "error") {
+      let p = this.starting.get(model);
+      if (!p) {
+        const prev = this.gate;
+        let open!: () => void;
+        this.gate = new Promise((r) => (open = r));
+        p = (async () => {
+          await prev;
+          try {
+            await this.admit(manifest);
+            return await this.start(manifest);
+          } finally {
+            open();
+          }
+        })().finally(() => this.starting.delete(model));
+        this.starting.set(model, p);
+      }
+      s = await p;
+    }
     await s.ready;
     s.lastUsed = Date.now();
     let slot = s.slotOf.get(agentId);
@@ -178,6 +210,40 @@ export class LocalRuntime {
     }
   }
 
+  // What a model will hold once loaded, at the slots it would start with.
+  private needOf(m: InstalledModel): number {
+    const mlx = formatOf(m) === "mlx";
+    const agents = Math.max(1, this.wanted.get(m.id)?.size ?? 1);
+    return fitModel({ params: m.params ?? 0, fileBytes: m.bytes, quant: m.quant, contextLength: m.contextLength, slots: mlx ? 1 : agents }, device()).need;
+  }
+
+  // Waits until `m` fits beside the models already loaded. Ones that are idle (no request for the
+  // swap grace) give way at once; ones in use are waited for. Models that fit together stay loaded
+  // together. A model too big for this Mac on its own still loads once it is alone.
+  private async admit(m: InstalledModel): Promise<void> {
+    const budget = device().gpuBudget;
+    const need = this.needOf(m);
+    let announced = false;
+    for (;;) {
+      const others = [...this.servers.values()].filter((o) => o.model !== m.id);
+      const held = (xs: Server[]) => xs.reduce((n, o) => n + o.need, 0);
+      if (need + held(others) <= budget) return;
+      const busy = (o: Server) => o.state === "loading" || o.inFlight > 0 || Date.now() - o.lastUsed < swapGraceMs();
+      // Make room from the idle ones, largest first, only as much as is needed.
+      for (const o of others.filter((x) => !busy(x)).sort((a, b) => b.need - a.need)) {
+        if (need + held([...this.servers.values()].filter((x) => x.model !== m.id)) <= budget) break;
+        this.stop(o.model, "swap");
+      }
+      const left = [...this.servers.values()].filter((o) => o.model !== m.id);
+      if (need + held(left) <= budget || left.length === 0) return;
+      if (!announced) {
+        announced = true;
+        this.onStatus({ model: m.id, state: "waiting", waitingFor: left.map((o) => o.model) });
+      }
+      await Bun.sleep(400);
+    }
+  }
+
   private async start(m: InstalledModel): Promise<Server> {
     const mlx = formatOf(m) === "mlx";
     const bin = mlx ? undefined : findLlamaServer();
@@ -194,17 +260,13 @@ export class LocalRuntime {
     // memory mid-batch and the engine's generation thread died).
     const slots = mlx ? (agents > 1 && fitModel({ params: m.params ?? 0, fileBytes: m.bytes, quant: m.quant, contextLength: m.contextLength, slots: 2 }, device()).tier === "runs-well" ? 2 : 1) : agents;
     const dev = device();
-    // Free memory for this one: a model nobody is using right now gives way.
-    for (const other of this.servers.values()) {
-      if (other.model !== m.id && other.inFlight === 0) this.stop(other.model);
-    }
     const fit = fitModel({ params: m.params ?? 0, fileBytes: m.bytes, quant: m.quant, contextLength: m.contextLength, slots }, dev);
     const ctx = Math.max(MIN_CONTEXT, fit.ctx);
     const port = await freePort();
     mkdirSync(modelsDir(), { recursive: true });
     const apiKey = crypto.randomUUID();
     const cmd = mlx ? [...mlxCmd!, ...mlxServerArgs(m, { port, concurrency: slots, cacheBytes: Math.max(256 * 1024 ** 2, Math.min(4 * 1024 ** 3, dev.gpuBudget - m.bytes - 1.5 * 1024 ** 3)) })] : [...bin!, ...serverArgs(m, { port, slots, ctx, apiKey, log: join(modelsDir(), "llama-server.log") })];
-    const s: Server = { model: m.id, port, slots, ctx, apiKey, state: "loading", inFlight: 0, lastUsed: Date.now(), slotOf: new Map(), ready: Promise.resolve() };
+    const s: Server = { model: m.id, port, slots, ctx, apiKey, state: "loading", inFlight: 0, lastUsed: Date.now(), slotOf: new Map(), ready: Promise.resolve(), need: fit.need };
     this.servers.set(m.id, s);
     this.onStatus({ model: m.id, engine: mlx ? "mlx" : "llama.cpp", state: "loading", ctx, slots });
     // The MLX wrapper reads its key from the environment, never the command line (which ps shows).
@@ -276,19 +338,19 @@ export class LocalRuntime {
     if (this.timer) return;
     this.timer = setInterval(() => {
       for (const s of this.servers.values()) {
-        if (s.state === "ready" && s.inFlight === 0 && Date.now() - s.lastUsed > IDLE_MS) this.stop(s.model);
+        if (s.state === "ready" && s.inFlight === 0 && Date.now() - s.lastUsed > IDLE_MS) this.stop(s.model, "idle");
       }
     }, Math.min(60_000, IDLE_MS));
     this.timer.unref?.();
   }
 
-  stop(model: string): void {
+  stop(model: string, reason?: "swap" | "idle"): void {
     const s = this.servers.get(model);
     if (!s) return;
     s.proc?.kill();
     this.servers.delete(model);
     recordPids([...this.servers.values()].map((x) => x.proc?.pid).filter((p): p is number => !!p));
-    this.onStatus({ model, state: "stopped" });
+    this.onStatus({ model, state: "stopped", ...(reason ? { reason } : {}) });
   }
 
   stopAll(): void {

@@ -197,7 +197,13 @@ in one disappears from the others (the core answers by id; a second answer gets 
     `--reasoning-format deepseek`, f16 KV cache because a quantized one hurts tool calls), one
     full-context slot per agent using it (`-np N --no-kv-unified`) so each agent's prompt prefix stays
     cached, learns the real per-slot context from `/props`, and unloads after 15 idle minutes or when
-    the core exits. `provider.ts` sends the model's sampling (never greedy), the agent's `id_slot`,
+    the core exits. **Memory:** a model loads only beside models it fits with (`admit`, by `fit.ts`
+    need against the GPU budget). Models that don't fit together take turns: ones idle for the swap
+    grace (30 s, `NITI_LOCAL_SWAP_GRACE_MS`) give way at once, busy ones are waited for (state
+    `waiting`, `waitingFor`). The swap is a `model_swap` note in the waiting agents' transcripts, and
+    the unloaded model is `stopped` with `reason: "swap"`. Admission runs one model at a time.
+    `teamFit` / `POST /local/team-fit` says whether a team's models fit together. `NITI_GPU_BUDGET`
+    fakes a smaller Mac in tests. `provider.ts` sends the model's sampling (never greedy), the agent's `id_slot`,
     the thinking switch and an 8k output cap on every request. The model id is `<repo>:<quant>`.
     **MLX** (`mlx.ts`, Apple Silicon): models published in MLX format (safetensors) run on Apple's
     `mlx_lm.server` instead. Its engine is Python, so it isn't bundled: the first MLX model fetches a
@@ -319,7 +325,8 @@ Local only (127.0.0.1), a fresh bearer token per launch, handed over in the core
   `GET /local/catalog/model?repo=`, `GET /local/models` (installed + active downloads),
   `DELETE /local/models?id=`, `POST /local/download {repo, quant}`, `POST /local/download/cancel {id}`,
   `POST /local/unload {model}`, `GET /local/discover` (found on this Mac), `POST /local/import {id}`,
-  `POST|DELETE /local/engine/mlx` (install ahead of time, remove). `/local/catalog` also takes
+  `POST|DELETE /local/engine/mlx` (install ahead of time, remove), `POST /local/models/check {id}`
+  (run the model check again), `POST /local/team-fit {models: [id per agent]}`. `/local/catalog` also takes
   `format=gguf|mlx|any`; `/local/device` reports the MLX engine. `GET /models?provider=local` lists installed model ids.
 
 Events (`server/events.ts`, kind): `agent_event`, `agent_message`, `orchestration`, `approval_request`,

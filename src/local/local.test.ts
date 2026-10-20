@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 const dir = mkdtempSync(join(tmpdir(), "niti-local-"));
 process.env.NITI_LOCAL_MODELS_DIR = join(dir, "models");
 process.env.NITI_LOCAL_IDLE_MS = "600000";
+process.env.NITI_LOCAL_SWAP_GRACE_MS = "300"; // how long a loaded model's agents keep it between requests
 process.env.NITI_DISCOVER_DIRS = join(dir, "found"); // a fake LM Studio folder, filled by the tests
 process.env.NITI_MLX_ENGINE_DIR = join(dir, "engine");
 delete process.env.NITI_HF_URL;
@@ -619,4 +620,63 @@ test("a model that never calls a tool is chat only, with the reason", async () =
   } finally {
     LocalProvider.prototype.send = realSend;
   }
+});
+
+test("models that don't fit together take turns; models that do stay loaded side by side", async () => {
+  process.env.NITI_LLAMA_SERVER = FAKE;
+  const probe = { version: 1, checkedAt: 0, engine: "llama.cpp" as const, toolMode: "native" as const, planMode: "lines" as const, stops: [], thinking: "none" as const, verdict: "ready" as const, notes: [] };
+  for (const name of ["Big-A", "Big-B"]) {
+    const repo = `fake/${name}-GGUF`;
+    saveManifest({ id: `${repo}:Q4_K_M`, repo, quant: "Q4_K_M", files: ["m.gguf"], bytes: 6 * GB, params: 7e9, contextLength: 8192, installedAt: 0, probe });
+    writeFileSync(join(repoDir(repo), "m.gguf"), "GGUF");
+  }
+  const [A, B] = ["fake/Big-A-GGUF:Q4_K_M", "fake/Big-B-GGUF:Q4_K_M"];
+  const run = async (budget: number) => {
+    process.env.NITI_GPU_BUDGET = String(budget);
+    const events: { model: string; state: string; reason?: string; waitingFor?: string[] }[] = [];
+    let loaded = 0;
+    let most = 0;
+    const rt = new LocalRuntime((s) => {
+      events.push({ model: s.model, state: s.state, reason: s.reason, waitingFor: s.waitingFor });
+      if (s.state === "loading") most = Math.max(most, ++loaded);
+      if (s.state === "stopped") loaded--;
+    });
+    const a = new LocalProvider(A, "frontend", undefined, undefined, rt);
+    const b = new LocalProvider(B, "backend", undefined, undefined, rt);
+    try {
+      const first = a.send("sys", [{ role: "user", text: "SLOW hello" }], []); // A is busy for 1.5 s…
+      await Bun.sleep(300);
+      const second = b.send("sys", [{ role: "user", text: "hello" }], []); // …when B asks for room
+      await Promise.all([first, second]);
+      return { events: [...events], most, status: rt.status().map((x) => x.model).sort() };
+    } finally {
+      rt.stopAll();
+    }
+  };
+  try {
+    // 6 GB + 6 GB on a Mac that gives models 10 GB: B waits for A, A gives way, B loads.
+    const tight = await run(10 * GB);
+    expect(tight.most).toBe(1);
+    expect(tight.events.find((e) => e.state === "waiting")).toMatchObject({ model: B, waitingFor: [A] });
+    expect(tight.events.find((e) => e.state === "stopped")).toMatchObject({ model: A, reason: "swap" });
+    expect(tight.status).toEqual([B]);
+    // On a Mac with room for both, neither is unloaded.
+    const roomy = await run(40 * GB);
+    expect(roomy.most).toBe(2);
+    expect(roomy.events.some((e) => e.state === "waiting" || e.state === "stopped")).toBe(false);
+    expect(roomy.status).toEqual([A, B]);
+  } finally {
+    delete process.env.NITI_GPU_BUDGET;
+    delete process.env.NITI_LLAMA_SERVER;
+  }
+}, 30_000);
+
+test("team fit: two 6 GB models on a 10 GB budget take turns; one model on two agents fits", async () => {
+  const { teamFit } = await import("./fit.ts");
+  const m = (id: string, agents = 1) => ({ id, params: 7e9, bytes: 6 * GB, quant: "Q4_K_M", contextLength: 8192, agents, mlx: false });
+  expect(teamFit([m("a"), m("b")], { gpuBudget: 10 * GB }).together).toBe(false);
+  expect(teamFit([m("a", 2)], { gpuBudget: 10 * GB }).together).toBe(true);
+  const api = localApi({ download: () => {}, runtime: () => {} });
+  const r = await api.handle("/local/team-fit", "POST", new URL("http://x/local/team-fit"), async () => ({ models: ["fake/Big-A-GGUF:Q4_K_M", "fake/Big-B-GGUF:Q4_K_M"] }));
+  expect(((await r!.json()) as { models: unknown[] }).models.length).toBe(2);
 });

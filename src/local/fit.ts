@@ -17,7 +17,9 @@ export function device(): Device {
   const total = totalmem();
   const chip = cpus()[0]?.model ?? "unknown";
   const appleSilicon = process.platform === "darwin" && process.arch === "arm64";
-  return { totalMemory: total, gpuBudget: gpuBudget(total, appleSilicon), appleSilicon, chip };
+  // NITI_GPU_BUDGET (bytes) stands in for a smaller Mac in tests of what fits beside what.
+  const override = Number(process.env.NITI_GPU_BUDGET);
+  return { totalMemory: total, gpuBudget: override > 0 ? override : gpuBudget(total, appleSilicon), appleSilicon, chip };
 }
 
 // Apple Silicon shares one pool between CPU and GPU, and Metal caps what the GPU may wire down
@@ -27,6 +29,14 @@ export function gpuBudget(total: number, appleSilicon: boolean): number {
   const GB = 1024 ** 3;
   if (!appleSilicon) return Math.round(total * 0.6);
   return Math.round(total * (total <= 36 * GB ? 0.67 : 0.75));
+}
+
+// Whether a team's local models fit in memory together, or will take turns (runtime.ts admits a
+// model only beside ones it fits with). `agents` per model sizes its slots, as the runtime would.
+export function teamFit(models: { id: string; params?: number; bytes: number; quant: string; contextLength?: number; agents: number; mlx: boolean }[], dev: Pick<Device, "gpuBudget"> = device()): { together: boolean; need: number; budget: number; models: { id: string; need: number }[] } {
+  const each = models.map((m) => ({ id: m.id, need: fitModel({ params: m.params ?? 0, fileBytes: m.bytes, quant: m.quant, contextLength: m.contextLength, slots: m.mlx ? 1 : Math.max(1, m.agents) }, dev).need }));
+  const need = each.reduce((n, m) => n + m.need, 0);
+  return { together: need <= dev.gpuBudget, need, budget: dev.gpuBudget, models: each };
 }
 
 // KV cache bytes per token of context at f16. The exact figure needs layer and head counts the

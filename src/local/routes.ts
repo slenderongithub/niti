@@ -1,9 +1,9 @@
 // The local-models API under /local/*, for the app's Models page and the TUI's /models: the device,
 // the Hub catalogue, installed models, downloads. Kept out of the phone bridge's allowlist
 // (src/remote/bridge.ts) on purpose — downloading gigabytes or deleting a model is done at the Mac.
-import { device } from "./fit.ts";
+import { device, teamFit } from "./fit.ts";
 import { searchCatalog, modelDetail, SORTS, type CatalogQuery, type SortKey } from "./catalog.ts";
-import { listInstalled, removeInstalled, diskUsage, modelsDir, parseModelId, getInstalled } from "./store.ts";
+import { listInstalled, removeInstalled, diskUsage, modelsDir, parseModelId, getInstalled, formatOf } from "./store.ts";
 import { probeModel, templateOf } from "./probe.ts";
 import { DownloadManager, type DownloadProgress } from "./downloads.ts";
 import { findLlamaServer, localRuntime, type RuntimeStatus } from "./runtime.ts";
@@ -121,6 +121,20 @@ export function localApi(publish: { download: (p: DownloadProgress) => void; run
         const { id } = (await body()) as { id?: string };
         if (!id) return json({ error: "expected {id}" }, 400);
         return json({ ok: downloads.cancel(id) });
+      }
+
+      // Whether these local models (one entry per agent using one) fit in memory together, or take
+      // turns — for team setup.
+      if (p === "/local/team-fit" && method === "POST") {
+        const { models } = (await body()) as { models?: string[] };
+        if (!Array.isArray(models)) return json({ error: "expected {models: [id, …]}" }, 400);
+        const counts = new Map<string, number>();
+        for (const id of models) counts.set(id, (counts.get(id) ?? 0) + 1);
+        const list = [...counts].flatMap(([id, agents]) => {
+          const m = getInstalled(id);
+          return m ? [{ id, params: m.params, bytes: m.bytes, quant: m.quant, contextLength: m.contextLength, agents, mlx: formatOf(m) === "mlx" }] : [];
+        });
+        return json(teamFit(list));
       }
 
       // The one-time model check, run again (after an update, or to see it happen).

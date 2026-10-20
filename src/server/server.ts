@@ -121,7 +121,16 @@ export function startServer(
   const local = localApi(
     {
       download: (d) => engine.hub.publish({ kind: "local_download", download: d }, d.state !== "downloading" && d.state !== "verifying"),
-      runtime: (r) => engine.hub.publish({ kind: "local_runtime", runtime: r }),
+      runtime: (r) => {
+        engine.hub.publish({ kind: "local_runtime", runtime: r });
+        // Models that take turns for memory, said in the transcript of the agents they hold up.
+        const note = r.state === "waiting" ? `waiting for memory: ${r.waitingFor?.join(", ")} ${r.waitingFor && r.waitingFor.length > 1 ? "are" : "is"} using it — the models take turns` : r.state === "stopped" && r.reason === "swap" ? `${r.model} unloaded to make room for another model — it reloads on its next turn` : undefined;
+        if (note) {
+          for (const a of engine.agents.filter((x) => x.config.provider === "local" && x.config.model === r.model)) {
+            engine.bus.publish({ agentId: a.config.id, type: "thought", protocol: "model_swap", payload: note, time: Date.now() });
+          }
+        }
+      },
     },
     opts.localFetch,
   );
