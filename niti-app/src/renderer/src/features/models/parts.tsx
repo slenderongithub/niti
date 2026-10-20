@@ -1,11 +1,11 @@
 import { motion } from "motion/react";
-import { Brain, CircleAlert, CircleCheck, CircleSlash, Download, Loader2, ShieldCheck, Wrench, X } from "lucide-react";
+import { Brain, CircleAlert, CircleCheck, CircleSlash, Download, Loader2, ShieldCheck, Wrench, X, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fmtBytes, fmtEta } from "@/lib/format";
-import type { DownloadProgress, Fit, FitTier } from "@/lib/types";
+import type { DownloadProgress, Fit, FitTier, ModelFormat, RuntimeStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { isActive } from "./use-models";
 
@@ -159,5 +159,50 @@ export function Monogram({ name, className }: { name: string; className?: string
     <span aria-hidden className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg font-mono text-[13px] font-semibold uppercase ring-1 ring-inset ring-border", TINTS[h % TINTS.length], className)}>
       {letters}
     </span>
+  );
+}
+
+// GGUF runs on llama.cpp; MLX on Apple's own framework, often a little faster on Apple Silicon.
+export function FormatBadge({ format, className }: { format?: ModelFormat; className?: string }) {
+  if (format !== "mlx") {
+    return (
+      <Badge variant="outline" className={cn("h-5 px-1.5 font-mono text-[10px] font-medium text-muted-foreground", className)}>
+        GGUF
+      </Badge>
+    );
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge variant="outline" className={cn("h-5 gap-1 border-pink/30 bg-pink/10 px-1.5 font-mono text-[10px] font-medium text-pink", className)}>
+          <Zap className="size-3" aria-hidden />
+          MLX
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-64">Apple's MLX format, made for Apple Silicon. Runs on niti's MLX engine, which downloads once (about 140 MB) the first time an MLX model runs.</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// "mlx" is one quantization per repo; its bits are in the repo's name ("…-4bit").
+export function quantLabel(quant: string, repo: string): string {
+  if (quant !== "mlx") return quant;
+  const bits = /(\d)\s*-?bit/i.exec(repo)?.[1] ?? (/bf16|fp16/i.test(repo) ? "16" : undefined);
+  return bits ? `MLX ${bits}-bit` : "MLX";
+}
+
+// The MLX engine arriving (its first use): which step, and how much of the Python download is in.
+export function EngineInstallBar({ status }: { status: RuntimeStatus }) {
+  const pct = status.stage === "python" && status.total ? (status.received ?? 0) / status.total * 100 : status.stage === "packages" ? 100 : 5;
+  return (
+    <div className="flex w-full items-center gap-2.5" role="status" aria-live="polite">
+      <Loader2 className="size-3.5 shrink-0 animate-spin text-pink" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <Progress value={pct} className={cn("h-1.5", status.stage === "packages" && "animate-pulse")} aria-label="Installing the MLX engine" />
+        <div className="mt-1 text-[11px] text-muted-foreground tabular">
+          {status.stage === "packages" ? "Installing MLX packages (checksum-verified)…" : `Downloading the MLX engine · ${fmtBytes(status.received ?? 0)}${status.total ? ` of ${fmtBytes(status.total)}` : ""}`}
+        </div>
+      </div>
+    </div>
   );
 }

@@ -16,6 +16,7 @@ import type {
   InstalledModel,
   DownloadProgress,
   LocalDevice,
+  FoundModel,
 } from "./types";
 
 // A typed client for every niti-core route the app uses (src/server/server.ts). Errors come back
@@ -117,6 +118,7 @@ export class Api {
     if (q.tools) p.set("tools", "1");
     if (q.fits) p.set("fits", "1");
     if (q.size) p.set("size", q.size);
+    if (q.format && q.format !== "any") p.set("format", q.format);
     return this.req<CatalogResult>("GET", `/local/catalog?${p}`, undefined, 45_000);
   };
   modelDetail = (repo: string) => this.req<ModelDetail>("GET", `/local/catalog/model?repo=${encodeURIComponent(repo)}`, undefined, 45_000);
@@ -125,6 +127,10 @@ export class Api {
   cancelDownload = (id: string) => this.post<{ ok: boolean }>("/local/download/cancel", { id });
   deleteModel = (id: string) => this.req<{ ok: boolean }>("DELETE", `/local/models?id=${encodeURIComponent(id)}`);
   unloadModel = (model: string) => this.post<{ ok: boolean }>("/local/unload", { model });
+  foundModels = () => this.req<{ models: FoundModel[] }>("GET", "/local/discover", undefined, 45_000);
+  addFoundModel = (id: string) => this.post<{ model: InstalledModel }>("/local/import", { id });
+  installMlx = () => this.post<{ ok: boolean }>("/local/engine/mlx");
+  removeMlx = () => this.req<{ ok: boolean }>("DELETE", "/local/engine/mlx");
   // Web search (Tavily). Saving tests the key with one search first.
   webSearch = () => this.get<{ configured: boolean; saved: boolean }>("/websearch");
   saveWebSearchKey = (key: string) => this.req<{ ok: boolean; configured: boolean }>("POST", "/websearch", { key }, 45_000);

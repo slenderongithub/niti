@@ -319,8 +319,11 @@ export interface QuantFile {
   sha256?: string[];
   estimated?: boolean;
 }
+export type ModelFormat = "gguf" | "mlx";
+
 export interface CatalogModel {
   repo: string;
+  format: ModelFormat;
   name: string;
   author: string;
   downloads: number;
@@ -358,11 +361,15 @@ export interface CatalogQuery {
   tools?: boolean;
   fits?: boolean;
   size?: "small" | "medium" | "large";
+  format?: ModelFormat | "any";
 }
 export interface InstalledModel {
   id: string;
   repo: string;
   quant: string;
+  format?: ModelFormat;
+  path?: string; // added from elsewhere on this Mac: its files stay there
+  source?: string;
   files: string[];
   bytes: number;
   params?: number;
@@ -387,8 +394,12 @@ export interface DownloadProgress {
   error?: string;
 }
 export interface RuntimeStatus {
-  model: string;
-  state: "loading" | "ready" | "stopped" | "error";
+  model: string; // a model id, or "engine:mlx" for the MLX engine's install
+  state: "installing" | "loading" | "ready" | "stopped" | "error";
+  engine?: "llama.cpp" | "mlx";
+  stage?: "python" | "packages";
+  received?: number;
+  total?: number;
   ctx?: number;
   slots?: number;
   error?: string;
@@ -398,5 +409,24 @@ export interface LocalDevice {
   modelsDir: string;
   diskUsage: number;
   runtimeAvailable: boolean;
+  mlx: { supported: boolean; installed: boolean; installing: boolean; bytes?: number };
   runtime: RuntimeStatus[];
+}
+
+// A model already on this Mac (LM Studio's folder, the Hugging Face cache) niti can add in place.
+export interface FoundModel {
+  id: string;
+  repo: string;
+  quant: string;
+  format: ModelFormat;
+  path: string;
+  files: string[];
+  bytes: number;
+  source: string;
+  params?: number;
+  contextLength?: number;
+  architecture?: string;
+  tools?: boolean;
+  thinking?: boolean;
+  added: boolean;
 }

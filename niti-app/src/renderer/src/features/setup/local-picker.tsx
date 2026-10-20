@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Cpu, Download, HardDrive, Loader2, Sparkles, Wrench } from "lucide-react";
+import { Check, Cpu, Download, FolderOpen, HardDrive, Loader2, Plus, Sparkles, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FitBadge, Monogram } from "@/features/models/parts";
+import { FitBadge, FormatBadge, Monogram, quantLabel } from "@/features/models/parts";
 import { modelName } from "@/features/models/use-models";
 import { fmtBytes, fmtParams } from "@/lib/format";
-import type { CatalogModel, DownloadProgress, InstalledModel, LocalDevice } from "@/lib/types";
+import type { CatalogModel, DownloadProgress, FoundModel, InstalledModel, LocalDevice } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/store/app";
 
@@ -22,6 +22,8 @@ export function LocalPicker({ value, onPick }: { value?: string; onPick: (id: st
   const [recommended, setRecommended] = useState<CatalogModel[] | null>(null);
   const [offline, setOffline] = useState(false);
   const [device, setDevice] = useState<LocalDevice | null>(null);
+  const [found, setFound] = useState<FoundModel[]>([]);
+  const [adding, setAdding] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     void api
@@ -35,6 +37,7 @@ export function LocalPicker({ value, onPick }: { value?: string; onPick: (id: st
   useEffect(() => {
     refresh();
     void api.localDevice().then(setDevice).catch(() => {});
+    void api.foundModels().then((r) => setFound(r.models.filter((f) => !f.added))).catch(() => {});
     void api
       .catalog({ tab: "recommended" })
       .then((r) => {
@@ -93,9 +96,12 @@ export function LocalPicker({ value, onPick }: { value?: string; onPick: (id: st
                 >
                   <Monogram name={m.repo.split("/")[0]!} className="size-8 text-[11px]" />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium">{modelName(m.id)}</span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate text-[13px] font-medium">{modelName(m.id)}</span>
+                      {m.format === "mlx" && <FormatBadge format="mlx" />}
+                    </span>
                     <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                      {m.quant} · {fmtBytes(m.bytes)} · {fmtParams(m.params)}
+                      {quantLabel(m.quant, m.repo)} · {fmtBytes(m.bytes)} · {fmtParams(m.params)}{m.path ? ` · ${m.source ?? "added"}` : ""}
                     </span>
                   </span>
                   {m.tools ? <Wrench className="size-3.5 text-primary" aria-label="calls tools" /> : <span className="text-[10.5px] text-warning">chat only</span>}
@@ -104,6 +110,42 @@ export function LocalPicker({ value, onPick }: { value?: string; onPick: (id: st
               ))
             )}
           </Group>
+          {found.length > 0 && (
+            <Group label="Found on this Mac — add without downloading" icon={FolderOpen}>
+              {found.map((f) => (
+                <div key={f.id} className="flex items-center gap-3 rounded-lg px-2.5 py-2">
+                  <Monogram name={f.repo.split("/")[0]!} className="size-8 text-[11px]" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-[13px] font-medium">{modelName(f.id)}</span>
+                      <FormatBadge format={f.format} />
+                    </div>
+                    <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                      {fmtBytes(f.bytes)} · {fmtParams(f.params)} · {f.source}
+                    </span>
+                  </div>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="gap-1"
+                    disabled={adding !== null}
+                    onClick={async () => {
+                      setAdding(f.id);
+                      try {
+                        await api.addFoundModel(f.id);
+                        onPick(f.id);
+                      } catch (e) {
+                        toast.error((e as Error).message);
+                        setAdding(null);
+                      }
+                    }}
+                  >
+                    {adding === f.id ? <Loader2 className="animate-spin" /> : <Plus />} Add and use
+                  </Button>
+                </div>
+              ))}
+            </Group>
+          )}
           <Group label="Recommended for this Mac" icon={Sparkles}>
             {recommended === null ? (
               <div className="space-y-1.5 p-1">

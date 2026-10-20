@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { fmtAgo, fmtBytes, fmtCount, fmtParams } from "@/lib/format";
 import type { CatalogModel } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { CapabilityBadges, DownloadAction, FitBadge, Monogram } from "./parts";
+import { CapabilityBadges, DownloadAction, FitBadge, FormatBadge, Monogram, quantLabel } from "./parts";
 import { useDownload, useModelActions } from "./use-models";
 
 // One model in the grid: who made it, whether it runs here, what it can do, how popular and fresh
@@ -59,7 +59,10 @@ export const ModelCard = memo(function ModelCard({ m, index, onOpen }: { m: Cata
           <FitBadge fit={pick?.fit} />
         </CardHeader>
         <CardContent className="relative flex flex-col gap-3 px-4">
-          <CapabilityBadges tools={m.tools} thinking={m.thinking} license={m.license} />
+          <div className="flex flex-wrap items-center gap-1">
+            <FormatBadge format={m.format} />
+            <CapabilityBadges tools={m.tools} thinking={m.thinking} license={m.license} className="contents" />
+          </div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11.5px] text-muted-foreground tabular">
             <Stat icon={ArrowDownToLine} label="Downloads this month" value={fmtCount(m.downloads)} />
             <Stat icon={Heart} label="Likes" value={fmtCount(m.likes)} />
@@ -72,7 +75,7 @@ export const ModelCard = memo(function ModelCard({ m, index, onOpen }: { m: Cata
           {pick && quant ? (
             <>
               <span className="mr-auto min-w-0 truncate font-mono text-[11px] text-muted-foreground" title="The quantization picked for this Mac">
-                {pick.quant}
+                {quantLabel(pick.quant, m.repo)}
                 {quant.size ? ` · ${quant.estimated ? "~" : ""}${fmtBytes(quant.size)}` : ""}
               </span>
               <DownloadAction

@@ -6,11 +6,11 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
 
 ## Features
 
-- **Open a folder, pick a team.** Each time you open a folder, choose to keep its team or build a new one: providers (keys saved inline), models, roles, the lead, and the approval mode. It writes the same `agents.yaml` as the TUI's picker. Each teammate runs in the **Cloud** or **On this Mac**. On this Mac lists the models you've downloaded, and can download one recommended for this Mac right there.
-- **Models.** Open models from Hugging Face that run on this Mac, through a bundled llama.cpp (no Ollama or LM Studio needed). There are three tabs:
+- **Open a folder, pick a team.** Each time you open a folder, choose to keep its team or build a new one: providers (keys saved inline), models, roles, the lead, and the approval mode. It writes the same `agents.yaml` as the TUI's picker. Each teammate runs in the **Cloud** or **On this Mac**. On this Mac lists the models you've downloaded, can add one found elsewhere on the Mac, and can download one recommended for this Mac right there.
+- **Models.** Open models from Hugging Face that run on this Mac, on niti's own engines (no Ollama or LM Studio needed): GGUF on a bundled llama.cpp, and on Apple Silicon MLX on Apple's mlx-lm, which downloads once (about 140 MB) the first time an MLX model runs. There are three tabs:
   - **Recommended for this Mac:** the most downloaded models that can call tools and run well here, one per model family.
-  - **All models:** search, sort (most downloaded, liked, trending, recently updated), and filter by size, tool support and fit.
-  - **Installed:** size on disk, when an agent last used it, loaded or not, unload and delete.
+  - **All models:** search, sort (most downloaded, liked, trending, recently updated), and filter by format (GGUF, MLX), size, tool support and fit.
+  - **Installed:** size on disk, when an agent last used it, loaded or not, unload and delete. **Found on this Mac** lists models another app already downloaded (LM Studio's folder, the Hugging Face cache); Add uses them where they are, with no second download, and removing one never touches its files. The MLX engine's status, install progress and removal are here too.
 
   Each model shows Runs well / Tight / Won't fit, tools and thinking support, licence, downloads, likes, parameters and context. Its sheet lists every quantization with its exact size and fit, and the model card. Downloads resume, verify their checksum, and keep going in the background. A local agent's shell has no internet unless you approve the command.
 - **Web.** Agents with the `web` tool read pages (`web_fetch`) and look things up in npm, PyPI, crates.io, Go, GitHub, Stack Overflow and Wikipedia (`lookup`) with no account. Settings → Web search adds a free Tavily key for `web_search` (1,000 searches a month, no card). Every web call asks you first, even with auto-approve on.

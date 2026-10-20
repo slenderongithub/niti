@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useApp } from "@/store/app";
-import type { CatalogQuery, CatalogResult, DownloadProgress, InstalledModel, LocalDevice, ModelDetail } from "@/lib/types";
+import type { CatalogQuery, CatalogResult, DownloadProgress, FoundModel, InstalledModel, LocalDevice, ModelDetail } from "@/lib/types";
 
 // The Models page's data: this Mac, the Hub catalogue, what is installed, and downloads in flight.
 // The core caches the Hub for 15 minutes; this keeps each query's answer for the life of the window
@@ -177,4 +177,20 @@ export function useModelActions() {
 export function modelName(id: string): string {
   const repo = id.includes(":") ? id.slice(0, id.lastIndexOf(":")) : id;
   return repo.slice(repo.indexOf("/") + 1).replace(/[-_.]?GGUF$/i, "");
+}
+
+// Models already on this Mac that niti could add in place (LM Studio's folder, the Hugging Face cache).
+export function useFound(): { models: FoundModel[] | null; refresh: () => void } {
+  const api = useApp((s) => s.api);
+  const [models, setModels] = useState<FoundModel[] | null>(null);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    if (!api) return;
+    let live = true;
+    api.foundModels().then((r) => live && setModels(r.models)).catch(() => live && setModels([]));
+    return () => {
+      live = false;
+    };
+  }, [api, nonce]);
+  return { models, refresh: () => setNonce((n) => n + 1) };
 }

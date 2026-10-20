@@ -10,7 +10,7 @@ import { Markdown } from "@/features/session/markdown";
 import { fmtAgo, fmtBytes, fmtCount, fmtParams } from "@/lib/format";
 import type { CatalogModel, ModelDetail } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { CapabilityBadges, DownloadAction, FitBadge, Monogram } from "./parts";
+import { CapabilityBadges, DownloadAction, FitBadge, FormatBadge, Monogram, quantLabel } from "./parts";
 import { useDownload, useModelActions, useModelDetail } from "./use-models";
 
 // Everything about one model, from the repo itself: every quantization with its exact size and how
@@ -39,6 +39,7 @@ export function ModelSheet({ repo, preview, onClose }: { repo: string | null; pr
               </div>
               <div className="relative flex flex-wrap items-center gap-1.5">
                 <FitBadge fit={m.pick?.fit} />
+                <FormatBadge format={m.format} />
                 <CapabilityBadges tools={m.tools} thinking={m.thinking} license={m.license} />
                 {m.gated && (
                   <Badge variant="outline" className="h-5 gap-1 border-warning/30 bg-warning/10 px-1.5 text-[10.5px] text-warning">
@@ -130,7 +131,9 @@ function QuantPicker({ m, detail }: { m: CatalogModel | ModelDetail; detail: Mod
         <h3 id="quant-h" className="text-[13px] font-semibold">
           Quantization
         </h3>
-        <span className="text-[11.5px] text-muted-foreground">Smaller is faster and lighter; larger is closer to the original.</span>
+        <span className="text-[11.5px] text-muted-foreground">
+          {m.format === "mlx" ? "An MLX repo holds one quantization; other sizes are other repos." : "Smaller is faster and lighter; larger is closer to the original."}
+        </span>
       </div>
       <ToggleGroup type="single" value={chosen} onValueChange={(v) => v && setChosen(v)} className="grid w-full grid-cols-3 gap-1.5 sm:grid-cols-4" aria-label="Quantization">
         {ordered.map((x) => {
@@ -144,7 +147,7 @@ function QuantPicker({ m, detail }: { m: CatalogModel | ModelDetail; detail: Mod
             >
               <span className="flex w-full items-center gap-1.5 font-mono text-[11.5px] font-semibold">
                 <span className={cn("size-1.5 rounded-full", dot)} aria-hidden />
-                {x.quant}
+                {quantLabel(x.quant, m.repo)}
                 {x.quant === m.pick?.quant && <Sparkles className="ml-auto size-3 text-primary" aria-label="recommended" />}
               </span>
               <span className="text-[11px] text-muted-foreground tabular">
@@ -158,7 +161,7 @@ function QuantPicker({ m, detail }: { m: CatalogModel | ModelDetail; detail: Mod
       <div className="flex items-center gap-3 rounded-xl border bg-card px-3.5 py-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-[13px] font-medium">
-            <span className="font-mono">{chosen}</span>
+            <span className="font-mono">{quantLabel(chosen, m.repo)}</span>
             <FitBadge fit={fit} />
           </div>
           <div className="text-[11.5px] text-muted-foreground">

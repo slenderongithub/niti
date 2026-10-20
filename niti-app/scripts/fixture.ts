@@ -22,6 +22,11 @@ export async function fixture(opts: { agents?: string[]; chunked?: boolean } = {
   // small deltas the way a real provider does.
   const agentPort = opts.chunked ? llmPort + 1000 : llmPort;
   mkdirSync(join(project, "src"));
+  const found = join(state, "found", "lmstudio-community", "Tiny-Coder-7B-Instruct-MLX-4bit");
+  mkdirSync(found, { recursive: true });
+  writeFileSync(join(found, "config.json"), JSON.stringify({ model_type: "qwen2", max_position_embeddings: 32768 }));
+  writeFileSync(join(found, "tokenizer_config.json"), JSON.stringify({ chat_template: "{% if tools %}<tool_call>{% endif %}" }));
+  writeFileSync(join(found, "model.safetensors"), "weights");
   mkdirSync(join(project, ".niti"));
   writeFileSync(join(project, "src/a.ts"), 'import { b } from "./b";\nexport const a = b + 1;\n');
   writeFileSync(join(project, "src/b.ts"), "export const b = 1;\n");
@@ -61,6 +66,10 @@ export async function fixture(opts: { agents?: string[]; chunked?: boolean } = {
     NITI_LOCAL_MODELS_DIR: join(state, "local-models"), // a test core never fills the real models folder
     // The Models page browses fakellm's pocket Hugging Face, so the checks see real cards.
     NITI_HF_URL: `http://127.0.0.1:${llmPort}`,
+    // "Found on this Mac" scans a fake LM Studio folder with one MLX model in it, never the real
+    // one, and MLX models run on the scripted engine (scripts/e2e/fakemlx.ts).
+    NITI_DISCOVER_DIRS: join(state, "found"),
+    NITI_MLX_SERVER: join(REPO, "scripts/e2e/fakemlx.ts"),
   };
   return {
     project,

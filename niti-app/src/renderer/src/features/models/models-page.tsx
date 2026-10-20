@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { load, save } from "@/store/ui";
 import { ModelCard } from "./model-card";
 import { ModelSheet } from "./model-sheet";
-import { InstalledList } from "./installed-list";
+import { FoundOnThisMac, InstalledList, MlxEngine } from "./installed-list";
 import { isActive, useCatalog, useDevice, useInstalled } from "./use-models";
 import { useApp } from "@/store/app";
 
@@ -40,6 +40,7 @@ export default function ModelsPage() {
   const [sort, setSort] = useState<SortKey>(() => load<SortKey>("models.sort", "downloads"));
   const [filters, setFilters] = useState<string[]>(() => load<string[]>("models.filters", ["tools"]));
   const [size, setSize] = useState<"any" | "small" | "medium" | "large">("any");
+  const [format, setFormat] = useState<"any" | "gguf" | "mlx">(() => load<"any" | "gguf" | "mlx">("models.format", "any"));
   const [open, setOpen] = useState<string | null>(null);
   const device = useDevice();
   const installed = useInstalled();
@@ -53,13 +54,14 @@ export default function ModelsPage() {
   useEffect(() => save("models.tab", tab), [tab]);
   useEffect(() => save("models.sort", sort), [sort]);
   useEffect(() => save("models.filters", filters), [filters]);
+  useEffect(() => save("models.format", format), [format]);
 
   const query: CatalogQuery = useMemo(
     () =>
       tab === "recommended"
         ? { tab: "recommended" }
-        : { tab: "all", q: debounced || undefined, sort, tools: filters.includes("tools"), fits: filters.includes("fits"), ...(size !== "any" ? { size } : {}) },
-    [tab, debounced, sort, filters, size],
+        : { tab: "all", q: debounced || undefined, sort, tools: filters.includes("tools"), fits: filters.includes("fits"), ...(size !== "any" ? { size } : {}), ...(format !== "any" ? { format } : {}) },
+    [tab, debounced, sort, filters, size, format],
   );
   const { result, loading, error, retry } = useCatalog(tab === "installed" ? { tab: "recommended" } : query);
   const models = result?.models ?? [];
@@ -126,6 +128,16 @@ export default function ModelsPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                <Select value={format} onValueChange={(v) => setFormat(v as typeof format)}>
+                  <SelectTrigger className="h-9 w-32" aria-label="Format">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="any">Any format</SelectItem>
+                    <SelectItem value="gguf">GGUF</SelectItem>
+                    <SelectItem value="mlx">MLX</SelectItem>
+                  </SelectContent>
+                </Select>
                 <Select value={size} onValueChange={(v) => setSize(v as typeof size)}>
                   <SelectTrigger className="h-9 w-36" aria-label="Model size">
                     <SelectValue />
@@ -163,17 +175,21 @@ export default function ModelsPage() {
         <div className="mx-auto w-full max-w-6xl px-6 py-5">
           {tab === "installed" ? (
             installed.loaded && installed.models.length === 0 && !downloading ? (
-              <EmptyState
-                icon={HardDrive}
-                title="No models on this Mac yet"
-                description="Download one from Recommended — they're picked to run well on this Mac and to work as agents."
-                action={
-                  <Button size="sm" onClick={() => setTab("recommended")} className="gap-1.5">
-                    <Sparkles /> See recommended models
-                  </Button>
-                }
-                className="py-20"
-              />
+              <div className="flex flex-col gap-4">
+                <EmptyState
+                  icon={HardDrive}
+                  title="No models in niti yet"
+                  description="Download one from Recommended — they're picked to run well on this Mac and to work as agents — or add one you already have, below."
+                  action={
+                    <Button size="sm" onClick={() => setTab("recommended")} className="gap-1.5">
+                      <Sparkles /> See recommended models
+                    </Button>
+                  }
+                  className="h-auto py-10"
+                />
+                <FoundOnThisMac onAdded={installed.refresh} />
+                <MlxEngine />
+              </div>
             ) : (
               <InstalledList models={installed.models} onOpen={setOpen} onRemoved={installed.refresh} />
             )
@@ -234,8 +250,8 @@ export default function ModelsPage() {
                 )
               }
               action={
-                filters.length || size !== "any" ? (
-                  <Button size="sm" variant="ghost" onClick={() => (setFilters([]), setSize("any"))}>
+                filters.length || size !== "any" || format !== "any" ? (
+                  <Button size="sm" variant="ghost" onClick={() => (setFilters([]), setSize("any"), setFormat("any"))}>
                     Clear filters
                   </Button>
                 ) : tab === "recommended" ? (

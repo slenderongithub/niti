@@ -1,5 +1,7 @@
 import { motion } from "motion/react";
-import { Brain, Cpu, HardDrive, Power, Trash2, Wrench } from "lucide-react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Brain, Cpu, FolderOpen, HardDrive, Loader2, Plus, Power, Search, Trash2, Wrench, Zap } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,8 +10,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { fmtAgo, fmtBytes, fmtParams } from "@/lib/format";
 import type { InstalledModel } from "@/lib/types";
 import { useApp } from "@/store/app";
-import { DownloadBar, Monogram } from "./parts";
-import { isActive, modelName, useModelActions } from "./use-models";
+import { DownloadBar, EngineInstallBar, FormatBadge, Monogram, quantLabel } from "./parts";
+import { isActive, modelName, useFound, useModelActions } from "./use-models";
 
 // What's on this Mac: each model with its size on disk and when an agent last used it, whether it
 // is loaded right now, and a delete that says how much it frees. Downloads in flight sit on top.
@@ -67,7 +69,18 @@ export function InstalledList({ models, onOpen, onRemoved }: { models: Installed
                 <button type="button" onClick={() => onOpen(m.repo)} className="min-w-0 flex-1 cursor-pointer text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 rounded-md">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-[13.5px] font-medium">{modelName(m.id)}</span>
-                    <span className="font-mono text-[11px] text-muted-foreground">{m.quant}</span>
+                    <span className="font-mono text-[11px] text-muted-foreground">{quantLabel(m.quant, m.repo)}</span>
+                    {m.format === "mlx" && <FormatBadge format="mlx" />}
+                    {m.path && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10.5px] font-normal text-muted-foreground">
+                            <FolderOpen className="size-3" aria-hidden /> {m.source ?? "added"}
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-80 break-all">Used where it is: {m.path}</TooltipContent>
+                      </Tooltip>
+                    )}
                     {loaded && (
                       <Badge variant="outline" className="h-5 gap-1 border-success/30 bg-success/10 px-1.5 text-[10.5px] text-success">
                         <span className="size-1.5 animate-pulse rounded-full bg-success" aria-hidden />
@@ -76,7 +89,7 @@ export function InstalledList({ models, onOpen, onRemoved }: { models: Installed
                     )}
                   </div>
                   <div className="mt-0.5 flex items-center gap-2 text-[11.5px] text-muted-foreground tabular">
-                    <span>{fmtBytes(m.bytes)}</span>
+                    <span>{m.path ? `${fmtBytes(m.bytes)} (not counted — stays in ${m.source ?? "its folder"})` : fmtBytes(m.bytes)}</span>
                     <span aria-hidden>·</span>
                     <span>{fmtParams(m.params)} params</span>
                     <span aria-hidden>·</span>
@@ -104,21 +117,25 @@ export function InstalledList({ models, onOpen, onRemoved }: { models: Installed
                 )}
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
-                    <Button variant="ghost" size="icon-sm" aria-label={`Delete ${modelName(m.id)}`} className="text-muted-foreground hover:text-destructive">
+                    <Button variant="ghost" size="icon-sm" aria-label={`${m.path ? "Remove" : "Delete"} ${modelName(m.id)}`} className="text-muted-foreground hover:text-destructive">
                       <Trash2 />
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>Delete {modelName(m.id)}?</AlertDialogTitle>
+                      <AlertDialogTitle>
+                        {m.path ? "Remove" : "Delete"} {modelName(m.id)}?
+                      </AlertDialogTitle>
                       <AlertDialogDescription>
-                        Frees {fmtBytes(m.bytes)}. Agents set to this model stop working until you pick another one or download it again.
+                        {m.path
+                          ? `niti forgets it; its files stay in ${m.source ?? "their folder"} (${m.path}). You can add it again from Found on this Mac.`
+                          : `Frees ${fmtBytes(m.bytes)}. Agents set to this model stop working until you pick another one or download it again.`}
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Keep it</AlertDialogCancel>
                       <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => void remove(m.id).then(onRemoved)}>
-                        Delete
+                        {m.path ? "Remove from niti" : "Delete"}
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
@@ -128,10 +145,109 @@ export function InstalledList({ models, onOpen, onRemoved }: { models: Installed
           })}
         </CardContent>
       </Card>
+      <FoundOnThisMac onAdded={onRemoved} />
+      <MlxEngine />
       <p className="flex items-center gap-1.5 px-1 text-[11.5px] text-muted-foreground">
         <Cpu className="size-3.5" aria-hidden />
-        Models run with llama.cpp on this Mac's GPU, one copy shared by every agent using it, and unload after 15 idle minutes.
+        Models run on this Mac's GPU (GGUF on llama.cpp, MLX on Apple's MLX), one copy shared by every agent using it, and unload after 15 idle minutes.
       </p>
     </div>
+  );
+}
+
+// Models another app already downloaded (LM Studio's folder, the Hugging Face cache): added in place,
+// run on niti's engines. Nothing is copied, so nothing is downloaded twice.
+export function FoundOnThisMac({ onAdded }: { onAdded: () => void }) {
+  const api = useApp((s) => s.api);
+  const { models, refresh } = useFound();
+  const [busy, setBusy] = useState<string | null>(null);
+  const waiting = (models ?? []).filter((f) => !f.added);
+  if (models === null || waiting.length === 0) return null;
+  const add = async (id: string) => {
+    setBusy(id);
+    try {
+      await api?.addFoundModel(id);
+      toast.success(`Added ${modelName(id)}`, { description: "Its files stay where they are. Pick it for an agent under On this Mac." });
+      refresh();
+      onAdded();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <Card className="gap-0 py-0 shadow-none">
+      <CardHeader className="flex items-center justify-between border-b px-4 py-3 [.border-b]:pb-3">
+        <div>
+          <CardTitle className="flex items-center gap-1.5 text-[13px]">
+            <Search className="size-3.5 text-muted-foreground" aria-hidden /> Found on this Mac
+          </CardTitle>
+          <CardDescription className="text-[12px]">Already downloaded by another app. Add one to use it in niti — no second download.</CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent className="divide-y px-0">
+        {waiting.map((f) => (
+          <div key={f.id} className="flex items-center gap-3 px-4 py-2.5">
+            <Monogram name={f.repo.split("/")[0]!} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[13.5px] font-medium">{modelName(f.id)}</span>
+                <FormatBadge format={f.format} />
+                {f.tools === false && <span className="text-[11px] text-warning">chat only</span>}
+              </div>
+              <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground tabular" title={f.path}>
+                {fmtBytes(f.bytes)} · {fmtParams(f.params)} params{f.contextLength ? ` · ${Math.round(f.contextLength / 1024)}k ctx` : ""} · {f.source}
+              </div>
+            </div>
+            <Button size="sm" variant="outline" className="gap-1.5" disabled={busy !== null} onClick={() => void add(f.id)}>
+              {busy === f.id ? <Loader2 className="animate-spin" /> : <Plus />} Add
+            </Button>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+// The MLX engine: where it stands, its install as it happens, and a way to take its space back.
+export function MlxEngine() {
+  const api = useApp((s) => s.api);
+  const runtime = useApp((s) => s.session.local.runtime);
+  const installing = Object.values(runtime).find((r) => r.engine === "mlx" && r.state === "installing");
+  const failed = runtime["engine:mlx"]?.state === "error" ? runtime["engine:mlx"] : undefined;
+  const [device, setDevice] = useState<{ installed: boolean; supported: boolean; bytes?: number } | null>(null);
+  const load = () => void api?.localDevice().then((d) => setDevice(d.mlx)).catch(() => {});
+  const doneAt = runtime["engine:mlx"]?.state;
+  useEffect(load, [api, doneAt, Boolean(installing)]); // eslint-disable-line react-hooks/exhaustive-deps -- refetch when an install starts or ends
+  if (!device?.supported) return null;
+  return (
+    <Card className="gap-2 py-3 shadow-none">
+      <CardContent className="flex items-center gap-3 px-4">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-pink/12 text-pink">
+          <Zap className="size-4" aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium">MLX engine</div>
+          {installing ? (
+            <EngineInstallBar status={installing} />
+          ) : (
+            <div className="text-[11.5px] text-muted-foreground">
+              {failed ? <span className="text-destructive">Install failed: {failed.error}</span> : device.installed ? `Installed${device.bytes ? ` · ${fmtBytes(device.bytes)}` : ""} · runs MLX models on Apple Silicon` : "Downloads once (about 140 MB) the first time an MLX model runs."}
+            </div>
+          )}
+        </div>
+        {!installing &&
+          (device.installed ? (
+            <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => void api?.removeMlx().then(load).catch((e) => toast.error((e as Error).message))}>
+              Remove
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={() => void api?.installMlx().then(load)}>
+              Install now
+            </Button>
+          ))}
+      </CardContent>
+    </Card>
   );
 }
