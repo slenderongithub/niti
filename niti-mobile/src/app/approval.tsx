@@ -4,7 +4,7 @@ import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import * as LocalAuthentication from "expo-local-authentication";
-import { Check, CheckCheck, FileCode2, FolderCheck, MessageSquareWarning, ScanFace, ShieldAlert, ShieldCheck, Terminal, X } from "lucide-react-native";
+import { Check, CheckCheck, FileCode2, FolderCheck, Globe, MessageSquareWarning, ScanFace, ShieldAlert, ShieldCheck, Terminal, X } from "lucide-react-native";
 import { parseUnified } from "../../../niti-app/src/renderer/src/lib/diff";
 import type { ApprovalRequest } from "../../../niti-app/src/renderer/src/lib/types";
 import { fmtApprovalCountdown } from "../../../niti-app/src/renderer/src/lib/format";
@@ -23,8 +23,13 @@ function describe(r: ApprovalRequest): { verb: string; target: string } {
   if (r.tool === "shell" || r.tool === "bash") return { verb: "run", target: [str(i.command), ...(Array.isArray(i.args) ? (i.args as unknown[]).map(String) : [])].join(" ").trim() };
   if (r.tool === "write_file") return { verb: "write", target: str(i.path) };
   if (r.tool === "edit") return { verb: "edit", target: str(i.path) };
+  if (r.tool === "web_fetch") return { verb: "fetch", target: str(i.url) };
+  if (r.tool === "web_search") return { verb: "search the web for", target: str(i.query) };
+  if (r.tool === "lookup") return { verb: `look up on ${str(i.source)}`, target: str(i.query) };
   return { verb: `use ${r.tool}`, target: str(i.path ?? i.query ?? "") };
 }
+
+const WEB = new Set(["web_fetch", "web_search", "lookup"]);
 
 // The request at the front of the queue, laid out as the desktop's approval center: who wants to
 // do what, the command or the diff, then allow, always, or deny (and say what to do instead). A
@@ -89,7 +94,7 @@ export default function Approval() {
               </Text>
             )}
             <View style={{ flexDirection: "row", gap: space(1.5), flexWrap: "wrap" }}>
-              <Badge text={head.tool} variant="outline" mono icon={isShell ? Terminal : FileCode2} />
+              <Badge text={head.tool} variant="outline" mono icon={isShell ? Terminal : WEB.has(head.tool) ? Globe : FileCode2} />
               {head.dangerous && <Badge text="risky" tone="destructive" icon={ShieldAlert} />}
               {approvals.length > 1 && <Badge text={`1 of ${approvals.length}`} />}
             </View>
@@ -107,6 +112,18 @@ export default function Approval() {
                 <ShieldAlert color={t.mutedForeground} size={13} style={{ marginTop: 2 }} />
                 <Text size={type.xs} tone="mutedForeground" style={{ flex: 1 }}>
                   Runs in the project folder on your Mac. Network and paths outside the project always ask.
+                </Text>
+              </View>
+            </>
+          ) : WEB.has(head.tool) ? (
+            <>
+              <CodeBlock icon={Globe} title={<Text size={type.label} tone="mutedForeground">{head.tool === "web_search" ? "search through api.tavily.com" : head.tool === "lookup" ? `look up on ${str(head.input.source)}` : "fetch a page"}</Text>} tone="info">
+                {d.target}
+              </CodeBlock>
+              <View style={{ flexDirection: "row", gap: space(2) }}>
+                <ShieldAlert color={t.mutedForeground} size={13} style={{ marginTop: 2 }} />
+                <Text size={type.xs} tone="mutedForeground" style={{ flex: 1 }}>
+                  {head.tool === "web_search" ? "Sends this query to Tavily and uses one of the free monthly searches." : "Sent from your Mac. Private and local addresses are never fetched."} Web calls ask even with auto-approve on.
                 </Text>
               </View>
             </>
