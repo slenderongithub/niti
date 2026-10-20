@@ -6,7 +6,14 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
 
 ## Features
 
-- **Open a folder, pick a team.** Each time you open a folder, choose to keep its team or build a new one: providers (keys saved inline), models, roles, the lead, and the approval mode. It writes the same `agents.yaml` as the TUI's picker.
+- **Open a folder, pick a team.** Each time you open a folder, choose to keep its team or build a new one: providers (keys saved inline), models, roles, the lead, and the approval mode. It writes the same `agents.yaml` as the TUI's picker. Each teammate runs in the **Cloud** or **On this Mac**. On this Mac lists the models you've downloaded, and can download one recommended for this Mac right there.
+- **Models.** Open models from Hugging Face that run on this Mac, through a bundled llama.cpp (no Ollama or LM Studio needed). There are three tabs:
+  - **Recommended for this Mac:** the most downloaded models that can call tools and run well here, one per model family.
+  - **All models:** search, sort (most downloaded, liked, trending, recently updated), and filter by size, tool support and fit.
+  - **Installed:** size on disk, when an agent last used it, loaded or not, unload and delete.
+
+  Each model shows Runs well / Tight / Won't fit, tools and thinking support, licence, downloads, likes, parameters and context. Its sheet lists every quantization with its exact size and fit, and the model card. Downloads resume, verify their checksum, and keep going in the background. A local agent's shell has no internet unless you approve the command.
+- **Web.** Agents with the `web` tool read pages (`web_fetch`) and look things up in npm, PyPI, crates.io, Go, GitHub, Stack Overflow and Wikipedia (`lookup`) with no account. Settings → Web search adds a free Tavily key for `web_search` (1,000 searches a month, no card). Every web call asks you first, even with auto-approve on.
 - **One prompt to the whole team.** The lead plans each goal into tasks across every agent. During a run you can steer one agent, let the app pick which one, or broadcast to everyone working.
 - **Session.** Every agent side by side, or one focused, each with its own avatar character (they blink). Shows:
   - streaming markdown
@@ -39,12 +46,13 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
   - Appearance: light, dark or system.
   - Team: per-agent models.
   - Providers and keys.
+  - Web search: the Tavily key, tested before it's saved.
   - Agent behaviour.
   - Integrations: MCP, LSP, skills, permissions.
   - Worktree: merge or discard.
   - History: rewind, branch snapshots, sessions.
 - **Everywhere.**
-  - Command palette ⌘K, pages ⌘1–5, model switcher ⌘L, history ⌘R, focus an agent ⌥1–9, focus mode ⌘., sidebar ⌘B.
+  - Command palette ⌘K, pages ⌘1–6 (⌘6 Models), settings ⌘7 or ⌘,, model switcher ⌘L, history ⌘R, focus an agent ⌥1–9, focus mode ⌘., sidebar ⌘B.
   - Resizable panes.
   - A notification when a long run ends, and a Dock badge for pending approvals.
   - Drop a folder on the window or the Dock icon to open it.
@@ -93,7 +101,7 @@ npm run dist:all                  # dmg + zip for arm64 and x64
 bun scripts/smoke.ts --packaged   # smoke (and perf.ts / audit.ts) against the packaged app
 ```
 
-`scripts/bundle-core.ts` compiles niti-core into `resources/<arch>/`, and electron-builder ships it inside the app. Builds are ad-hoc signed. Distributing them needs a Developer ID identity and notarization.
+`scripts/bundle-core.ts` compiles niti-core into `resources/<arch>/`, and electron-builder ships it inside the app. `scripts/bundle-llama.ts` fetches the pinned, checksum-verified llama.cpp release and keeps `llama-server` and the libraries it links in `resources/<arch>/llama/` (shipped as `Contents/Resources/llama`, about 28 MB). `npm run dev` uses that copy too, once fetched (`npm run bundle-llama`). Builds are ad-hoc signed. Distributing them needs a Developer ID identity and notarization.
 
 ## Layout
 
