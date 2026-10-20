@@ -14,6 +14,7 @@ import { answerApproval, approveAll } from "@/lib/actions";
 import { useApp } from "@/store/app";
 import type { ApprovalRequest } from "@/lib/types";
 import { DiffRows, parseUnified } from "@/features/session/diff-view";
+import { fmtApprovalCountdown } from "@/lib/format";
 
 // "Later" hides the dialog until a different request reaches the front of the queue.
 export const useApprovalUI = create<{ hiddenFor: string | null; show(): void; hide(key: string): void }>((set) => ({
@@ -135,6 +136,7 @@ export function ApprovalCenter() {
                   </Badge>
                   {approvals.length > 1 && <span>1 of {approvals.length} waiting</span>}
                 </DialogDescription>
+                <ApprovalCountdown expiresAt={head.expiresAt} />
               </div>
               <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => hide(key)}>
                 <Clock /> Later
@@ -272,4 +274,16 @@ export function ApprovalCenter() {
       </DialogContent>
     </Dialog>
   );
+}
+
+// Redrawn once a second; the core owns the deadline and denies the request itself when it passes.
+function ApprovalCountdown({ expiresAt }: { expiresAt?: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!expiresAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [expiresAt]);
+  if (!expiresAt) return null;
+  return <p className="mt-1 text-[11.5px] text-muted-foreground tabular-nums">{fmtApprovalCountdown(expiresAt, now)}</p>;
 }

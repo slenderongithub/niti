@@ -3,6 +3,7 @@ import { buildTree, defaultParams, tick, type SimNode } from "../features/graph/
 import { buildAgent, sanitize, systemPrompt } from "../features/setup/team";
 import { parseUnified, toRows } from "./diff";
 import { streaks } from "./stats";
+import { fmtApprovalCountdown } from "./format";
 import { layoutDag } from "./dag";
 import { fmtCost, fmtTokens } from "./format";
 
@@ -66,4 +67,10 @@ test("numbers read like people say them", () => {
   expect(fmtTokens(2_500_000)).toBe("2.5M");
   expect(fmtCost(0.004)).toBe("$0.0040");
   expect(fmtCost(1.5, false)).toBe("$1.50+");
+});
+
+test("fmtApprovalCountdown counts minutes and seconds down to the core's deadline", () => {
+  expect(fmtApprovalCountdown(undefined)).toBe("");
+  expect(fmtApprovalCountdown(1_063_000, 1_000_000)).toContain("in 1:03,");
+  expect(fmtApprovalCountdown(999_000, 1_000_000)).toContain("in 0:00,");
 });

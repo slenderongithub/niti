@@ -28,6 +28,13 @@ export function fmtAgo(ms: number, now = Date.now()): string {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+// The core refuses an unanswered approval on its own at expiresAt (src/approval.ts); this counts down to it.
+export function fmtApprovalCountdown(expiresAt: number | undefined, now = Date.now()): string {
+  if (!expiresAt) return "";
+  const s = Math.max(0, Math.round((expiresAt - now) / 1000));
+  return `niti will automatically deny this request in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}, to avoid blocking progress on an unattended session`;
+}
+
 export function fmtClock(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }

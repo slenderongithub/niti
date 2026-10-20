@@ -28,6 +28,7 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
   - deny, or deny and tell the agent what to do instead
   - edit before allowing
   - approve all
+  - a countdown to when the core denies it on its own (`approvalTimeout`, default 5 minutes)
 - **Tasks.** A kanban board with animated hand-offs, a dependency graph, task details, and reassign.
 - **Tokens.**
   - Live: totals, cost, per-agent breakdown, context meters, rate limits, run history.

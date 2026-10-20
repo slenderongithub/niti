@@ -204,6 +204,7 @@ export interface ApprovalRequest {
   tool: string;
   input: Record<string, unknown>;
   dangerous?: boolean; // must be decided on its own: never part of "allow all" (absent from older cores)
+  expiresAt?: number; // epoch ms the core denies it on its own (absent: older cores, or the timeout is off)
 }
 
 export interface TurnSummary {
