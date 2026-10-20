@@ -77,6 +77,10 @@ in one disappears from the others (the core answers by id; a second answer gets 
    context compaction near the ceiling (`agent/context.ts`), a todo list (`agent/todo.ts`),
    per-model-family steering (`agent/steering.ts`), a PageRank repo map in the system prompt
    (`agent/repomap.ts`), and forks (`spawn_fork`, same tools and permissions, depth-capped).
+   A reply that is nothing but one call with broken JSON (a file's quotes unescaped, its lines as
+   real newlines, as small models write HTML) is read by `lenientCall`, splitting on the tool's own
+   parameter names. A refused turn's text rides on its `rejected_turn` event (`body`, 40 lines) for
+   the logs; clients show only the note.
    Malformed calls are answered, never run blind (`agent/toolcalls.ts`): arguments are repaired when
    they are nearly JSON and otherwise refused with the parse error; a missing or mistyped required
    argument is named; a tool that doesn't exist gets the nearest real one.
@@ -395,7 +399,8 @@ The personas:
 - `todo`: rewrites its checklist instead of working;
 - `lazy`: ships Arial first and fixes it when the checks say so;
 - `chatty`: never calls a tool, even forced;
-- `needsforce`: describes the call in prose unless the engine makes it call (Qwen2.5-Coder on MLX).
+- `needsforce`: describes the call in prose unless the engine makes it call (Qwen2.5-Coder on MLX);
+- `badjson`: writes calls as JSON with a file's quotes unescaped and real newlines.
 The fake MLX engine, like the real one, answers a started reply afresh instead of continuing it.
 Forced turns behave as on the real engines. `scripts/e2e/local-matrix.ts` runs a real core on the
 coffee-shop goal with a two-agent team of them. It checks:

@@ -107,7 +107,8 @@ export function checkArgs(spec: ToolSpec, input: Record<string, unknown>): strin
 // Qwen3-Coder's `<function=name><parameter=k>v</parameter></function>`, and a reply that is nothing
 // but a JSON `{name, arguments}` object (fenced or not). Only names in `names` count, so prose that
 // merely shows an example of some other API never becomes a call. `rest` is the reply without them.
-export function extractTextToolCalls(text: string, names: string[]): { calls: ToolCall[]; rest: string } | undefined {
+// `params`: each tool's parameter names, which the last-resort reading (lenientCall) splits on.
+export function extractTextToolCalls(text: string, names: string[], params: Record<string, string[]> = {}): { calls: ToolCall[]; rest: string } | undefined {
   const known = new Set(names);
   const calls: ToolCall[] = [];
   let rest = text;
@@ -159,6 +160,13 @@ export function extractTextToolCalls(text: string, names: string[]): { calls: To
     // The whole reply is one JSON call (optionally fenced): nothing else in it to misread.
     const whole = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
     if (whole.startsWith("{") && whole.endsWith("}") && fromObject(repairJson(whole))) rest = "";
+  }
+  if (calls.length === 0) {
+    // Last resort, for a reply that is nothing but one call whose JSON is broken the way small models
+    // break it: a file's HTML with its quotes unescaped, its lines as real newlines.
+    const whole = text.trim().replace(/^<tool_call>\s*/, "").replace(/\s*<\/tool_call>$/, "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    const c = whole.startsWith("{") ? lenientCall(whole, names, params) : undefined;
+    if (c && add(c.name, c.input)) rest = "";
   }
   if (calls.length === 0) return undefined;
   return { calls, rest: rest.replace(/<\/?tool_call>/g, "").trim() };
@@ -225,4 +233,43 @@ export function salvageFiles(text: string): ToolCall[] {
     calls.push({ id: `salvaged-${crypto.randomUUID().slice(0, 8)}`, name: "write_file", input: { path, content: body.endsWith("\n") ? body : `${body}\n` } });
   }
   return calls;
+}
+
+// Common parameter names, for reading a broken call when the tool's own aren't known.
+const COMMON_PARAMS = ["path", "content", "oldString", "newString", "command", "args", "summary", "pattern", "items", "text", "query", "url"];
+
+// One call read from JSON too broken to parse: the name from "name": "…", then each known parameter's
+// value as everything between its key and the next parameter's key (or the closing braces). A string
+// value loses its quotes and has its escapes undone; the quotes and newlines inside stay as written.
+export function lenientCall(text: string, names: string[], params: Record<string, string[]> = {}): { name: string; input: Record<string, unknown> } | undefined {
+  const nm = /^\{\s*"name"\s*:\s*"([\w.-]+)"/.exec(text) ?? /"name"\s*:\s*"([\w.-]+)"\s*,\s*"(?:arguments|parameters)"/.exec(text);
+  const name = nm?.[1];
+  if (!name || !names.includes(name)) return undefined;
+  const am = /"(?:arguments|parameters|input)"\s*:\s*\{/.exec(text);
+  if (!am) return undefined;
+  const body = text.slice(am.index + am[0].length).replace(/\s*\}\s*\}\s*$/, "");
+  const keys = params[name]?.length ? params[name]! : COMMON_PARAMS;
+  // Each parameter's first key at the start of the arguments or after a comma and a line break or space.
+  const found = keys
+    .map((k) => ({ k, m: new RegExp(`(^|,)\\s*"${k}"\\s*:\\s*`).exec(body) }))
+    .filter((x): x is { k: string; m: RegExpExecArray } => !!x.m)
+    .sort((a, b) => a.m.index - b.m.index);
+  if (!found.length) return undefined;
+  const input: Record<string, unknown> = {};
+  found.forEach((f, i) => {
+    const from = f.m.index + f.m[0].length;
+    const to = i + 1 < found.length ? found[i + 1]!.m.index : body.length;
+    let raw = body.slice(from, to).trim().replace(/,$/, "").trim();
+    if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
+      raw = raw.slice(1, -1);
+      input[f.k] = raw.replace(/\\(["\\/nrt])/g, (_, c: string) => ({ n: "\n", r: "\r", t: "\t" })[c] ?? c);
+    } else {
+      try {
+        input[f.k] = JSON.parse(raw);
+      } catch {
+        input[f.k] = raw;
+      }
+    }
+  });
+  return { name, input };
 }

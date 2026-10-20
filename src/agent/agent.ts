@@ -654,7 +654,9 @@ export class Agent {
             if ((others.length === 0 && !finish) || todoAgain || premature) {
               rejected++;
               const why = premature ? "finished without doing anything" : todoAgain ? "rewrote its checklist instead of working" : "replied without a tool call";
-              this.bus.publish({ agentId: id, type: "warning", protocol: "rejected_turn", payload: `${why} — ${rejected < 3 ? "asking again" : "giving up"}`, time: Date.now() });
+              // What was refused, for `models doctor` and the logs; clients show only the note.
+              const refused = (reply.text || JSON.stringify(reply.toolCalls.map((c) => ({ name: c.name, input: c.input })))).split("\n").slice(0, 40);
+              this.bus.publish({ agentId: id, type: "warning", protocol: "rejected_turn", payload: `${why} — ${rejected < 3 ? "asking again" : "giving up"}`, body: refused, time: Date.now() });
               if (rejected >= 3) {
                 error = `the model never did the work (${why}, three times running)`;
                 if (sessionId) this.store?.setStatus(sessionId, "failed");
@@ -859,7 +861,8 @@ export class Agent {
   // which is the example it follows next turn.
   private recoverTextCalls(reply: ProviderReply, tools: ToolSpec[]): ProviderReply {
     if (!this.profile.textToolCalls || reply.toolCalls.length > 0 || !reply.text || tools.length === 0) return reply;
-    const found = extractTextToolCalls(reply.text, tools.map((t) => t.name));
+    const params = Object.fromEntries(tools.map((t) => [t.name, Object.keys((t.parameters as { properties?: Record<string, unknown> }).properties ?? {})]));
+    const found = extractTextToolCalls(reply.text, tools.map((t) => t.name), params);
     if (!found) return reply;
     this.bus.publish({ agentId: this.config.id, type: "thought", payload: `read ${found.calls.length} tool call(s) the model wrote as text`, time: Date.now() });
     return { ...reply, text: found.rest, toolCalls: found.calls, raw: undefined };

@@ -23,6 +23,7 @@ export const PERSONAS = [
   "lazy", // ships Arial on white first, styles properly once told what's missing
   "chatty", // never calls a tool, even when forced: chat only
   "needsforce", // describes the call in prose unless the engine makes it call (Qwen2.5-Coder on MLX)
+  "badjson", // writes calls as JSON with the file's quotes unescaped and its lines as real newlines
 ] as const;
 export type Persona = (typeof PERSONAS)[number];
 
@@ -179,6 +180,8 @@ function dress(a: Action, persona: Persona, firstTurn: boolean): Reply {
       return firstTurn ? { text: "Here's my plan:\n1. Write the markup with a hero, menu and visit section.\n2. Style it with a warm palette.\n3. Wire up the menu from the API.\nLet me know if that works!" } : { tool: a };
     case "empty":
       return a.name === "finish" ? { text: "" } : { tool: a };
+    case "badjson":
+      return { text: `{\n  "name": "${a.name}",\n  "arguments": {\n${Object.entries(a.args).map(([k, v]) => `    "${k}": ${typeof v === "string" ? `"${v}"` : JSON.stringify(v)}`).join(",\n")}\n  }\n}` };
     case "needsforce":
       return { text: `I'll ${a.name === "write_file" ? `write ${a.args.path}` : a.name === "finish" ? "wrap up" : a.name.replace("_", " ")} next.` };
     case "chatty":

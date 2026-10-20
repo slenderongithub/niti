@@ -384,3 +384,17 @@ test("local: work that never passes a must-check ends unverified, with the reaso
   expect(r.outcome).toBe("unverified");
   expect(r.error).toContain("missing.js");
 });
+
+test("a call whose JSON a small model broke — unescaped quotes, real newlines — is still read", async () => {
+  const { extractTextToolCalls } = await import("./toolcalls.ts");
+  const params = { write_file: ["path", "content"], finish: ["summary"] };
+  const html = '<!DOCTYPE html>\n<html lang="en">\n<head><link rel="stylesheet" href="styles.css"></head>\n</html>\n';
+  const broken = `{\n  "name": "write_file",\n  "arguments": {\n    "path": "index.html",\n    "content": "${html}"\n  }\n}`;
+  const r = extractTextToolCalls(broken, ["write_file", "finish"], params)!;
+  expect(r.calls[0]).toMatchObject({ name: "write_file", input: { path: "index.html", content: html } });
+  // Escapes the model did write are undone; a call wrapped in <tool_call> is read the same way.
+  const css = 'body {\n  font-family: \\"Inter\\";\n}';
+  expect(extractTextToolCalls(`<tool_call>\n{"name": "write_file", "arguments": {"path": "a.css", "content": "${css}"}}\n</tool_call>`, ["write_file"], params)!.calls[0]!.input.content).toBe('body {\n  font-family: "Inter";\n}');
+  // Prose that merely mentions a call shape is not one.
+  expect(extractTextToolCalls('I would call {"name": "write_file" with the "path" set.', ["write_file"], params)).toBeUndefined();
+});
