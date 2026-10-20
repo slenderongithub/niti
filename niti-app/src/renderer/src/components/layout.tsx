@@ -10,16 +10,24 @@ import { cn } from "@/lib/utils";
 export function Page({ children, className, wide }: { children: ReactNode; className?: string; wide?: boolean }) {
   return (
     <ScrollArea className="h-full">
-      <div data-audit="page" className={cn("mx-auto flex w-full flex-col gap-4 px-6 py-6", wide ? "max-w-7xl" : "max-w-6xl", className)}>
+      {/* A low light from the top of every page: the accent at a few percent, fading out — the depth
+          the Models page and the welcome screen have, without a new colour or a layout change. */}
+      <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-56 bg-[radial-gradient(70%_100%_at_30%_0%,color-mix(in_oklab,var(--primary)_7%,transparent),transparent_70%)]" />
+      <div data-audit="page" className={cn("relative mx-auto flex w-full flex-col gap-4 px-6 py-6", wide ? "max-w-7xl" : "max-w-6xl", className)}>
         {children}
       </div>
     </ScrollArea>
   );
 }
 
-export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
+export function PageHeader({ title, description, actions, icon: Icon }: { title: string; description?: ReactNode; actions?: ReactNode; icon?: LucideIcon }) {
   return (
     <header data-audit="section" className="flex h-14 shrink-0 items-center gap-4">
+      {Icon && (
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary ring-1 ring-inset ring-primary/20">
+          <Icon className="size-4.5" aria-hidden />
+        </span>
+      )}
       <div className="min-w-0 flex-1">
         <h1 className="truncate text-xl font-semibold leading-7 tracking-tight">{title}</h1>
         {description && <p className="truncate text-[13px] leading-5 text-muted-foreground">{description}</p>}
@@ -38,8 +46,14 @@ export function StatTile({ icon: Icon, label, value, sub, tone, className, onCli
       tabIndex={onClick ? 0 : undefined}
       onClick={onClick}
       onKeyDown={onClick ? (e) => e.key === "Enter" && onClick() : undefined}
-      className={cn("h-[104px] min-w-0 justify-between gap-0 px-4 py-3.5 shadow-none", onClick && "cursor-pointer transition-colors hover:bg-accent/40", className)}
+      className={cn(
+        "relative h-[104px] min-w-0 justify-between gap-0 overflow-hidden px-4 py-3.5 shadow-none",
+        onClick && "cursor-pointer transition-[background-color,border-color,transform] duration-200 hover:-translate-y-px hover:border-primary/30 hover:bg-accent/30",
+        className,
+      )}
     >
+      {/* A hairline of light along the top edge: the tile reads as a raised surface. */}
+      <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-foreground/10 to-transparent" />
       <div className="flex h-4 items-center gap-1.5 text-xs text-muted-foreground">
         <Icon className="size-3.5 shrink-0" style={tone ? { color: tone } : undefined} />
         <span className="truncate">{label}</span>

@@ -54,8 +54,9 @@ export default function TasksPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header data-audit="section" className="shrink-0 border-b px-6 pb-4 pt-6">
-        <div className="flex items-start gap-4">
+      <header data-audit="section" className="relative shrink-0 overflow-hidden border-b px-6 pb-4 pt-6">
+        <span aria-hidden className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_140%_at_12%_-20%,color-mix(in_oklab,var(--primary)_12%,transparent),transparent_70%)]" />
+        <div className="relative flex items-start gap-4">
           <div className="min-w-0 flex-1">
             <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               <Target className="size-3.5" /> Goal

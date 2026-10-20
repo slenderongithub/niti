@@ -46,7 +46,7 @@ export default function DashboardPage() {
 
   return (
     <Page wide>
-      <PageHeader title="Dashboard" description={s.goal ? `Goal: ${s.goal}` : undefined} />
+      <PageHeader icon={Activity} title="Dashboard" description={s.goal ? `Goal: ${s.goal}` : undefined} />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatTile

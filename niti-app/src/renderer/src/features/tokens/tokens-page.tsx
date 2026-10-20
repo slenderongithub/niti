@@ -30,6 +30,7 @@ export default function TokensPage() {
   return (
     <Page>
       <PageHeader
+        icon={Coins}
         title="Tokens"
         actions={
           <Tabs value={tab} onValueChange={pick}>
