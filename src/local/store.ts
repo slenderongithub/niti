@@ -24,6 +24,24 @@ export interface Sampling {
 
 export type ModelFormat = "gguf" | "mlx";
 
+// The model check's findings (src/local/probe.ts). Kept here, with the manifest it lives in.
+export interface ProbeResult {
+  version: number;
+  checkedAt: number;
+  engine: "llama.cpp" | "mlx";
+  // How it calls tools: through the API on its own; only when forced (llama.cpp grammar, or an MLX
+  // reply started for it); only as text niti has to read out of the reply; or not at all.
+  toolMode: "native" | "forced" | "text" | "none";
+  textFormat?: string; // the text shape it writes calls in, when it does
+  prefill?: string; // the opener that starts a call in its format (for forcing on MLX)
+  planMode: "lines" | "json" | "none"; // how it can plan work for a team
+  stops: string[]; // template tokens it leaked past its end of turn
+  thinking: "separate" | "inline" | "none";
+  tokensPerSec?: number;
+  verdict: "ready" | "partial" | "chat-only";
+  notes: string[]; // what a person reads: why the verdict
+}
+
 export interface InstalledModel {
   id: string; // "<repo>:<quant>" — what an agent's `model:` names; MLX models use the quant "mlx"
   repo: string;
@@ -47,6 +65,8 @@ export interface InstalledModel {
   // Learned when the runtime first loads it (GET /props): "native" = llama.cpp has a dedicated
   // parser for this template's tool calls; "generic" = its fallback format, which is less reliable.
   toolFormat?: "native" | "generic" | "none";
+  // What niti learned by testing the model once (probe.ts): how to drive it as an agent.
+  probe?: ProbeResult;
 }
 
 // "unsloth/Qwen3-4B-GGUF:Q4_K_M" → repo + quant. Repo ids contain one slash; quants never contain

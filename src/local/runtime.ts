@@ -11,7 +11,7 @@ import { ensureMlxEngine } from "./mlx.ts";
 import { fitModel, device, MIN_CONTEXT } from "./fit.ts";
 import { learnContext } from "../providers/catalog.ts";
 
-export type RuntimeState = "installing" | "loading" | "ready" | "stopped" | "error";
+export type RuntimeState = "installing" | "loading" | "checking" | "ready" | "stopped" | "error";
 
 export interface RuntimeStatus {
   model: string;
@@ -40,6 +40,9 @@ export function findLlamaServer(): string[] | undefined {
   for (const p of [join(here, "llama", "llama-server"), join(here, "llama-server"), join(here, "../Resources/llama/llama-server")]) {
     if (existsSync(p)) return [p];
   }
+  // Running from a checkout: the copy the repo's fetcher left for the app (scripts/llama.ts).
+  const checkout = join(import.meta.dir, "../../niti-app/resources", process.arch === "arm64" ? "arm64" : "x64", "llama", "llama-server");
+  if (existsSync(checkout)) return [checkout];
   const onPath = Bun.which("llama-server");
   return onPath ? [onPath] : undefined;
 }
@@ -127,7 +130,13 @@ export class LocalRuntime {
 
   // Agents announce which model they use before their first call, so the server starts with one
   // slot each instead of restarting every time another agent joins.
+  unregister(agentId: string): void {
+    for (const set of this.wanted.values()) set.delete(agentId);
+  }
+
   register(agentId: string, model: string): void {
+    // The model check (probe.ts) borrows a slot; it isn't an agent and mustn't size the server.
+    if (agentId.startsWith("probe:")) return;
     for (const set of this.wanted.values()) set.delete(agentId);
     const set = this.wanted.get(model) ?? new Set<string>();
     set.add(agentId);

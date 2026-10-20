@@ -74,7 +74,8 @@ const KNOWN_FLAGS = new Set(["--auto", "--worktree", "--web", "--show-url", "--t
 const SUBCOMMANDS = new Set(["keys", "login", "auth", "serve", "init", "resume", "help", "audit", "trust"]);
 // Subcommands that never read/execute anything from the project directory — the trust gate below
 // (ensureTrusted) is skipped for these, and for "trust" itself (it IS the trust UI).
-const TRUST_EXEMPT = new Set(["keys", "login", "auth", "trust", "help"]);
+// `models` manages the models folder in Application Support and reads nothing in the project.
+const TRUST_EXEMPT = new Set(["keys", "login", "auth", "trust", "help", "models"]);
 for (const a of args) {
   if (a.startsWith("-") && !KNOWN_FLAGS.has(a) && !a.startsWith("--port=")) {
     die(`unknown flag '${a}'\n\n${USAGE}`);

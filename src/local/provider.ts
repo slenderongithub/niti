@@ -6,7 +6,8 @@
 import type { OnDelta, Provider, ProviderReply, Reasoning, ToolSpec, Turn } from "../providers/provider.ts";
 import { OpenAIProvider } from "../providers/openai.ts";
 import { localRuntime, type LocalRuntime } from "./runtime.ts";
-import { formatOf, type InstalledModel, type Sampling } from "./store.ts";
+import { formatOf, getInstalled, type InstalledModel, type Sampling } from "./store.ts";
+import { ensureProbed, PROBE_VERSION } from "./probe.ts";
 
 // When the model's authors published nothing: what the Qwen, Gemma and Llama cards converge on for
 // agentic work. Never greedy — at temperature 0 small models fall into repeating themselves.
@@ -30,10 +31,31 @@ export function requestExtras(m: InstalledModel, slot: number, thinking: boolean
   };
 }
 
+// What one turn needs beyond the conversation — set by the local agent protocol (agent.ts) and the
+// model check (probe.ts) just before a send, used once:
+//   toolChoice "required": llama.cpp grammar-forces a tool call (no prose turn is possible);
+//   prefill: the reply starts with this text already written (the MLX server continues a final
+//     assistant message) — a model that drifts into prose is put at the start of its own call format;
+//   stop: extra stop sequences; thinking: override the thinking switch for this turn.
+export interface TurnOptions {
+  toolChoice?: "required" | "auto";
+  prefill?: string;
+  stop?: string[];
+  thinking?: boolean;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+// Chat-template tokens a model sometimes writes past its end of turn. They are never content.
+export const TEMPLATE_TOKENS = ["<|im_start|>", "<|im_end|>", "<|endoftext|>", "<|eot_id|>", "<|start_header_id|>", "<|end_header_id|>", "<end_of_turn>", "<start_of_turn>", "<|end|>", "<|user|>", "<|assistant|>"];
+export const stripTemplateTokens = (t: string): string => TEMPLATE_TOKENS.reduce((s, tok) => s.split(tok).join(""), t).replace(/\n{3,}/g, "\n\n");
+
 export const engineDied = (err: unknown): boolean => /generation thread died|ECONNREFUSED|ECONNRESET|socket hang up|Connection error|fetch failed/i.test(err instanceof Error ? err.message : String(err));
 
 export class LocalProvider implements Provider {
   private inner?: { url: string; slot: number; key: string; provider: OpenAIProvider };
+  // The next send's TurnOptions (see above). Consumed by that send.
+  next?: TurnOptions;
 
   constructor(
     private model: string,
@@ -46,16 +68,37 @@ export class LocalProvider implements Provider {
   }
 
   async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true, format?: "json", retried = false): Promise<ProviderReply> {
+    // A model's first agent request waits for its one-time check (probe.ts), so niti knows how to
+    // drive it before it is given work. The check's own requests skip this.
+    if (!this.agentId.startsWith("probe:")) {
+      const m = getInstalled(this.model);
+      if (m && (!m.probe || m.probe.version !== PROBE_VERSION)) await ensureProbed(m, { runtime: this.runtime });
+    }
     const { baseURL, apiKey, slot, manifest } = await this.runtime.ensure(this.model, this.agentId);
+    const turn = this.next ?? {};
+    this.next = undefined;
     // A JSON reply is constrained by grammar from its first token, which leaves no room for a
     // thinking block in front of it.
-    const think = thinking && this.reasoning !== "off" && format !== "json";
+    const think = (turn.thinking ?? thinking) && this.reasoning !== "off" && format !== "json";
     const mlx = formatOf(manifest) === "mlx";
     // llama-server constrains JSON by grammar; the MLX server has no such option, and niti's callers
     // validate and retry what comes back either way.
     // Plans, verdicts and summaries are JSON a program parses: sampled cool, so a small model's
     // plan comes out the same shape every time (the MLX engine has no grammar to hold it to JSON).
-    const extras = { ...requestExtras(manifest, slot, think), ...(format === "json" ? { temperature: 0.2 } : {}), ...(format === "json" && !mlx ? { response_format: { type: "json_object" } } : {}) };
+    const stop = [...new Set([...TEMPLATE_TOKENS.filter((t) => t !== "<|end|>"), ...(manifest.probe?.stops ?? []), ...(turn.stop ?? [])])];
+    const extras = {
+      ...requestExtras(manifest, slot, think),
+      ...(format === "json" ? { temperature: 0.2 } : {}),
+      ...(turn.temperature !== undefined ? { temperature: turn.temperature } : {}),
+      ...(turn.maxTokens ? { max_tokens: turn.maxTokens } : {}),
+      ...(format === "json" && !mlx ? { response_format: { type: "json_object" } } : {}),
+      // Grammar-forced tool calling exists only in llama.cpp; the MLX side uses `prefill` instead.
+      ...(turn.toolChoice && tools.length && !mlx ? { tool_choice: turn.toolChoice } : {}),
+      stop: stop.slice(0, 16), // OpenAI-style servers cap the list; llama.cpp and MLX accept more
+    };
+    // A prefilled reply: the conversation ends with the start of the assistant's answer, and the
+    // engine writes the rest. The caller gets the whole reply, prefill included.
+    const sent: Turn[] = turn.prefill ? [...turns, { role: "assistant", text: turn.prefill, toolCalls: [] }] : turns;
     if (!this.inner || this.inner.url !== baseURL || this.inner.slot !== slot || this.inner.key !== apiKey) {
       this.inner = {
         url: baseURL,
@@ -73,7 +116,9 @@ export class LocalProvider implements Provider {
     this.inner.provider.extraBody = extras;
     this.runtime.begin(this.model);
     try {
-      return await this.inner.provider.send(sysPrompt, turns, tools, onDelta, signal, think);
+      const reply = await this.inner.provider.send(sysPrompt, sent, tools, onDelta, signal, think);
+      const text = stripTemplateTokens(turn.prefill ? turn.prefill + reply.text : reply.text);
+      return { ...reply, text };
     } catch (err) {
       // An engine that died under the request (the MLX server's generation thread, a crashed
       // llama-server) answers every later request with the same error. Restart it and try once more.
@@ -81,6 +126,7 @@ export class LocalProvider implements Provider {
       this.runtime.end(this.model);
       this.runtime.stop(this.model);
       this.inner = undefined;
+      this.next = turn;
       return this.send(sysPrompt, turns, tools, onDelta, signal, thinking, format, true);
     } finally {
       this.runtime.end(this.model);

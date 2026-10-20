@@ -3,7 +3,7 @@
 // installed. The same catalogue, fit check and downloader as the app's /local/* routes.
 import { device } from "./fit.ts";
 import { searchCatalog, modelDetail, type CatalogModel } from "./catalog.ts";
-import { listInstalled, removeInstalled, parseModelId } from "./store.ts";
+import { listInstalled, removeInstalled, parseModelId, modelsDir } from "./store.ts";
 import { DownloadManager, type DownloadProgress } from "./downloads.ts";
 import { discoverModels, addFoundModel } from "./discover.ts";
 
@@ -68,6 +68,41 @@ export async function modelsCommand(args: string[], out: (s: string) => void = c
       for (const m of ms) out(`  ${m.id}  ${(m.format ?? "gguf").toUpperCase()} · ${size(m.bytes)} · ${params(m.params)}${m.tools ? " · tools" : m.tools === false ? " · chat only" : ""}${m.path ? ` · from ${m.source ?? m.path}` : ""}${m.lastUsed ? ` · used ${new Date(m.lastUsed).toLocaleDateString()}` : ""}`);
       return 0;
     }
+    case "check":
+    case "doctor": {
+      const id = rest[0];
+      if (!id || !parseModelId(id)) return (out(`usage: niti-core models ${sub} <repo>:<quant>`), 2);
+      const m = listInstalled().find((x) => x.id === id);
+      if (!m) return (out(`${id} is not installed.`), 1);
+      const { probeModel, templateOf } = await import("./probe.ts");
+      const { localRuntime } = await import("./runtime.ts");
+      let r = m.probe;
+      if (sub === "check" || !r) {
+        out(`Checking ${id} (one short test, about a minute)…`);
+        try {
+          r = await probeModel(id, { template: templateOf(m) });
+        } catch (err) {
+          localRuntime().stopAll();
+          return (out(`error: the check couldn't run: ${(err as Error).message}`), 1);
+        }
+        localRuntime().stopAll();
+      }
+      const label = { ready: "Ready for agent work", partial: "Partly ready", "chat-only": "Chat only" }[r.verdict];
+      out(`${label} — ${id} on ${r.engine}`);
+      for (const n of r.notes) out(`  · ${n}`);
+      out(`  tools: ${r.toolMode}${r.textFormat ? ` (${r.textFormat})` : ""}${r.prefill ? ` · starts calls with ${JSON.stringify(r.prefill)}` : ""} · planning: ${r.planMode} · thinking: ${r.thinking}${r.tokensPerSec ? ` · ~${r.tokensPerSec} tokens/s` : ""}`);
+      if (sub === "doctor") {
+        const { readFileSync, existsSync } = await import("node:fs");
+        const { join } = await import("node:path");
+        for (const log of ["mlx-server.log", "llama-server.log"]) {
+          const f = join(modelsDir(), log);
+          if (!existsSync(f)) continue;
+          const lines = readFileSync(f, "utf8").split("\n").filter((l) => /error|exception|died|failed|traceback/i.test(l)).slice(-8);
+          if (lines.length) out(`\n${log} — recent errors:\n${lines.map((l) => `  ${l}`).join("\n")}`);
+        }
+      }
+      return r.verdict === "chat-only" ? 1 : 0;
+    }
     case "found": {
       const found = discoverModels();
       if (!found.length) return (out("No other models found on this Mac (looked in LM Studio's models folder and the Hugging Face cache)."), 0);
@@ -95,6 +130,6 @@ export async function modelsCommand(args: string[], out: (s: string) => void = c
       return removeInstalled(id) ? (out(external ? `Removed ${id} from niti (its files in ${external} are untouched).` : `Removed ${id}.`), 0) : (out(`${id} is not installed.`), 1);
     }
   }
-  out("usage: niti-core models [recommended | search <query> | get <repo>[:<quant>] | list | found | add <id> | rm <repo>:<quant>]");
+  out("usage: niti-core models [recommended | search <query> | get <repo>[:<quant>] | list | found | add <id> | check <id> | doctor <id> | rm <repo>:<quant>]");
   return 2;
 }

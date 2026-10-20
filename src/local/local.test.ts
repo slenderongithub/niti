@@ -321,7 +321,9 @@ test("a local agent starts the runtime on first call, learns its context, and ta
     expect(reply.text).toContain("Done");
     const r2 = await b.send("sys", [{ role: "user", text: "hello" }], [], () => {});
     expect(r2.usage?.inputTokens).toBe(100);
-    expect(statuses).toEqual(["loading", "ready"]);
+    // The one-time model check runs first (probe.ts), then the agent's own request.
+    expect(statuses).toEqual(["checking", "loading", "ready", "ready"]);
+    expect(getInstalled(id)!.probe).toMatchObject({ toolMode: "native", planMode: "lines", verdict: "ready" });
     expect(rt.status()[0]).toMatchObject({ state: "ready", slots: 2, ctx: 16384 });
     expect(contextWindow("local", id)).toBe(16384);
     const args = JSON.parse(readFileSync(join(process.env.NITI_LOCAL_MODELS_DIR!, "llama-server.log.args"), "utf8")) as string[];
@@ -468,7 +470,7 @@ test("an MLX model runs on the MLX engine: default_model, usage in the stream, n
     const r = await p.send("sys", [{ role: "user", text: "hello" }], [], () => {});
     expect(r.text).toContain("Done");
     expect(r.usage?.inputTokens).toBe(100);
-    expect(statuses.map((x) => x.state)).toEqual(["loading", "ready"]);
+    expect(statuses.map((x) => x.state)).toEqual(["checking", "loading", "ready", "ready"]);
     expect(statuses.every((x) => x.engine === "mlx")).toBe(true);
     const log = await waitFor(() => {
       const f = join(repoDir("mlx-community/Qwen3-4B-Instruct-4bit"), "fakellm.log");
@@ -585,5 +587,35 @@ test("a local engine that dies is replaced, and an engine error is recognised fo
   } finally {
     rt.stopAll();
     delete process.env.NITI_LLAMA_SERVER;
+  }
+});
+
+test("the model check reads plan lines however they're dressed up", async () => {
+  const { parsePlanLines, callOpeners } = await import("./probe.ts");
+  expect(parsePlanLines("- **frontend**: build index.html\n2. backend — build server.js with /menu\nreviewer: -", ["frontend", "backend", "reviewer"])).toEqual({ frontend: "build index.html", backend: "build server.js with /menu" });
+  expect(parsePlanLines("Sure! Here is the plan.", ["frontend"])).toEqual({});
+  expect(callOpeners("{% if tools %}<tool_call>{% endif %}")[0]).toBe('<tool_call>\n{"name": "');
+  expect(callOpeners("").at(-1)).toBe('{"name": "');
+});
+
+test("a model that never calls a tool is chat only, with the reason", async () => {
+  const { probeModel } = await import("./probe.ts");
+  const id = "quiet/Talker-GGUF:Q4_K_M";
+  saveManifest({ id, repo: "quiet/Talker-GGUF", quant: "Q4_K_M", files: ["t.gguf"], bytes: 1, installedAt: 0 });
+  writeFileSync(join(repoDir("quiet/Talker-GGUF"), "t.gguf"), "GGUF");
+  // A runtime whose "server" only ever talks (a stand-in, never started).
+  const rt = { ensure: async () => ({ baseURL: "http://127.0.0.1:1/v1", apiKey: "k", slot: 0, ctx: 8192, manifest: getInstalled(id)! }), begin() {}, end() {}, stop() {}, register() {}, unregister() {}, onStatus() {} } as never;
+  const realSend = LocalProvider.prototype.send;
+  LocalProvider.prototype.send = async function () {
+    return { text: "I would create hello.txt with the text hi. Here's how you can do it yourself…", toolCalls: [] };
+  };
+  try {
+    const r = await probeModel(id, { runtime: rt });
+    expect(r.verdict).toBe("chat-only");
+    expect(r.toolMode).toBe("none");
+    expect(r.notes[0]).toContain("never called a tool");
+    expect(getInstalled(id)!.probe?.verdict).toBe("chat-only");
+  } finally {
+    LocalProvider.prototype.send = realSend;
   }
 });

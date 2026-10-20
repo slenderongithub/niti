@@ -13,6 +13,9 @@ function reply(body: any): { text?: string; tool?: { name: string; args: unknown
   const lastText = typeof lastUser?.content === "string" ? lastUser.content : JSON.stringify(lastUser?.content ?? "");
   const hasToolResult = msgs.some((m) => m.role === "tool");
   const tools: string[] = (body.tools ?? []).map((t: any) => t.function?.name);
+  // niti's one-time model check (src/local/probe.ts): a model that calls tools and can plan.
+  if (lastText.includes("Create a file named hello.txt") && !hasToolResult) return { tool: { name: "write_file", args: { path: "hello.txt", content: "hi" } } };
+  if (lastText.includes("Write exactly one line per teammate")) return { text: "frontend: build index.html and styles.css for the todo list\nbackend: build server.js with a /todos API" };
   if (lastText.includes("talking with the user")) {
     const goal = lastText.split("User's message: ")[1]?.split("\n")[0] ?? "";
     if (/^(hi|hello)/i.test(goal)) return { text: JSON.stringify({ reply: "Hello! What should we build?" }) };

@@ -174,6 +174,14 @@ in one disappears from the others (the core answers by id; a second answer gets 
     requests send `model: "default_model"` and ask for stream usage; the server batches agents and
     caches prefixes itself. The catalogue lists both formats (MLX only where it runs), one upload
     per model family in Recommended.
+    **The model check** (`probe.ts`): before a local model's first agent request (and with
+    `niti-core models check <id>`, `POST /local/models/check`), niti tests it once: whether it calls
+    tools through the API (`native`), only when forced (llama.cpp `tool_choice: "required"`, or on MLX
+    a reply started in its own call shape, `prefill`), only as text niti reads (`text`), or not at all;
+    whether it can split work one line per teammate (`planMode`); which template tokens it leaks
+    (`stops`, sent as stop sequences from then on). The verdict (`ready`, `partial`, `chat-only`) and
+    the notes are on the manifest's `probe`; `models doctor` prints them with the engines' recent
+    errors. Local requests always stop at template tokens and strip any that slip through.
     **Found on this Mac** (`discover.ts`): models in LM Studio's folders and the Hugging Face cache
     (MLX folders, and GGUF files whose own header gives architecture, context and chat template).
     Adding one writes a manifest with its `path`; the files stay where they are, are never copied,

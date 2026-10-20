@@ -3,7 +3,8 @@
 // (src/remote/bridge.ts) on purpose — downloading gigabytes or deleting a model is done at the Mac.
 import { device } from "./fit.ts";
 import { searchCatalog, modelDetail, SORTS, type CatalogQuery, type SortKey } from "./catalog.ts";
-import { listInstalled, removeInstalled, diskUsage, modelsDir, parseModelId } from "./store.ts";
+import { listInstalled, removeInstalled, diskUsage, modelsDir, parseModelId, getInstalled } from "./store.ts";
+import { probeModel, templateOf } from "./probe.ts";
 import { DownloadManager, type DownloadProgress } from "./downloads.ts";
 import { findLlamaServer, localRuntime, type RuntimeStatus } from "./runtime.ts";
 import { discoverModels, addFoundModel } from "./discover.ts";
@@ -120,6 +121,17 @@ export function localApi(publish: { download: (p: DownloadProgress) => void; run
         const { id } = (await body()) as { id?: string };
         if (!id) return json({ error: "expected {id}" }, 400);
         return json({ ok: downloads.cancel(id) });
+      }
+
+      // The one-time model check, run again (after an update, or to see it happen).
+      if (p === "/local/models/check" && method === "POST") {
+        const { id } = (await body()) as { id?: string };
+        if (!id || !parseModelId(id)) return json({ error: "expected {id}" }, 400);
+        try {
+          return json({ probe: await probeModel(id, { template: templateOf(getInstalled(id)!), runtime }) });
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+        }
       }
 
       if (p === "/local/unload" && method === "POST") {
