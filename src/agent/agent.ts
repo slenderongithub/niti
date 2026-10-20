@@ -32,6 +32,7 @@ import { defaultSettings, type RuntimeSettings } from "../settings.ts";
 import { runChecks, checkSurface, enforcerFiles, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 import { acceptMessage, acceptWork, isIntegration } from "./accept.ts";
+import { withBriefs } from "./briefs.ts";
 
 // Sent back to a model whose turn wasn't an action (the local action protocol). Concrete, because
 // "use your tools" is what it already failed to act on.
@@ -573,7 +574,8 @@ export class Agent {
     // every turn.
     const protocol = this.profile.actionProtocol && this.localProbe()?.verdict !== "chat-only";
     const ctx: LoopCtx = { askDepth, forkDepth: 0, sessionId, task, todos: [], forks: { used: 0 }, protocol };
-    this.push(turns, { role: "user", text: task }, sessionId);
+    // A local agent reads its task with the quality briefs it calls for (briefs.ts).
+    this.push(turns, { role: "user", text: protocol ? withBriefs(task, this.root) : task }, sessionId);
     const onDelta = (text: string) =>
       this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() });
     const context = contextWindow(this.config.provider, this.config.model);

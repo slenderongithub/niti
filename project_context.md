@@ -124,7 +124,13 @@ in one disappears from the others (the core answers by id; a second answer gets 
    A split task's server and deploy checks follow its own part (`ownPart`); the look and the name
    follow the whole request. Failures go back as the next turn, naming file and fix, three times.
    After that, a must failure leaves the task `unverified`, and quality failures are shown with the
-   finished task. Each run of the checks is published as `protocol: "checks"` with the list. An
+   finished task. Each run of the checks is published as `protocol: "checks"` with the list.
+   **Briefs** (`agent/briefs.ts`): a local task's first message carries the quality briefs its own
+   part calls for. They are `web-page` (palette as variables, a Google Fonts pair, hero, spacing
+   scale, responsive grid, hover and focus states, real copy), `server-api` (built-in modules,
+   `PORT`, serve the site and `/api/` JSON, a start script), `deploy` (package.json, README run and
+   deploy steps), `tests` and `cli`. Each pairs with the checks above. A project replaces one with
+   `.niti/skills/<name>/SKILL.md`. An
    engine that dies
    under a request (the MLX server's generation thread) is restarted and the request retried once;
    the MLX server's errors go to `mlx-server.log`, and agents batch on it only when two contexts fit.

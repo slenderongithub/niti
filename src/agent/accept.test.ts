@@ -105,3 +105,15 @@ test("a frontend part of a deployable request isn't asked for the server — tha
   expect(r.checks.some((c) => /server|README/.test(c.name))).toBe(false);
   expect(r.ok).toBe(true);
 });
+
+test("briefs: a task gets the ones its own part calls for, and a project can rewrite one", async () => {
+  const { briefsFor, withBriefs } = await import("./briefs.ts");
+  const goal = "a stunning landing page for Bean There, end-to-end deployment ready";
+  expect(briefsFor(`create index.html and styles.css\n\n(Part of the request: ${goal})`).map((b) => b.name)).toEqual(["web-page"]);
+  expect(briefsFor(`build server.js with the menu API and package.json\n\n(Part of the request: ${goal})`).map((b) => b.name)).toEqual(["server-api"]);
+  expect(briefsFor(`${goal}\n\nYour part: making it deployable: a start script, the server`).map((b) => b.name)).toEqual(["server-api", "deploy"]);
+  expect(briefsFor("rename the variable x to count")).toEqual([]);
+  const root = project({ ".niti/skills/web-page/SKILL.md": "---\nname: web-page\ndescription: ours\n---\nUse our brand kit: --ink #111, Söhne." });
+  expect(withBriefs("restyle the landing page", root)).toContain("Use our brand kit");
+  expect(withBriefs("restyle the landing page", root)).not.toContain("Google Fonts");
+});
