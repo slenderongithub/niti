@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { shell } from "./tools/tools.ts";
-import { seatbeltProfile, sandboxKind } from "./sandbox.ts";
+import { seatbeltProfile, sandboxKind, looksOffline } from "./sandbox.ts";
 
 const onMac = sandboxKind() === "seatbelt";
 
@@ -57,4 +57,29 @@ test.skipIf(!onMac)("verification checks run inside the sandbox too — a check 
   const r = await runChecks(root, [{ name: "touch outside", command: "touch", args: [outside] }], true);
   expect(r.ok).toBe(false);
   expect(existsSync(outside)).toBe(false);
+});
+
+test("network: false denies outbound connections except to this Mac", () => {
+  const profile = seatbeltProfile("/tmp/x", false);
+  expect(profile).toContain("(deny network-outbound)");
+  expect(profile).toContain('(allow network-outbound (remote ip "localhost:*") (remote unix-socket))');
+  expect(seatbeltProfile("/tmp/x")).not.toContain("network-outbound");
+  expect(looksOffline("curl: (7) Failed to connect to example.com port 443 after 2 ms: Couldn't connect to server")).toBe(true);
+  expect(looksOffline("npm error code ENOTFOUND")).toBe(true);
+  expect(looksOffline("AssertionError: expected 2 to be 3")).toBe(false);
+});
+
+test.skipIf(!onMac)("an offline sandboxed shell reaches localhost but not the internet, and says why", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-sb-net-"));
+  const srv = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("local-ok") });
+  try {
+    const local = await shell(root, "curl", ["-sS", "-m", "5", `http://127.0.0.1:${srv.port}/`], { sandbox: true, network: false });
+    expect(local.stdout).toBe("local-ok");
+    // A connection refused before DNS or routing is consulted: no real traffic leaves the test.
+    const out = await shell(root, "curl", ["-sS", "-m", "5", "http://93.184.216.34/"], { sandbox: true, network: false });
+    expect(out.code).not.toBe(0);
+    expect(out.stderr).toContain("no network access");
+  } finally {
+    srv.stop();
+  }
 });

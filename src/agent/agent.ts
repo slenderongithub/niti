@@ -108,6 +108,42 @@ function invocations(input: Record<string, unknown>): Invocation[] {
   return WRAPPERS.has(at(0).base) ? tokens.map((_, k) => at(k)) : [at(0)];
 }
 
+// Installing a named package runs code its author wrote (install scripts) and adds it to the
+// project: worth a human's yes every time, --auto or not. A bare `npm install` from the lockfile is
+// not this — it installs what the project already chose.
+const INSTALLERS: Record<string, string[]> = {
+  npm: ["install", "i", "add"],
+  pnpm: ["add", "install", "i"],
+  yarn: ["add"],
+  bun: ["add", "install", "i"],
+  pip: ["install"],
+  pip3: ["install"],
+  uv: ["add", "pip"],
+  poetry: ["add"],
+  pipx: ["install"],
+  brew: ["install", "reinstall", "upgrade"],
+  cargo: ["add", "install"],
+  go: ["get", "install"],
+  gem: ["install"],
+  composer: ["require"],
+  npx: [],
+  bunx: [],
+};
+
+export function isPackageInstall(base: string, argv: string[]): boolean {
+  const subs = INSTALLERS[base];
+  if (!subs) return false;
+  // npx/bunx fetch and run a package in one step.
+  if (base === "npx" || base === "bunx") return argv.some((a) => !a.startsWith("-"));
+  const at = argv.findIndex((a) => !a.startsWith("-"));
+  if (at < 0 || !subs.includes(argv[at]!)) return false;
+  const rest = argv.slice(at + 1).filter((a) => !a.startsWith("-"));
+  // `uv pip install x` / `pip install -r requirements.txt`: anything named after the verb counts,
+  // except installing the project itself (`pip install -e .`, `pip install .`).
+  const named = rest.filter((a) => a !== "." && a !== "install" && !/^requirements.*\.txt$/.test(a));
+  return named.length > 0;
+}
+
 export function isDangerousShellCall(name: string, input: Record<string, unknown>): boolean {
   return name === "shell" && invocations(input).some(isDangerous);
 }
@@ -116,9 +152,16 @@ function isDangerous({ command, base, argv }: Invocation): boolean {
   const full = `${command} ${argv.join(" ")}`;
   if (DANGEROUS_PATTERNS.some((p) => p.test(full))) return true;
 
-  if (base === "rm" && has(argv, "-r", "-R", "--recursive") && has(argv, "-f", "--force")) return true;
+  // Any recursive delete, forced or not: `rm -r build` is one typo from `rm -r src`.
+  if (base === "rm" && has(argv, "-r", "-R", "--recursive")) return true;
+  // Root, by any name. sudo and doas are also wrappers, so what they run is judged too.
+  if (base === "sudo" || base === "doas" || base === "su") return true;
+  if ((base === "chmod" || base === "chown" || base === "chgrp") && has(argv, "-R", "--recursive")) return true;
+  if (base === "kill" || base === "pkill" || base === "killall") return true;
+  if (isPackageInstall(base, argv)) return true;
   if (base === "git") {
-    if (argv[0] === "push" && has(argv, "-f", "--force", "--force-with-lease")) return true;
+    // Any push: it publishes, and it can't be taken back by niti's checkpoints.
+    if (argv[0] === "push") return true;
     if (argv[0] === "reset" && has(argv, "--hard")) return true;
     if (argv[0] === "clean" && has(argv, "-f", "--force")) return true;
   }
@@ -205,9 +248,12 @@ function touchesSecret(name: string, input: Record<string, unknown>, root = proc
 }
 
 // .git/ too: a hook or a config key (core.fsmonitor, core.hooksPath) is code git later runs unprompted.
+// And other tools' agent and MCP configs: a server written into .mcp.json or .cursor/ is a program
+// that editor or agent starts on its own next time, outside every niti prompt.
 export function isSensitiveConfigWrite(name: string, input: Record<string, unknown>, root = process.cwd()): boolean {
   if (name !== "write_file" && name !== "edit") return false;
-  return /^\.(niti|git)\//.test(normalizePath(projectRelative(String(input.path ?? ""), root))); // "/" on every OS
+  const rel = normalizePath(projectRelative(String(input.path ?? ""), root)); // "/" on every OS
+  return /^\.(niti|git|claude|cursor)\//.test(rel) || /^\.mcp\.json$/.test(rel) || /^\.vscode\/(mcp|settings|tasks)\.json$/.test(rel);
 }
 
 // How long to wait before retrying a model call that failed with a rate limit (429) or an overloaded
@@ -1460,12 +1506,14 @@ export class Agent {
     }
     // A config `allow` can never downgrade a dangerous command, nor one reaching outside the project.
     const mustAsk = dangerous || decision !== "allow";
+    let approved = false; // a person said yes to this exact call (not a rule, not --auto)
     if (this.approve && mustAsk) {
       // The approver sees the diff; the model never does. `edited` is merged back into this copy
       // (ApprovalQueue.answer writes into the object it was given), so an in-place edit from the
       // approval UI still reaches the tool call — minus the diff field itself.
       const forApproval: Record<string, unknown> = diff === undefined ? call.input : { ...call.input, diff };
       const ok = await this.approve(call.name, forApproval, dangerous);
+      approved = ok;
       if (forApproval !== call.input) {
         const { diff: _dropped, ...edited } = forApproval;
         Object.assign(call.input, edited);
@@ -1531,7 +1579,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, hashline: this.config.editFormat === "hashline", signal: this.signal() }); // allowOutside: only ever past a human's yes
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, network: this.profile.shellNetwork || approved, hashline: this.config.editFormat === "hashline", signal: this.signal() }); // allowOutside / network: only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo

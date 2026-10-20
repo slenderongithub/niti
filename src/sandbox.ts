@@ -59,7 +59,11 @@ function gitExecutable(root: string): string[] {
   return [...gitWritable(root).flatMap((d) => [join(d, "hooks"), join(d, "config")]), join(HOME, ".config", "git")];
 }
 
-export function seatbeltProfile(root: string): string {
+// `network: false` cuts the command off from everything but this Mac itself (localhost and unix
+// sockets stay, for test servers and databases). The local profile runs shell this way unless a
+// person approved the exact command: a small model is the easiest kind to talk into `curl`ing
+// something out, and it doesn't get to decide on its own that it needs the network.
+export function seatbeltProfile(root: string, network = true): string {
   const r = real(root);
   // dirname(tmpdir) is the per-user /var/folders/… dir: T/ is temp, C/ is the cache dir clang/swift use.
   const writable = [r, "/private/tmp", dirname(real(tmpdir())), ...gitWritable(root), ...CACHE_DIRS.map(real)];
@@ -71,11 +75,12 @@ export function seatbeltProfile(root: string): string {
     // Later rules win: carve niti's own config, git's executable config and the credential stores back out of what is writable.
     `(deny file-write* (subpath ${sbString(join(r, ".niti"))}) ${[...gitExecutable(root), ...SECRET_DIRS].map((d) => `(subpath ${sbString(real(d))})`).join(" ")})`,
     `(deny file-read* ${SECRET_DIRS.map((d) => `(subpath ${sbString(real(d))})`).join(" ")} ${SECRET_FILES.map((f) => `(literal ${sbString(real(f))})`).join(" ")})`,
+    ...(network ? [] : ["(deny network-outbound)", '(allow network-outbound (remote ip "localhost:*") (remote unix-socket))']),
   ].join("\n");
 }
 
-function bwrapArgs(root: string): string[] {
-  const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--die-with-parent"];
+function bwrapArgs(root: string, network = true): string[] {
+  const args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--die-with-parent", ...(network ? [] : ["--unshare-net"])];
   for (const d of [root, ...gitWritable(root), ...CACHE_DIRS]) if (existsSync(d)) args.push("--bind", d, d);
   for (const d of [join(root, ".niti"), ...gitExecutable(root)]) if (existsSync(d)) args.push("--ro-bind", d, d);
   for (const d of SECRET_DIRS) if (existsSync(d)) args.push("--tmpfs", d);
@@ -104,12 +109,12 @@ export function sandboxKind(): SandboxKind {
 
 // The argv that runs `command args` inside the sandbox for `root`, or the original when there is no
 // OS sandbox here.
-export function wrap(root: string, command: string, args: string[]): { command: string; args: string[] } {
+export function wrap(root: string, command: string, args: string[], network = true): { command: string; args: string[] } {
   switch (sandboxKind()) {
     case "seatbelt":
-      return { command: "/usr/bin/sandbox-exec", args: ["-p", seatbeltProfile(root), command, ...args] };
+      return { command: "/usr/bin/sandbox-exec", args: ["-p", seatbeltProfile(root, network), command, ...args] };
     case "bubblewrap":
-      return { command: "bwrap", args: [...bwrapArgs(root), command, ...args] };
+      return { command: "bwrap", args: [...bwrapArgs(root, network), command, ...args] };
     default:
       return { command, args };
   }
@@ -121,6 +126,15 @@ export const SANDBOX_NOTE =
   "\n[blocked by niti's sandbox: shell commands can write only inside the project (plus temp, tool caches and app settings), " +
   "cannot write .niti/ or the rest of your home folder, and cannot read credential stores (~/.ssh, ~/.aws, …). To change a file outside the project, " +
   "use write_file/edit with its path — the user is asked to approve it.]";
+
+// Told when a command failed with the network off, so the model asks for it instead of retrying.
+export const OFFLINE_NOTE =
+  "\n[niti: this agent's shell has no network access. A command that needs the internet runs only once the user approves it — " +
+  "say which command and why. To read documentation, use web_fetch or lookup instead.]";
+
+export function looksOffline(output: string): boolean {
+  return /Could not resolve host|Couldn't connect to server|Failed to connect to (?!localhost|127\.0\.0\.1)|getaddrinfo|ENOTFOUND|EAI_AGAIN|Network is unreachable|network-outbound|nodename nor servname|Temporary failure in name resolution|Failed to establish a new connection|ECONNREFUSED.*(?<!127\.0\.0\.1):443/i.test(output);
+}
 
 // The errors each sandbox produces. Only matched while that sandbox is active, so an ordinary
 // "Permission denied" from a file's own mode is not blamed on niti.

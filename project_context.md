@@ -100,7 +100,12 @@ in one disappears from the others (the core answers by id; a second answer gets 
    seconds (default 300, `0` waits forever); `approval_request` carries each one's `expiresAt` and
    every client counts down to it. Paths are jailed (`safePath`); shell spawns with array args; `sandbox.ts` puts
    shell commands in an OS sandbox (Seatbelt on macOS, bubblewrap on Linux): writes confined to the
-   project, credential stores unreadable. `trust/` asks once per folder before reading its config,
+   project, credential stores unreadable; for a local-profile agent also no network but localhost,
+   unless a person approved that command (`shellNetwork`; `OFFLINE_NOTE` tells the model why).
+   Always asked, even under `--auto`: any recursive `rm`, `sudo`/`doas`/`su`, any `git push`,
+   `kill`/`pkill`/`killall`, `chmod|chown -R`, installing a named package (npm/pnpm/yarn/bun add,
+   pip/uv/poetry/pipx, brew, cargo, go install, gem, composer, npx/bunx), and writes to `.niti/`,
+   `.git/`, `.claude/`, `.cursor/`, `.mcp.json` or `.vscode/{mcp,settings,tasks}.json`. `trust/` asks once per folder before reading its config,
    recorded globally (never a repo marker a repo could commit) with a snapshot of `agents.yaml`.
    `store/audit-log.ts` keeps a hash-chained log of tool calls and approvals (`niti-core audit verify`).
    `secrets.ts` names credential files: an agent reads one only when you approve that exact call, and

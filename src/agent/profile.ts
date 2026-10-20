@@ -29,6 +29,7 @@ export interface Profile {
   repeatGuard?: { nudge: number; stop: number }; // identical calls before a nudge / before stopping
   textToolCalls: boolean; // read a tool call the model wrote as text instead of through the API
   jsonAsks: boolean; // constrain planner / judge / integrate replies to JSON
+  shellNetwork: boolean; // sandboxed shell may reach the internet without a person approving the command
 }
 
 export const STANDARD: Profile = {
@@ -45,6 +46,7 @@ export const STANDARD: Profile = {
   forks: true,
   textToolCalls: false,
   jsonAsks: false,
+  shellNetwork: true,
 };
 
 // Short, imperative, one idea per line: the same conventions as TOOL_GUIDANCE (stay in the project,
@@ -78,6 +80,7 @@ export const LOCAL: Profile = {
   repeatGuard: { nudge: 3, stop: 5 },
   textToolCalls: true,
   jsonAsks: true,
+  shellNetwork: false,
 };
 
 // An explicit `profile:` wins. Otherwise the models served on this Mac — niti's own runtime, Ollama,

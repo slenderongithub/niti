@@ -855,10 +855,9 @@ test("dangerous shell detection matches flag sets, not exact spellings", () => {
   expect(d("git", ["branch", "-a"])).toBe(false);
   expect(d("git", ["diff", "--stat"])).toBe(false);
 
-  // Ordinary commands must still run without a prompt, including harmless rm and push.
+  // Ordinary commands must still run without a prompt, including a harmless rm. A recursive delete
+  // and any push now always ask (see the next test).
   expect(d("rm", ["one.txt"])).toBe(false);
-  expect(d("rm", ["-r", "build"])).toBe(false); // recursive but not forced
-  expect(d("git", ["push"])).toBe(false);
   expect(d("ls", ["-la"])).toBe(false);
   expect(d("bash", ["script.sh"])).toBe(false); // running a file, not an inline payload
 });
@@ -2187,4 +2186,49 @@ test("a fork's tokens don't stream into the agent's own transcript; a question f
   expect(deltas).toEqual(["<task>", "<task>"]); // the fork's "<sub>" never reached the transcript
   await agent.answer("what is this?");
   expect(deltas.at(-1)).toBe("<what is this?>");
+});
+
+test("always asked, --auto or not: recursive deletes, root, pushes, kills, recursive chmod, named installs", () => {
+  const d = (command: string, args: string[] = []) => isDangerousShellCall("shell", { command, args });
+  for (const [c, a] of [
+    ["rm", ["-r", "build"]],
+    ["rm", ["--recursive", "dist"]],
+    ["sudo", ["ls"]],
+    ["git", ["push"]],
+    ["git", ["push", "origin", "main"]],
+    ["kill", ["-9", "123"]],
+    ["pkill", ["node"]],
+    ["chmod", ["-R", "777", "."]],
+    ["npm", ["install", "left-pad"]],
+    ["npm", ["i", "-D", "vitest"]],
+    ["pnpm", ["add", "zod"]],
+    ["bun", ["add", "hono"]],
+    ["yarn", ["add", "react"]],
+    ["pip", ["install", "requests"]],
+    ["uv", ["pip", "install", "httpx"]],
+    ["cargo", ["add", "serde"]],
+    ["brew", ["install", "jq"]],
+    ["go", ["install", "golang.org/x/tools/gopls@latest"]],
+    ["npx", ["create-next-app"]],
+  ] as [string, string[]][]) expect(d(c, a), `${c} ${a.join(" ")}`).toBe(true);
+  // What a project already chose, or nothing at all, stays under the normal rules.
+  for (const [c, a] of [
+    ["rm", ["notes.txt"]],
+    ["npm", ["install"]],
+    ["npm", ["ci"]],
+    ["bun", ["install"]],
+    ["pip", ["install", "-r", "requirements.txt"]],
+    ["pip", ["install", "-e", "."]],
+    ["npm", ["test"]],
+    ["git", ["status"]],
+    ["chmod", ["+x", "run.sh"]],
+  ] as [string, string[]][]) expect(d(c, a), `${c} ${a.join(" ")}`).toBe(false);
+});
+
+test("writing another tool's MCP or agent config always asks", () => {
+  for (const path of [".mcp.json", ".cursor/mcp.json", ".claude/settings.json", ".vscode/mcp.json", ".vscode/tasks.json"]) {
+    expect(isSensitiveConfigWrite("write_file", { path }, "/p"), path).toBe(true);
+  }
+  expect(isSensitiveConfigWrite("write_file", { path: "src/mcp.json" }, "/p")).toBe(false);
+  expect(isSensitiveConfigWrite("write_file", { path: ".vscode/launch.json" }, "/p")).toBe(false);
 });
