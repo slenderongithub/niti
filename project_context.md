@@ -87,8 +87,18 @@ in one disappears from the others (the core answers by id; a second answer gets 
    file, a 12-file map, no `list_dir`/`repo_map`/`hover`/`spawn_fork` and only named MCP tools,
    warning at 65% and compacting at 75% of the real window, 16k-character results, a repeat guard
    (the same call 3× is nudged, 5× ends the run), tool calls written as text (`<tool_call>`,
-   `<function=…>`, a bare JSON call) run as real ones, and the planner, replanner, integrate and goal
-   judge get grammar-constrained JSON. `/model` rebuilds the prompt for the new model's profile.
+   `<function=…>`, `<function>{…}</function>`, or a JSON call on its own line after a sentence) run as
+   real ones, and the planner, replanner, integrate and goal judge get JSON (grammar-constrained on
+   llama.cpp, sampled at 0.2 everywhere). Small models answer "build X" with a plan in prose, so a
+   local work task isn't done until the agent has called a tool: a reply that only describes is
+   sent back twice (`actNudge`), then the task fails rather than passing; the first "done" of a task
+   that wrote files is answered with the task to check against (`selfCheckNudge`); an empty reply
+   after real work is asked once, then counts as done. A local lead gets a planning brief (1-3
+   concrete file-producing tasks, no invented testing or deployment, work split by role), and a plan
+   that still gives every task to one teammate is spread by role (`spreadWork`). An engine that dies
+   under a request (the MLX server's generation thread) is restarted and the request retried once;
+   the MLX server's errors go to `mlx-server.log`, and agents batch on it only when two contexts fit.
+   `/model` rebuilds the prompt for the new model's profile.
 4. **Interrupting one agent.** Each agent has its own abort controller and step counter on top of the
    run's: `Engine.interruptAgent` stops the agent that owns an in-progress task mid-call, denies its
    pending approvals, and it carries on from your message. Cancel stops the whole run.

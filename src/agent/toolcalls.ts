@@ -140,12 +140,50 @@ export function extractTextToolCalls(text: string, names: string[]): { calls: To
     return add(name, input) ? "" : m;
   });
   if (calls.length === 0) {
+    // A JSON call after a sentence ("Let's start.\n\n{"name": "read_file", "arguments": …}"), or
+    // several: each balanced {…} that parses and names a known tool with arguments is a call.
+    // Only a call that stands on its own lines (or in a fence), never one quoted mid-sentence:
+    // "The API takes {…} as its body" is prose about JSON, not a call.
+    const own = (start: number, end: number) => /(^|\n)\s*(```(json)?\s*)?$/.test(rest.slice(0, start)) && /^\s*(```\s*)?(\n|$)/.test(rest.slice(end));
+    for (const span of jsonObjects(rest).reverse()) {
+      if (!own(span.start, span.end)) continue;
+      const o = repairJson(span.text);
+      if (o && typeof o.name === "string" && known.has(o.name) && ("arguments" in o || "parameters" in o) && fromObject(o)) {
+        rest = rest.slice(0, span.start) + rest.slice(span.end);
+      }
+    }
+    calls.reverse(); // found back to front, so the text's offsets stayed valid
+    rest = rest.replace(/```(?:json)?\s*```/g, "");
+  }
+  if (calls.length === 0) {
     // The whole reply is one JSON call (optionally fenced): nothing else in it to misread.
     const whole = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
     if (whole.startsWith("{") && whole.endsWith("}") && fromObject(repairJson(whole))) rest = "";
   }
   if (calls.length === 0) return undefined;
   return { calls, rest: rest.replace(/<\/?tool_call>/g, "").trim() };
+}
+
+// Every top-level {…} in a text (braces inside JSON strings don't count), with its offsets.
+function jsonObjects(text: string): { start: number; end: number; text: string }[] {
+  const out: { start: number; end: number; text: string }[] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (inStr) {
+      if (c === "\\") i++;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"' && depth > 0) inStr = true;
+    else if (c === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (c === "}" && depth > 0 && --depth === 0) out.push({ start, end: i + 1, text: text.slice(start, i + 1) });
+  }
+  return out;
 }
 
 // Thinking a model wrote inline (`<think>…</think>`, or only the closing tag when the chat template

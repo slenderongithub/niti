@@ -30,6 +30,14 @@ export interface Profile {
   textToolCalls: boolean; // read a tool call the model wrote as text instead of through the API
   jsonAsks: boolean; // constrain planner / judge / integrate replies to JSON
   shellNetwork: boolean; // sandboxed shell may reach the internet without a person approving the command
+  // A work task the model "finishes" without ever calling a tool is sent back (twice), then failed:
+  // small models answer "implement X" with a plan in prose, and that is not done.
+  requireAction: boolean;
+  // A plan that hands every task to one teammate is spread across the team by role.
+  spreadPlan: boolean;
+  // The first "done" of a task that changed something is answered with the task to check against:
+  // small models stop after a stub. One extra turn per task.
+  selfCheck: boolean;
 }
 
 export const STANDARD: Profile = {
@@ -47,6 +55,9 @@ export const STANDARD: Profile = {
   textToolCalls: false,
   jsonAsks: false,
   shellNetwork: true,
+  requireAction: false,
+  spreadPlan: false,
+  selfCheck: false,
 };
 
 // Short, imperative, one idea per line: the same conventions as TOOL_GUIDANCE (stay in the project,
@@ -56,6 +67,7 @@ export const LOCAL_GUIDANCE = `
 
 Working habits:
 - Stay inside the project. Use paths relative to it. Never use '..' or an absolute path unless the user named that path.
+- Do the work, don't describe it: answer a task with a tool call, not a plan. To create a file, call 'write_file' with its complete content.
 - Find before you read: 'grep' finds where something is, 'glob' finds a file by name. Don't guess paths.
 - Read a file before you change it. To change part of a file use 'edit', copying oldString exactly from what 'read_file' showed, without the line numbers. Use 'write_file' only for a new file.
 - Make one tool call at a time and look at its result before the next.
@@ -81,6 +93,9 @@ export const LOCAL: Profile = {
   textToolCalls: true,
   jsonAsks: true,
   shellNetwork: false,
+  requireAction: true,
+  spreadPlan: true,
+  selfCheck: true,
 };
 
 // An explicit `profile:` wins. Otherwise the models served on this Mac — niti's own runtime, Ollama,

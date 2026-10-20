@@ -561,3 +561,29 @@ test.skipIf(!mlxSupported())("the MLX engine installs from a checksum-pinned Pyt
     removeMlxEngine();
   }
 });
+
+test("a local engine that dies is replaced, and an engine error is recognised for a retry", async () => {
+  const { engineDied } = await import("./provider.ts");
+  expect(engineDied(new Error('404 "generation thread died"'))).toBe(true);
+  expect(engineDied(new Error("400 bad request"))).toBe(false);
+  process.env.NITI_LLAMA_SERVER = FAKE;
+  const id = "unsloth/Qwen3-4B-GGUF:Q4_K_M";
+  if (!getInstalled(id)) saveManifest({ id, repo: "unsloth/Qwen3-4B-GGUF", quant: "Q4_K_M", files: ["Qwen3-4B-Q4_K_M.gguf"], bytes: 1, installedAt: 0 });
+  writeFileSync(join(repoDir("unsloth/Qwen3-4B-GGUF"), "Qwen3-4B-Q4_K_M.gguf"), "GGUF");
+  const rt = new LocalRuntime();
+  try {
+    const p = new LocalProvider(id, "a", undefined, undefined, rt);
+    await p.send("s", [{ role: "user", text: "hi" }], []); // up and serving
+    // Kill the server behind the provider's back, as a crash would.
+    (rt as unknown as { servers: Map<string, { proc: { kill(): void } }> }).servers.get(id)!.proc.kill();
+    await Bun.sleep(300);
+    // A dead process is forgotten and a fresh one serves the next request. (A server whose process
+    // lives on with a dead generation thread — the MLX case — is what engineDied + stop handle.)
+    const r = await p.send("s", [{ role: "user", text: "hi" }], []);
+    expect(r.text).toContain("Done");
+    expect(rt.status().find((x) => x.model === id)?.state).toBe("ready");
+  } finally {
+    rt.stopAll();
+    delete process.env.NITI_LLAMA_SERVER;
+  }
+});

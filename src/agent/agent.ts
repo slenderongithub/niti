@@ -30,6 +30,23 @@ import { defaultSettings, type RuntimeSettings } from "../settings.ts";
 import { runChecks, checkSurface, enforcerFiles, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 
+// Sent back to a model that answered a work task with a description of it (the local profile's
+// requireAction). Concrete, because "use your tools" is what it already failed to act on.
+export function actNudge(n: number): string {
+  return n === 1
+    ? "[niti: Nothing has been done yet — you described the work instead of doing it. Do the first step now, as a tool call: to create a file call write_file with its path and complete content; to change one, read_file then edit; to run something, shell. Reply with the tool call only, not a plan.]"
+    : "[niti: Still nothing done. This is the last reminder before the task fails. Call write_file (or edit, or shell) now — no explanation, just the call.]";
+}
+
+// The local profile's one check before a task that changed files is done.
+export function selfCheckNudge(task: string): string {
+  return (
+    `[niti: Before you finish, check your work against the task:\n"${task.slice(0, 1500)}"\n` +
+    `Go through each thing it asks for. If any of it is missing from the files, or is only a placeholder or a stub, ` +
+    `keep working now with tool calls (write_file with the complete content, or edit). If every part is really done, reply DONE and one sentence on what you made.]`
+  );
+}
+
 // Told to the model when its reply hit the output-token limit, in place of running anything in it.
 const CUT_OFF =
   "[niti: your last reply hit the output-token limit and was cut off, so none of its tool calls ran. " +
@@ -559,6 +576,12 @@ export class Agent {
     const stall = new StallGuard();
     const guard = this.profile.repeatGuard;
     const repeat = guard ? new RepeatGuard(guard.nudge, guard.stop) : undefined;
+    // Whether this run has done anything (a tool call other than writing its checklist), and how
+    // many times a reply that only described the work has been sent back (the local profile).
+    let acted = false;
+    let describeNudges = 0;
+    let selfChecked = false;
+    let emptyNudged = false;
     this.inFlightCount++;
     try {
       for (let i = 0; i < this.maxTurns; i++) {
@@ -608,6 +631,17 @@ export class Agent {
             // No tools *and* no text is not a completion — it's a Gemini safety block, an OpenAI
             // content filter, or an empty choices array. Every one of those used to present as a
             // finished task, so the orchestrator released dependents on an empty output.
+            // A small model that has done the work often ends on an empty reply. Asked once; then, if it
+            // wrote files, that silence is its "done" — not a failed task that discards finished work.
+            if (!reply.text && this.profile.requireAction && acted) {
+              if (!emptyNudged && i < this.maxTurns - 1) {
+                emptyNudged = true;
+                this.push(turns, { role: "assistant", text: "", toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
+                this.push(turns, { role: "user", text: "[niti: Your reply was empty. If the task is finished, reply DONE and one sentence on what you made. If not, make the next tool call.]" }, sessionId);
+                continue;
+              }
+              if (ctx.wrote) reply.text = "Done.";
+            }
             if (!reply.text) {
               error = "the model returned neither text nor a tool call (safety filter, truncation, or an empty response)";
               if (sessionId) this.store?.setStatus(sessionId, "failed");
@@ -615,6 +649,30 @@ export class Agent {
               return { outcome: "failed", text: finalText, error };
             }
             this.push(turns, { role: "assistant", text: reply.text, toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
+            // A small model answers "implement X" with a plan in prose and stops — which used to be
+            // a finished task with nothing written. Until it has called a tool, a reply is not the
+            // end: it hears what to do instead, twice; then the task fails (and is retried or
+            // re-planned) rather than passing as done.
+            if (this.profile.requireAction && !acted && this.pendingInbox() === 0) {
+              if (describeNudges < 2 && i < this.maxTurns - 1) {
+                describeNudges++;
+                this.bus.publish({ agentId: id, type: "warning", payload: "replied with a plan instead of doing the work — asking it to act", time: Date.now() });
+                this.push(turns, { role: "user", text: actNudge(describeNudges) }, sessionId);
+                continue;
+              }
+              error = "the model described the work but never did it (no tool call, no file written)";
+              if (sessionId) this.store?.setStatus(sessionId, "failed");
+              this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+              return { outcome: "failed", text: finalText, error };
+            }
+            // It acted, and now says it's finished. A small model often stops after a stub: once
+            // per task, it checks what it wrote against what was asked before the task is done.
+            if (this.profile.selfCheck && ctx.wrote && !selfChecked && i < this.maxTurns - 1 && this.pendingInbox() === 0) {
+              selfChecked = true;
+              this.bus.publish({ agentId: id, type: "thought", payload: "checking the work against the task before finishing", time: Date.now() });
+              this.push(turns, { role: "user", text: selfCheckNudge(task) }, sessionId);
+              continue;
+            }
             // A message that arrived during this turn — a teammate's hand-off, or the user's nudge
             // from the dashboard — would otherwise sit in the inbox until some later, unrelated run,
             // while POST /agents/:id/message had already reported it delivered. Keep looping: the
@@ -676,6 +734,7 @@ export class Agent {
             return { outcome: "done", text: finalText, error: "" };
           }
           ctx.resultBudget = this.resultBudgetFor(reply, context, compacted);
+          if (reply.toolCalls.some((c) => c.name !== "todo")) acted = true;
           let results = await this.execCalls(reply.toolCalls, allowed, ctx);
           // Interrupted while its tools ran (a shell killed, an approval refused): the calls still
           // happened, so they stay in the history, marked, and the operator's message comes next.

@@ -30,6 +30,8 @@ export function requestExtras(m: InstalledModel, slot: number, thinking: boolean
   };
 }
 
+export const engineDied = (err: unknown): boolean => /generation thread died|ECONNREFUSED|ECONNRESET|socket hang up|Connection error|fetch failed/i.test(err instanceof Error ? err.message : String(err));
+
 export class LocalProvider implements Provider {
   private inner?: { url: string; slot: number; key: string; provider: OpenAIProvider };
 
@@ -43,7 +45,7 @@ export class LocalProvider implements Provider {
     runtime.register(agentId, model);
   }
 
-  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true, format?: "json"): Promise<ProviderReply> {
+  async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true, format?: "json", retried = false): Promise<ProviderReply> {
     const { baseURL, apiKey, slot, manifest } = await this.runtime.ensure(this.model, this.agentId);
     // A JSON reply is constrained by grammar from its first token, which leaves no room for a
     // thinking block in front of it.
@@ -51,7 +53,9 @@ export class LocalProvider implements Provider {
     const mlx = formatOf(manifest) === "mlx";
     // llama-server constrains JSON by grammar; the MLX server has no such option, and niti's callers
     // validate and retry what comes back either way.
-    const extras = { ...requestExtras(manifest, slot, think), ...(format === "json" && !mlx ? { response_format: { type: "json_object" } } : {}) };
+    // Plans, verdicts and summaries are JSON a program parses: sampled cool, so a small model's
+    // plan comes out the same shape every time (the MLX engine has no grammar to hold it to JSON).
+    const extras = { ...requestExtras(manifest, slot, think), ...(format === "json" ? { temperature: 0.2 } : {}), ...(format === "json" && !mlx ? { response_format: { type: "json_object" } } : {}) };
     if (!this.inner || this.inner.url !== baseURL || this.inner.slot !== slot || this.inner.key !== apiKey) {
       this.inner = {
         url: baseURL,
@@ -70,6 +74,14 @@ export class LocalProvider implements Provider {
     this.runtime.begin(this.model);
     try {
       return await this.inner.provider.send(sysPrompt, turns, tools, onDelta, signal, think);
+    } catch (err) {
+      // An engine that died under the request (the MLX server's generation thread, a crashed
+      // llama-server) answers every later request with the same error. Restart it and try once more.
+      if (signal?.aborted || retried || !engineDied(err)) throw err;
+      this.runtime.end(this.model);
+      this.runtime.stop(this.model);
+      this.inner = undefined;
+      return this.send(sysPrompt, turns, tools, onDelta, signal, thinking, format, true);
     } finally {
       this.runtime.end(this.model);
     }

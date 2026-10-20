@@ -3,7 +3,7 @@
 // turns (re-reading a 20k-token conversation costs tens of seconds on a laptop; a cache hit costs
 // nothing). Started on first use, stopped after a quiet spell and when the core exits. It listens on
 // 127.0.0.1 only, on a free port, so nothing off this Mac can reach it.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Subprocess } from "bun";
 import { getInstalled, modelPath, modelsDir, updateManifest, formatOf, type InstalledModel } from "./store.ts";
@@ -81,15 +81,19 @@ export function serverArgs(m: InstalledModel, opts: { port: number; slots: numbe
 
 // The MLX server: niti's wrapper (mlx.ts WRAPPER) around mlx_lm.server. No KV preallocation to
 // size — it grows with the conversation; the context niti compacts at is the fitted one.
-export function mlxServerArgs(m: InstalledModel, opts: { port: number }): string[] {
+export function mlxServerArgs(m: InstalledModel, opts: { port: number; concurrency?: number; cacheBytes?: number }): string[] {
   return [
     "--model", modelPath(m),
     "--host", "127.0.0.1",
     "--port", String(opts.port),
     // Browsers get no CORS grant: only niti (which isn't a browser) calls this server.
     "--allowed-origins", "http://127.0.0.1",
-    // Several agents on one model decode together instead of waiting their turn.
-    "--decode-concurrency", "4",
+    // Agents on one model decode together when there's room (see start), else one at a time.
+    "--decode-concurrency", String(opts.concurrency ?? 1),
+    "--prompt-concurrency", String(opts.concurrency ?? 1),
+    // Cached conversation prefixes are kept within what the weights leave free; unbounded, they
+    // grew until the GPU ran out of memory.
+    ...(opts.cacheBytes ? ["--prompt-cache-bytes", String(Math.round(opts.cacheBytes))] : []),
     "--log-level", "WARNING",
   ];
 }
@@ -175,8 +179,11 @@ export class LocalRuntime {
           if (p.stage === "python" || p.stage === "packages") this.onStatus({ model: m.id, engine: "mlx", state: "installing", stage: p.stage, received: p.received, total: p.total });
         })
       : undefined;
-    // The MLX server batches every agent onto one model and shares cached prefixes itself.
-    const slots = mlx ? 1 : Math.max(1, this.wanted.get(m.id)?.size ?? 1);
+    const agents = Math.max(1, this.wanted.get(m.id)?.size ?? 1);
+    // The MLX server batches agents onto one model itself: two decode together only when two
+    // contexts fit comfortably, otherwise they take turns (a big model on a 16 GB Mac ran out of
+    // memory mid-batch and the engine's generation thread died).
+    const slots = mlx ? (agents > 1 && fitModel({ params: m.params ?? 0, fileBytes: m.bytes, quant: m.quant, contextLength: m.contextLength, slots: 2 }, device()).tier === "runs-well" ? 2 : 1) : agents;
     const dev = device();
     // Free memory for this one: a model nobody is using right now gives way.
     for (const other of this.servers.values()) {
@@ -187,14 +194,14 @@ export class LocalRuntime {
     const port = await freePort();
     mkdirSync(modelsDir(), { recursive: true });
     const apiKey = crypto.randomUUID();
-    const cmd = mlx ? [...mlxCmd!, ...mlxServerArgs(m, { port })] : [...bin!, ...serverArgs(m, { port, slots, ctx, apiKey, log: join(modelsDir(), "llama-server.log") })];
+    const cmd = mlx ? [...mlxCmd!, ...mlxServerArgs(m, { port, concurrency: slots, cacheBytes: Math.max(256 * 1024 ** 2, Math.min(4 * 1024 ** 3, dev.gpuBudget - m.bytes - 1.5 * 1024 ** 3)) })] : [...bin!, ...serverArgs(m, { port, slots, ctx, apiKey, log: join(modelsDir(), "llama-server.log") })];
     const s: Server = { model: m.id, port, slots, ctx, apiKey, state: "loading", inFlight: 0, lastUsed: Date.now(), slotOf: new Map(), ready: Promise.resolve() };
     this.servers.set(m.id, s);
     this.onStatus({ model: m.id, engine: mlx ? "mlx" : "llama.cpp", state: "loading", ctx, slots });
     // The MLX wrapper reads its key from the environment, never the command line (which ps shows).
     s.proc = Bun.spawn(cmd, { stdout: "ignore", stderr: "pipe", env: mlx ? { ...process.env, NITI_MLX_KEY: apiKey, PYTHONNOUSERSITE: "1" } : undefined });
     recordPids([...this.servers.values()].map((x) => x.proc?.pid).filter((p): p is number => !!p));
-    const stderr = collect(s.proc.stderr as ReadableStream<Uint8Array>);
+    const stderr = collect(s.proc.stderr as ReadableStream<Uint8Array>, mlx ? join(modelsDir(), "mlx-server.log") : undefined);
     s.ready = (async () => {
       const deadline = Date.now() + Number(process.env.NITI_LOCAL_LOAD_MS ?? 300_000);
       for (;;) {
@@ -323,13 +330,19 @@ export function reapOrphans(): number {
   return reaped;
 }
 
-function collect(stream: ReadableStream<Uint8Array> | undefined): { text: () => string } {
+// The server's stderr: the last 8 KB kept for an error message, and (`log`) everything appended to a
+// file — the MLX engine reports a dying generation thread only there.
+function collect(stream: ReadableStream<Uint8Array> | undefined, log?: string): { text: () => string } {
   let buf = "";
   if (stream) {
     void (async () => {
       const dec = new TextDecoder();
       try {
-        for await (const chunk of stream) buf = (buf + dec.decode(chunk)).slice(-8000);
+        for await (const chunk of stream) {
+          const text = dec.decode(chunk);
+          buf = (buf + text).slice(-8000);
+          if (log) appendFileSync(log, text);
+        }
       } catch {
         // the process went away
       }

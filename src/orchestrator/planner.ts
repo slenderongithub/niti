@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { profileFor } from "../agent/profile.ts";
 import type { TaskNode } from "./task.ts";
 import { summarizeError } from "../providers/provider.ts";
 
@@ -170,7 +171,16 @@ function boardBlock(unfinished: string[]): string {
 // on parallelisable tasks and lost 39-70% on sequential ones (Google, "Towards a Science of Scaling
 // Agent Systems", 2025), and a single agent beat a fixed pipeline on bug fixing and multi-file
 // coding (ECER 2026). See docs/research/2026-10-merged.md.
-function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, history: Exchange[] = [], unfinished: string[] = []): string {
+// For a lead on a small local model: what a 7–14B planner gets wrong (five vague tasks, testing and
+// deployment nobody asked for, everything on itself) said plainly, with what a good task looks like.
+const LOCAL_PLANNING =
+  `This team runs on a small model on this computer, so plan for it:\n` +
+  `- 1-3 tasks. Each one names the files to create or change and what goes in them ` +
+  `(e.g. "Create index.html with the header, menu and contact sections").\n` +
+  `- No planning, research, testing, review or deployment tasks unless the user asked for them.\n` +
+  `- Give each teammate the part that matches their role; don't keep every task yourself.\n\n`;
+
+function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, history: Exchange[] = [], unfinished: string[] = [], local = false): string {
   const roster = roles
     .map((r) => `  - id "${r.id}" — role: ${r.role}${r.description ? ` (${r.description})` : ""}`)
     .join("\n");
@@ -191,6 +201,7 @@ function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, his
     `consumers — e.g. UI/design tasks before the frontend that uses them. Use "handoffTo" to name ` +
     `teammate ids that should receive a task's output.\n\n` +
     `Teammates:\n${roster}\n\n` +
+    (local ? LOCAL_PLANNING : "") +
     historyBlock(history) +
     boardBlock(unfinished) +
     `User's message: ${goal}\n\n` +
@@ -200,18 +211,48 @@ function plannerPrompt(goal: string, roles: RoleInfo[], correction?: string, his
   );
 }
 
+// Words that say which kind of teammate a task is for, by the role names people give them.
+const ROLE_WORDS: [RegExp, RegExp][] = [
+  [/front|ui|design|web|client/i, /\b(html|css|style|styling|layout|page|component|ui|button|form|landing|responsive|tailwind|react|view|screen|frontend)\b/i],
+  [/back|api|server|data|infra/i, /\b(api|server|endpoint|route|database|db|schema|model|backend|auth|express|fastapi|sql|json data|storage)\b/i],
+  [/test|qa|quality/i, /\b(test|tests|testing|spec|coverage|qa)\b/i],
+  [/devops|ops|deploy|build|ci/i, /\b(deploy|docker|ci|pipeline|build script|release)\b/i],
+  [/doc|writer/i, /\b(readme|docs|documentation)\b/i],
+];
+
+// A plan that gives every task to one teammate while others wait — what a small lead does when it
+// plans for itself. Each task goes to the teammate whose role its words match; the tasks nothing
+// matches, and that wait on nothing, are shared out in turn. A plan already using the team is kept.
+export function spreadWork(plan: Plan, roles: RoleInfo[]): Plan {
+  const owners = new Set(plan.tasks.map((t) => t.role));
+  if (roles.length < 2 || plan.tasks.length < 2 || owners.size > 1) return plan;
+  const score = (r: RoleInfo, text: string) => ROLE_WORDS.reduce((n, [role, words]) => n + (role.test(`${r.role} ${r.id}`) && words.test(text) ? 1 : 0), 0);
+  let turn = 0;
+  const tasks = plan.tasks.map((t) => {
+    const ranked = roles.map((r) => ({ id: r.id, s: score(r, t.description) })).sort((a, b) => b.s - a.s);
+    let owner = ranked[0]!.s > 0 ? ranked[0]!.id : t.role;
+    if (ranked[0]!.s === 0 && t.dependsOn.length === 0) owner = roles[turn++ % roles.length]!.id;
+    return { ...t, role: owner, assignedTo: owner };
+  });
+  return { ...plan, tasks };
+}
+
 // Ask the orchestrator agent for a plan, validating + normalizing. Retries on invalid JSON, then
 // falls back to a single task (the whole goal on the lead) — a bad plan never crashes the run. A
 // provider that cannot answer at all (a bad key, no network, an interrupt) is not a bad plan: it
 // throws out of here, rather than handing the whole goal to the same failing model as a task.
 export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo[], history: Exchange[] = [], unfinished: string[] = []): Promise<Plan> {
+  // An Agent's config carries its provider; a bare PlannerAgent (tests) has none and plans as standard.
+  const cfg = lead.config as { provider?: string; profile?: "local" | "standard" };
+  const profile = profileFor({ provider: cfg.provider ?? "", profile: cfg.profile });
+  const local = profile.name === "local";
   let correction: string | undefined;
   let answered = false;
   let lastError: unknown;
   for (let attempt = 0; attempt < MAX_PLAN_ATTEMPTS; attempt++) {
     let raw: string;
     try {
-      raw = await lead.ask(plannerPrompt(goal, roles, correction, history, unfinished), { json: true });
+      raw = await lead.ask(plannerPrompt(goal, roles, correction, history, unfinished, local), { json: true });
       answered = true;
     } catch (err) {
       lastError = err;
@@ -232,7 +273,8 @@ export async function makePlan(lead: PlannerAgent, goal: string, roles: RoleInfo
       correction = "the task array was empty";
       continue;
     }
-    return normalizePlan(goal, rawTasks, roles);
+    const plan = normalizePlan(goal, rawTasks, roles);
+    return profile.spreadPlan ? spreadWork(plan, roles) : plan;
   }
   if (!answered) throw lastError;
   // Fallback: one task, whole goal, on the lead.

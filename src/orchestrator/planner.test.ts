@@ -131,3 +131,28 @@ test("a follow-up is planned against the unfinished board, so it adjusts the pla
   expect(seen).toContain("t2 (backend, pending): add the API");
   expect(seen).toContain("keep the tasks the user still wants");
 });
+
+test("a local lead's plan that keeps every task is spread across the team by role", async () => {
+  const { spreadWork } = await import("./planner.ts");
+  const roles = [
+    { id: "frontend", role: "Frontend", description: "Owns the UI" },
+    { id: "backend", role: "Backend", description: "Owns the server and API" },
+  ];
+  const t = (id: string, description: string, dependsOn: string[] = []) => ({ id, description, status: "pending" as const, role: "frontend", assignedTo: "frontend", dependsOn, handoffTo: [] });
+  const plan = { goal: "coffee shop", tasks: [t("t1", "Create index.html with the menu and hero layout"), t("t2", "Create an Express API server with a /menu endpoint"), t("t3", "Write the README"), t("t4", "Polish", ["t1"])] };
+  const spread = spreadWork(plan, roles);
+  expect(spread.tasks.map((x) => x.assignedTo)).toEqual(["frontend", "backend", "frontend", "frontend"]);
+  expect(spread.tasks[1]!.role).toBe("backend");
+  // A plan that already uses the team is left as it is.
+  const mixed = { ...plan, tasks: [plan.tasks[0]!, { ...plan.tasks[1]!, role: "backend", assignedTo: "backend" }] };
+  expect(spreadWork(mixed, roles)).toBe(mixed);
+});
+
+test("a local lead is told how to plan for a small model; a cloud lead isn't", async () => {
+  for (const [provider, expectBrief] of [["local", true], ["anthropic", false]] as const) {
+    let prompt = "";
+    const lead = { config: { id: "lead", provider }, ask: async (p: string) => ((prompt = p), '[{"description":"Create index.html","role":"lead"}]') };
+    await makePlan(lead as never, "make a page", [{ id: "lead", role: "Lead" }]);
+    expect(prompt.includes("small model on this computer")).toBe(expectBrief);
+  }
+});

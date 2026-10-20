@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profileFor, capInstructions, LOCAL, STANDARD, LOCAL_GUIDANCE } from "./profile.ts";
@@ -73,6 +73,14 @@ test("text tool calls: Hermes <tool_call>, Qwen3-Coder <function=>, and a reply 
   const whole = extractTextToolCalls('```json\n{"name": "shell", "parameters": {"command": "bun", "args": ["test"]}}\n```', NAMES)!;
   expect(whole.calls[0]).toMatchObject({ name: "shell", input: { command: "bun", args: ["test"] } });
   expect(whole.rest).toBe("");
+});
+
+test("text tool calls: a JSON call on its own line after a sentence runs (what Qwen2.5-Coder wrote)", () => {
+  const r = extractTextToolCalls('Sure, let\'s start with the first step.\n\n{"name": "read_file", "arguments": {"path": "config/settings.json"}}', NAMES)!;
+  expect(r.calls[0]).toMatchObject({ name: "read_file", input: { path: "config/settings.json" } });
+  expect(r.rest).toBe("Sure, let's start with the first step.");
+  const two = extractTextToolCalls('First this:\n```json\n{"name": "grep", "arguments": {"pattern": "x"}}\n```\nthen:\n{"name": "shell", "arguments": {"command": "ls"}}', NAMES)!;
+  expect(two.calls.map((c) => c.name)).toEqual(["grep", "shell"]);
 });
 
 test("text tool calls: unknown names and JSON inside prose are left alone", () => {
@@ -224,4 +232,57 @@ test("asks that expect JSON are constrained for a local lead, left alone for a c
     await new Agent(c, scripted([() => ({ text: "prose", toolCalls: [] })], seen), new Bus()).ask("debate");
     expect(seen.formats[1]).toBeUndefined();
   }
+});
+
+test("local: a plan in prose is sent back until the model acts, and the file gets written", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const p = scripted(
+    [
+      () => ({ text: "To build the page, I will follow these steps:\n1. Create index.html\n2. Style it", toolCalls: [] }),
+      () => ({ text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "index.html", content: "<h1>Coffee</h1>\n" } }] }),
+      () => ({ text: "Created index.html.", toolCalls: [] }),
+    ],
+    seen,
+  );
+  const bus = new Bus();
+  const warnings: string[] = [];
+  bus.subscribe((e) => e.type === "warning" && warnings.push(String(e.payload)));
+  const cfg: AgentConfig = { ...localCfg, allowedTools: ["read_file", "write_file", "edit", "shell"] };
+  const r = await new Agent(cfg, p, bus, { root }).runDetailed("Create the coffee shop landing page");
+  expect(r.outcome).toBe("done");
+  expect(readFileSync(join(root, "index.html"), "utf8")).toContain("Coffee");
+  expect(warnings.some((w) => w.includes("plan instead of doing"))).toBe(true);
+  const nudge = seen.turns[1]!.at(-1) as Extract<Turn, { role: "user" }>;
+  expect(nudge.text).toContain("call write_file");
+  // And once it says it's finished, it checks its work against the task before the task is done.
+  const check = seen.turns.at(-1)!.at(-1) as Extract<Turn, { role: "user" }>;
+  expect(check.text).toContain("check your work against the task");
+  expect(check.text).toContain("Create the coffee shop landing page");
+});
+
+test("local: a model that only ever describes the work fails the task after two reminders", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const r = await new Agent(localCfg, scripted([() => ({ text: "Here's the plan: 1. design 2. build", toolCalls: [] })], seen), new Bus(), { root }).runDetailed("Build it");
+  expect(r.outcome).toBe("failed");
+  expect(r.error).toContain("described the work but never did it");
+  expect(seen.tools.length).toBe(3);
+});
+
+test("cloud: a text answer to a task is still an answer", async () => {
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const r = await new Agent(cloudCfg, scripted([() => ({ text: "Nothing to change: it already does that.", toolCalls: [] })], seen), new Bus(), { root: mkdtempSync(join(tmpdir(), "niti-profile-")) }).runDetailed("Check it");
+  expect(r.outcome).toBe("done");
+  expect(seen.tools.length).toBe(1);
+});
+
+test("local: an empty reply after the work is done is asked once, then counts as done", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const p = scripted([() => ({ text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "server.js", content: "x" } }] }), () => ({ text: "", toolCalls: [] })], seen);
+  const r = await new Agent({ ...localCfg, allowedTools: ["write_file"] }, p, new Bus(), { root }).runDetailed("Write server.js");
+  expect(r.outcome).toBe("done");
+  expect(readFileSync(join(root, "server.js"), "utf8")).toBe("x");
+  expect(JSON.stringify(seen.turns.at(-1))).toContain("check your work"); // and it still self-checked
 });
