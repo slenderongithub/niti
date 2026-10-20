@@ -137,7 +137,12 @@ function NavItem({
         collapsed && "justify-center px-0",
       )}
     >
-      {active && <motion.span layoutId="nav-active" className="absolute inset-0 rounded-md border bg-background shadow-sm" transition={{ type: "spring", stiffness: 500, damping: 38 }} />}
+      {active && (
+        <motion.span layoutId="nav-active" className="absolute inset-0 rounded-md border bg-background shadow-sm" transition={{ type: "spring", stiffness: 500, damping: 38 }}>
+          {/* The accent edge: where you are, readable at a glance even with the rail collapsed. */}
+          <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />
+        </motion.span>
+      )}
       <Icon className={cn("relative z-10", active && "text-primary")} />
       {!collapsed && <span className="relative z-10 text-[13px]">{label}</span>}
       {!!badge && (
