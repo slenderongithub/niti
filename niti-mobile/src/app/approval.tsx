@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ScrollView, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -7,6 +7,7 @@ import * as LocalAuthentication from "expo-local-authentication";
 import { Check, CheckCheck, FileCode2, FolderCheck, MessageSquareWarning, ScanFace, ShieldAlert, ShieldCheck, Terminal, X } from "lucide-react-native";
 import { parseUnified } from "../../../niti-app/src/renderer/src/lib/diff";
 import type { ApprovalRequest } from "../../../niti-app/src/renderer/src/lib/types";
+import { fmtApprovalCountdown } from "../../../niti-app/src/renderer/src/lib/format";
 import { useStore } from "@/lib/store";
 import { alpha, fonts, radius, resolveColor, space, type, useTheme } from "@/lib/theme";
 import { Badge, Button, CodeBlock, EmptyState, Separator, Text } from "@/components/ui";
@@ -92,6 +93,7 @@ export default function Approval() {
               {head.dangerous && <Badge text="risky" tone="destructive" icon={ShieldAlert} />}
               {approvals.length > 1 && <Badge text={`1 of ${approvals.length}`} />}
             </View>
+            <ApprovalCountdown expiresAt={head.expiresAt} />
           </View>
         </View>
 
@@ -193,5 +195,21 @@ export default function Approval() {
         )}
       </View>
     </View>
+  );
+}
+
+// The desktop dialog's countdown: the Mac's core denies the request itself when it reaches 0:00.
+function ApprovalCountdown({ expiresAt }: { expiresAt?: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!expiresAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [expiresAt]);
+  if (!expiresAt) return null;
+  return (
+    <Text size={type.xs} tone="mutedForeground" style={{ fontVariant: ["tabular-nums"] }}>
+      {fmtApprovalCountdown(expiresAt, now)}
+    </Text>
   );
 }
