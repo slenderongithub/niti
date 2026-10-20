@@ -340,3 +340,29 @@ test("/local/* routes: device, catalogue, installed, delete", async () => {
   expect(getInstalled("unsloth/Qwen3-4B-GGUF:Q4_K_M")).toBeUndefined();
   expect(await api.handle("/elsewhere", "GET", new URL("http://x/elsewhere"), async () => ({}))).toBeUndefined();
 });
+
+test("niti-core models: recommended, search, get the best quant, list, rm", async () => {
+  const { modelsCommand } = await import("./cli.ts");
+  const lines: string[] = [];
+  const out = (s: string) => lines.push(s);
+  expect(await modelsCommand([], out, fakeHub)).toBe(0);
+  expect(lines.join("\n")).toContain("unsloth/Qwen3-4B-GGUF");
+  lines.length = 0;
+  expect(await modelsCommand(["search", "qwen"], out, fakeHub)).toBe(0);
+  expect(lines.join("\n")).toContain("someone/NoTools-7B-GGUF");
+  lines.length = 0;
+  // The fixture's files are tiny, so the best quant for this Mac is Q8_0, whose listed checksum is
+  // wrong on purpose: the default pick downloads it, and the bad checksum is reported, not installed.
+  expect(await modelsCommand(["get", "unsloth/Qwen3-4B-GGUF"], out, fakeHub)).toBe(1);
+  expect(lines.join("\n")).toContain("Downloading unsloth/Qwen3-4B-GGUF:Q8_0");
+  expect(lines.at(-1)).toContain("checksum");
+  lines.length = 0;
+  expect(await modelsCommand(["get", "unsloth/Qwen3-4B-GGUF:Q4_K_M"], out, fakeHub)).toBe(0);
+  expect(lines.at(-1)).toBe("Installed unsloth/Qwen3-4B-GGUF:Q4_K_M. Use it: provider local, model unsloth/Qwen3-4B-GGUF:Q4_K_M");
+  lines.length = 0;
+  expect(await modelsCommand(["list"], out, fakeHub)).toBe(0);
+  expect(lines.join("\n")).toContain("unsloth/Qwen3-4B-GGUF:Q4_K_M");
+  expect(await modelsCommand(["rm", "unsloth/Qwen3-4B-GGUF:Q4_K_M"], out, fakeHub)).toBe(0);
+  expect(await modelsCommand(["rm", "nope"], out, fakeHub)).toBe(2);
+  expect(await modelsCommand(["bogus"], out, fakeHub)).toBe(2);
+});

@@ -230,7 +230,8 @@ func (m Picker) advance(val string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.provider = pick
-		if !m.creds[pick] {
+		// "local" (models niti runs on this Mac) has no key to ask for: straight to what's downloaded.
+		if !m.creds[pick] && pick != localProvider {
 			// Chosen but not set up: collect the key here rather than sending the user back to a
 			// separate onboarding run just because they picked something new.
 			m.stage = "key"
@@ -417,6 +418,9 @@ func (m *Picker) toProvider() {
 		if m.creds[p.ID] {
 			tag, desc = "✓", p.Category+" · key stored"
 		}
+		if p.ID == localProvider {
+			tag, desc = "✓", "runs privately on this Mac · no key"
+		}
 		items = append(items, ui.Item{Label: p.Label, Value: p.ID, Desc: desc, Tag: tag})
 	}
 	m.list.Set(items)
@@ -432,7 +436,16 @@ func (m *Picker) toModel() {
 	}
 	m.list.Set(items)
 	m.input.Placeholder = "filter models, or type any model id"
+	if m.provider == localProvider {
+		m.input.Placeholder = "filter downloaded models, or type <repo>:<quant>"
+		if len(items) == 0 {
+			m.status = "no models downloaded yet — quit (ctrl+c) and run: niti-core models"
+		}
+	}
 }
+
+// The provider id for models niti downloads and runs itself (src/providers/catalog.ts).
+const localProvider = "local"
 
 // Once every teammate is configured: a single agent needs no orchestrator prompt (it leads by
 // default); more than one asks which one looks over the rest.
@@ -506,7 +519,9 @@ func (m *Picker) addRole(provider, model, role, desc string) {
 	m.roles = append(m.roles, api.AgentConfig{
 		ID: id, Provider: provider, Model: model, Role: role,
 		SystemPrompt: systemPrompt(role, desc),
-		AllowedTools: []string{"read_file", "write_file", "edit", "shell"},
+		// web: web_fetch and lookup, plus web_search once a Tavily key is saved — every call still
+		// asks. Mirrors niti-app/src/renderer/src/features/setup/team.ts.
+		AllowedTools: []string{"read_file", "write_file", "edit", "shell", "web"},
 	})
 }
 

@@ -158,7 +158,7 @@ in one disappears from the others (the core answers by id; a second answer gets 
 
 | Path | Responsibility |
 |---|---|
-| `cli.ts` | `niti-core`: one-shot runs, `serve`, `--web`, `init`, `resume`, `auth`, `login copilot`, `audit verify`, `trust` |
+| `cli.ts` | `niti-core`: one-shot runs, `serve`, `--web`, `init`, `resume`, `auth` (incl. `tavily`), `models` (local: recommended, search, get, list, rm), `login copilot`, `audit verify`, `trust` |
 | `engine.ts` | Wires agents, orchestrator, messaging, approvals, usage, locks, store, watcher, goal and remote into one `EventHub`: `submit`, `resume`, `cancel`, `interruptAgent`, `switchModel`, `rewind` |
 | `config/config.ts` | `.niti/agents.yaml`: agents, permissions, LSP, MCP, options (`loadOptions`); `saveAgents` rewrites only `agents:` |
 | `agent/*` | The agent loop and its parts (above) |

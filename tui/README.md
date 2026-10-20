@@ -63,6 +63,19 @@ The published package (`@slenderbuilds/niti` on npm) ships per-platform binaries
 `/help`, plus project commands in `.niti/commands/*.md`. While a goal runs, what you type is a note to
 its next round, and the header shows the round.
 
+**Local models and the web.** A teammate can run on this Mac: provider `local`, model
+`<huggingface repo>:<quant>` (the picker lists what you've downloaded). niti downloads GGUF models
+itself and runs them with a bundled llama.cpp, with no Ollama or LM Studio needed. To get one, use
+`niti-core models` (below) or the desktop app's Models page. Local agents use the harness's local
+profile (`profile: local|standard` on an agent overrides it): short guidance, fewer tools, earlier
+compaction, and a guard against repeated calls. Their shell has no internet unless you approve the
+command. New teams get the `web` tools:
+- `web_fetch` reads a page;
+- `lookup` checks npm, PyPI, crates.io, Go, GitHub, Stack Overflow and Wikipedia;
+- `web_search` runs once a free Tavily key is saved (`niti-core auth login tavily`).
+
+Every web call asks, even under `/auto`.
+
 **Themes**: graphite, obsidian, ember, tide, dusk and moss, each in dark and light
 (`internal/theme/palettes.json`, shared with the web dashboard).
 
@@ -74,7 +87,11 @@ niti-core resume                   # finish the last session's leftovers
 niti-core init                     # setup wizard
 niti-core serve [--port=N]         # the server the TUI starts
 niti-core --web ["<task>"]         # server + the web dashboard
-niti-core auth login|list|logout <provider> · login copilot
+niti-core auth login|list|logout <provider> · login copilot · auth login tavily
+niti-core models [recommended]     # models that run well here and can call tools
+niti-core models search <query>    # the Hugging Face catalogue
+niti-core models get <repo>[:<quant>]   # download (the best quant for this Mac by default)
+niti-core models list · rm <repo>:<quant>
 niti-core audit verify             # check the tool-call log's hash chain
 niti-core trust check|grant
 # flags: --auto · --worktree · --trust · --show-url · --version

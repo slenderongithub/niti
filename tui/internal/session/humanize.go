@@ -20,6 +20,7 @@ var (
 	reCmd  = reStr("command")
 	reQ    = reStr("(?:query|pattern|symbol)")
 	reKey  = reStr("key")
+	reURL  = reStr("url")
 	// An error that reads like a rejected credential; its line then points at /api.
 	reKeyError = regexp.MustCompile(`(?i)api[ _-]?key|\b(401|403)\b|unauthori[sz]ed|forbidden|invalid (x-api-key|credential|token)|authentication|no API key`)
 	reTask     = regexp.MustCompile(`^(starting|queued) (\S+?)(?: → (\S+))?: (.*)$`)
@@ -29,6 +30,7 @@ var toolVerbs = map[string]string{
 	"read_file": "Read", "write_file": "Write", "edit": "Edit", "list_dir": "List", "list_files": "List",
 	"glob": "Find", "grep": "Search", "search": "Search", "shell": "Run", "bash": "Run",
 	"remember": "Remember", "recall": "Recall", "todo": "Plan", "hover": "Inspect", "diagnostics": "Check",
+	"web_fetch": "Fetch", "web_search": "Search the web", "lookup": "Look up",
 }
 
 // humanize returns the transcript line for an event, or "" to drop it.
@@ -94,7 +96,7 @@ func describeCall(name, args string) string {
 			return verb + " " + truncate(strings.TrimSpace(in.Command+" "+strings.Join(in.Args, " ")), 70)
 		}
 	}
-	for _, re := range []*regexp.Regexp{rePath, reCmd, reQ, reKey} {
+	for _, re := range []*regexp.Regexp{rePath, reCmd, reQ, reURL, reKey} {
 		if m := re.FindStringSubmatch(args); m != nil {
 			return verb + " " + m[1]
 		}

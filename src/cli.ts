@@ -34,7 +34,9 @@ const USAGE = `niti-core — the headless engine + scripting CLI.
     niti-core init                setup wizard: add providers, assign models to roles
     niti-core serve [--port=N]    start the local core server (what the Go TUI connects to)
     niti-core --web ["<task>"]    start the server + open the live web dashboard
-    niti-core auth login|list|logout <provider>
+    niti-core auth login|list|logout <provider>   (auth login tavily: the web-search key)
+    niti-core models [search <q> | get <repo>[:<quant>] | list | rm <id>]
+                                  models that run on this Mac (recommended by default)
     niti-core keys set <provider> store a BYOK key (legacy; 'auth login' is preferred)
     niti-core login copilot       sign in with a GitHub Copilot subscription
     niti-core audit verify        check the tamper-evident tool-call/approval log's hash chain
@@ -155,6 +157,11 @@ if (args[0] === "login") {
   setCredential({ provider: "github-copilot", type: "oauth", access: token });
   console.log("Signed in to GitHub Copilot. Select it in /model (provider: GitHub Copilot).");
   process.exit(0);
+}
+
+if (args[0] === "models") {
+  const { modelsCommand } = await import("./local/cli.ts");
+  process.exit(await modelsCommand(args.slice(1)));
 }
 
 if (args[0] === "auth") {
