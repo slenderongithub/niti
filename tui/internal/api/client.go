@@ -176,6 +176,8 @@ type Approval struct {
 	AgentID string         `json:"agentId"`
 	Tool    string         `json:"tool"`
 	Input   map[string]any `json:"input"`
+	// When the core refuses it on its own (epoch ms); 0 from cores without a timeout, or with it off.
+	ExpiresAt int64 `json:"expiresAt,omitempty"`
 }
 
 type Lock struct {

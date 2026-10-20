@@ -111,6 +111,7 @@ type Model struct {
 	autoCompact, thinkingMode bool            // mirrors the core's live settings; toggled from the Config tab
 	verbose                   bool            // list every tool call separately instead of collapsing runs
 	ticking                   bool            // a spinner tick is scheduled
+	countdownTicking          bool            // the approval countdown's one-second tick is scheduled
 	client                    *api.Client
 	events                    <-chan api.Event
 	cancel                    context.CancelFunc
@@ -445,7 +446,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case eventMsg:
 		m.apply(api.Event(msg))
-		return m, tea.Batch(waitFor(m.events), m.glowCmd()) // keep listening
+		return m, tea.Batch(waitFor(m.events), m.glowCmd(), m.countdownCmd()) // keep listening
 	case eventsMsg:
 		before := m.transcriptLen()
 		for _, e := range msg {
@@ -473,12 +474,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ticking = true
 			cmds = append(cmds, tick())
 		}
-		cmds = append(cmds, m.glowCmd())
+		cmds = append(cmds, m.glowCmd(), m.countdownCmd())
 		return m, tea.Batch(cmds...)
 	case glowTickMsg:
 		m.glowTicking = false
 		m.glowPhase++
 		return m, m.glowCmd()
+	case countdownTickMsg:
+		m.countdownTicking = false
+		return m, m.countdownCmd()
 	case tickMsg:
 		if m.ticking = m.anyRunning() && !m.prefs["reduceMotion"]; m.ticking {
 			return m, tick()

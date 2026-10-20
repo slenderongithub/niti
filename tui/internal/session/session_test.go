@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"testing"
@@ -521,5 +522,19 @@ func TestProjectInstructionsDefaultsOnAndAutoApproveComesFromTheCore(t *testing.
 	m = New(nil, api.SessionInfo{Auto: true, Prefs: map[string]bool{"projectInstructions": false}}, nil, func() {})
 	if m.prefs["projectInstructions"] || !m.autoApprove {
 		t.Fatalf("core values ignored: prefs=%v auto=%v", m.prefs, m.autoApprove)
+	}
+}
+
+func TestApprovalCountdown(t *testing.T) {
+	now := time.UnixMilli(1_000_000)
+	if got := approvalCountdown(0, now); got != "" {
+		t.Fatalf("no deadline should say nothing, got %q", got)
+	}
+	got := approvalCountdown(now.Add(63*time.Second).UnixMilli(), now)
+	if !strings.Contains(got, "in 1:03,") {
+		t.Fatalf("want 1:03 left, got %q", got)
+	}
+	if got := approvalCountdown(now.Add(-time.Second).UnixMilli(), now); !strings.Contains(got, "in 0:00,") {
+		t.Fatalf("past deadline should read 0:00, got %q", got)
 	}
 }

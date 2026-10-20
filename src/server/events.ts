@@ -13,7 +13,7 @@ export type ServerEventBody =
   | { kind: "agent_message"; message: AgentMessage }
   | { kind: "orchestration"; event: OrchestrationEvent }
   | { kind: "usage"; agents: { agentId: string; usage: AgentUsage }[]; totals: { inputTokens: number; outputTokens: number; calls: number }; rateLimits: RateLimitSnapshot[]; cost: number; costKnown: boolean }
-  | { kind: "approval_request"; requests: { id: number; agentId: string; tool: string; input: Record<string, unknown>; dangerous: boolean }[] }
+  | { kind: "approval_request"; requests: { id: number; agentId: string; tool: string; input: Record<string, unknown>; dangerous: boolean; expiresAt?: number }[] }
   | { kind: "lock"; holders: { path: string; holder: string }[] }
   | { kind: "session"; state: "started" | "ended" | "cancelled" | "idle"; goal?: string }
   | { kind: "theme"; theme: string }

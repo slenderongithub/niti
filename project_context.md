@@ -84,7 +84,9 @@ in one disappears from the others (the core answers by id; a second answer gets 
    exclusion; failed for good after 3 attempts.
 6. **Safety.** Writes and shell go through `approval.ts` (session grant → agent `permissions:` →
    project `permissions:` → ask; most specific pattern wins). Destructive shell patterns always ask,
-   even under `--auto`. Paths are jailed (`safePath`); shell spawns with array args; `sandbox.ts` puts
+   even under `--auto`. A request nobody answers is refused on its own after `approvalTimeout`
+   seconds (default 300, `0` waits forever); `approval_request` carries each one's `expiresAt` and
+   every client counts down to it. Paths are jailed (`safePath`); shell spawns with array args; `sandbox.ts` puts
    shell commands in an OS sandbox (Seatbelt on macOS, bubblewrap on Linux): writes confined to the
    project, credential stores unreadable. `trust/` asks once per folder before reading its config,
    recorded globally (never a repo marker a repo could commit) with a snapshot of `agents.yaml`.
@@ -170,6 +172,7 @@ lsp: {name: {command, args?, extensions}}
 mcpServers: [{name, command, args?}]
 # options, all optional
 theme · auto · watch · instructions: [files] · maxTurns · maxAgents · worktree · verify: [cmds]|false
+approvalTimeout: seconds   # unanswered approvals are refused after it; 0 = never; default 300
 autoCompact · thinkingMode · lightMode · reduceMotion · showTurnDuration · openAgentsView
 projectInstructions · repoMap · sandbox · remote   # remote: false keeps this project off phones
 ```

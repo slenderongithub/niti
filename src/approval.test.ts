@@ -184,3 +184,29 @@ test("answer by id hits that request, not the front, and refuses one that is gon
   expect(q.answer(true)).toBe(true); // no id: the front, as the TUI does
   expect(await a).toBe(true);
 });
+
+test("an unanswered request is refused when its deadline passes", async () => {
+  const q = new ApprovalQueue(undefined, 30);
+  const expired: string[] = [];
+  q.onExpire = (r) => expired.push(r.tool);
+  const before = Date.now();
+  const p = q.request("a", "shell", { command: "ls" });
+  const at = q.current()!.expiresAt!;
+  expect(at).toBeGreaterThanOrEqual(before + 30);
+  expect(await p).toBe(false);
+  expect(q.current()).toBeUndefined();
+  expect(expired).toEqual(["shell"]);
+});
+
+test("an answer before the deadline stands, and a timeout of 0 never expires", async () => {
+  const q = new ApprovalQueue(undefined, 30);
+  const p = q.request("a", "shell", { command: "ls" });
+  q.answer(true);
+  expect(await p).toBe(true);
+  await Bun.sleep(50); // the cleared timer must not fire into an empty queue
+  q.setTimeout(0);
+  q.request("a", "shell", { command: "ls" });
+  expect(q.current()!.expiresAt).toBeUndefined();
+  await Bun.sleep(50);
+  expect(q.current()).toBeDefined();
+});

@@ -9,7 +9,7 @@ import { Bus } from "./events/bus.ts";
 import { MessageBus, USER, type Messenger } from "./messaging/message-bus.ts";
 import { Orchestrator } from "./orchestrator/orchestrator.ts";
 import { LockRegistry } from "./orchestrator/locks.ts";
-import { ApprovalQueue } from "./approval.ts";
+import { ApprovalQueue, DEFAULT_APPROVAL_TIMEOUT_MS } from "./approval.ts";
 import { UsageTracker } from "./usage.ts";
 import { defaultSettings, type RuntimeSettings } from "./settings.ts";
 import { runProject, resumeProject, type RunnerDeps, type RunResult } from "./orchestrator/runner.ts";
@@ -48,6 +48,7 @@ interface EngineOptions {
   lsp?: LspRegistry; // present → diagnostics/hover available to every agent, alongside MCP
   watch?: boolean; // true → emit external_change events for edits made outside niti
   maxTurns?: number; // `maxTurns:` from agents.yaml — tool-loop cap per agent turn
+  approvalTimeoutMs?: number; // `approvalTimeout:` from agents.yaml; unanswered approvals are refused after it (0 = never)
   worktree?: boolean; // isolate each run's file writes in a fresh git worktree instead of the real root
   // `verify:` from agents.yaml. Command lines an agent's changes must pass before it may report
   // done; omitted → detected from the project (a typecheck/build script, go build, cargo check);
@@ -115,7 +116,7 @@ export class Engine {
     this.persist = opts.persist;
     this.store = opts.store;
     this.audit = opts.audit;
-    this.approvals = new ApprovalQueue(opts.audit);
+    this.approvals = new ApprovalQueue(opts.audit, opts.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS);
     this.root = opts.root ?? process.cwd();
     this.lsp = opts.lsp;
     this.mcp = opts.mcp;
@@ -257,6 +258,8 @@ export class Engine {
       this.hub.publish({ kind: "agent_message", message: m, time: m.time });
     });
     this.approvals.onChange(() => this.hub.publish({ kind: "approval_request", requests: this.pendingApprovals() }));
+    this.approvals.onExpire = (r) =>
+      this.bus.publish({ agentId: r.agentId, type: "warning", payload: `${r.tool} was denied automatically: nobody answered the approval in time`, time: Date.now() });
     // Resume: reseed the notes board from disk so a note written before a restart is still visible.
     if (this.store) this.messageBus.hydrateNotes(this.store.listNotes());
     this.goal = new GoalLoop(this.goalHost());
@@ -339,8 +342,8 @@ export class Engine {
     return this.busy || this.goal.active;
   }
 
-  pendingApprovals(): { id: number; agentId: string; tool: string; input: Record<string, unknown>; dangerous: boolean }[] {
-    return this.approvals.queued().map((r) => ({ id: r.id, agentId: r.agentId, tool: r.tool, input: r.input, dangerous: r.forceAsk }));
+  pendingApprovals(): { id: number; agentId: string; tool: string; input: Record<string, unknown>; dangerous: boolean; expiresAt?: number }[] {
+    return this.approvals.queued().map((r) => ({ id: r.id, agentId: r.agentId, tool: r.tool, input: r.input, dangerous: r.forceAsk, ...(r.expiresAt ? { expiresAt: r.expiresAt } : {}) }));
   }
 
   // Run a goal end-to-end: plan → schedule → integrate. Emits session start/end and persists tasks.

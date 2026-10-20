@@ -15,6 +15,8 @@ interface ApprovalRequest {
   // Dangerous, outside the project, or a credential: always asked, never waved through by a grant —
   // and so never part of a client's "allow all" either.
   forceAsk: boolean;
+  expiresAt?: number; // epoch ms the request is refused on its own; absent when the timeout is off
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 interface PermissionScope {
@@ -29,16 +31,33 @@ interface PermissionScope {
 // well under this; only a pathological flood trying to bury the human in prompts hits it.
 const MAX_PENDING_PER_AGENT = 20;
 
+// An unanswered request is refused after this long, so an unattended session keeps moving instead of
+// parking an agent forever. `approvalTimeout:` in agents.yaml (seconds) overrides it; 0 turns it off.
+export const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000;
+
 export class ApprovalQueue {
   private pending: ApprovalRequest[] = [];
   private listeners = new Set<() => void>();
   private scopes: PermissionScope[] = [];
   private nextId = 1;
+  onExpire?: (req: { agentId: string; tool: string }) => void; // the engine says so in the agent's feed
 
-  constructor(private audit?: AuditLog) {}
+  constructor(private audit?: AuditLog, private timeoutMs = DEFAULT_APPROVAL_TIMEOUT_MS) {}
 
-  private logDecision(req: ApprovalRequest, ok: boolean, scope?: "agent" | "path"): void {
-    this.audit?.append({ agentId: req.agentId, kind: "approval", detail: { tool: req.tool, ok, scope } });
+  private logDecision(req: ApprovalRequest, ok: boolean, scope?: "agent" | "path", timedOut?: boolean): void {
+    this.audit?.append({ agentId: req.agentId, kind: "approval", detail: { tool: req.tool, ok, scope, ...(timedOut ? { timedOut } : {}) } });
+  }
+
+  // Requests already queued keep the deadline they were shown with; the new value applies to the next.
+  setTimeout(ms: number): void {
+    this.timeoutMs = ms;
+  }
+
+  // Taken out of the queue for any reason: its deadline no longer applies.
+  private settle(req: ApprovalRequest, ok: boolean, scope?: "agent" | "path", timedOut?: boolean): void {
+    clearTimeout(req.timer);
+    this.logDecision(req, ok, scope, timedOut);
+    req.resolve(ok);
   }
 
   // Pre-grant a scope — used to seed autoApprove rules from agents.yaml at startup.
@@ -65,9 +84,25 @@ export class ApprovalQueue {
       return Promise.resolve(false);
     }
     return new Promise((resolve) => {
-      this.pending.push({ id: this.nextId++, agentId, tool, input, resolve, forceAsk });
+      const req: ApprovalRequest = { id: this.nextId++, agentId, tool, input, resolve, forceAsk };
+      if (this.timeoutMs > 0) {
+        req.expiresAt = Date.now() + this.timeoutMs;
+        req.timer = setTimeout(() => this.expire(req.id), this.timeoutMs);
+        req.timer.unref?.(); // a parked request alone shouldn't keep a process alive
+      }
+      this.pending.push(req);
       this.notify();
     });
+  }
+
+  // The deadline passed with nobody answering: refused, the same as a "no".
+  private expire(id: number): void {
+    const i = this.pending.findIndex((r) => r.id === id);
+    if (i < 0) return;
+    const req = this.pending.splice(i, 1)[0]!;
+    this.settle(req, false, undefined, true);
+    this.onExpire?.(req);
+    this.notify();
   }
 
   current(): ApprovalRequest | undefined {
@@ -99,8 +134,7 @@ export class ApprovalQueue {
       // silently did nothing and the user was re-prompted for every root-level file.
       this.grant(req.agentId, req.tool, dir ? `${dir}/**` : "*");
     }
-    this.logDecision(req, ok, scope);
-    req.resolve(ok);
+    this.settle(req, ok, scope);
     this.notify();
     return true;
   }
@@ -110,10 +144,7 @@ export class ApprovalQueue {
   denyAll(agentId?: string): void {
     const batch = agentId ? this.pending.filter((r) => r.agentId === agentId) : this.pending;
     this.pending = agentId ? this.pending.filter((r) => r.agentId !== agentId) : [];
-    for (const r of batch) {
-      this.logDecision(r, false);
-      r.resolve(false);
-    }
+    for (const r of batch) this.settle(r, false);
     this.notify();
   }
 

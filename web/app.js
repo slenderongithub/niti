@@ -343,12 +343,23 @@ function describeCall(tool, input) {
 
 // ---------- tool-approval popup (POST /approval — the same FIFO queue the TUI answers from, so
 // answering here unblocks a concurrently open TUI session and vice versa) ----------
+// The core refuses an unanswered request on its own at expiresAt (approval.ts); this only counts down to it.
+function approvalCountdown(expiresAt, now = Date.now()) {
+  if (!expiresAt) return "";
+  const s = Math.max(0, Math.round((expiresAt - now) / 1000));
+  return `niti will automatically deny this request in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}, to avoid blocking progress on an unattended session`;
+}
+setInterval(() => {
+  const r = pendingApprovals[0];
+  if (r) $("approval-countdown").textContent = approvalCountdown(r.expiresAt);
+}, 1000);
 function renderApproval() {
   const el = $("approval-overlay");
   if (!pendingApprovals.length) { el.classList.add("hidden"); return; }
   el.classList.remove("hidden");
   const r = pendingApprovals[0];
   $("approval-head").textContent = `${r.agentId} wants to run ${describeCall(r.tool, r.input)}`;
+  $("approval-countdown").textContent = approvalCountdown(r.expiresAt);
   const diff = r.input && typeof r.input.diff === "string" ? r.input.diff : "";
   $("approval-diff").innerHTML = diff
     ? diff.split("\n").map((l) => `<div class="${l.startsWith("+") ? "plus" : l.startsWith("-") ? "minus" : l.startsWith("@@") ? "hunk" : ""}">${esc(l)}</div>`).join("")

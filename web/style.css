@@ -158,6 +158,8 @@ kbd { font: inherit; font-weight: 700; color: var(--violet); }
 .overlay-box { width: min(760px, 92vw); max-height: 80vh; display: flex; flex-direction: column; gap: 10px; border-color: var(--amber) !important; }
 .overlay-box > .box-title { color: var(--amber) !important; font-weight: 700; }
 .overlay-head { color: var(--ink); }
+.overlay-countdown { color: var(--muted); font-size: 12px; }
+.overlay-countdown:empty { display: none; }
 .diff { flex: 1; overflow: auto; font-size: 12px; background: var(--panel-2); padding: 8px 10px; }
 .diff div { white-space: pre-wrap; word-break: break-word; }
 .diff .plus { color: var(--green); }

@@ -46,6 +46,7 @@ export async function buildEngine(o: { configs: AgentConfig[]; interactive: bool
     lsp: new LspRegistry(loadLspServers()),
     watch: options.watch ?? o.watch,
     maxTurns: options.maxTurns,
+    approvalTimeoutMs: options.approvalTimeout === undefined ? undefined : options.approvalTimeout * 1000,
     verify: options.verify,
     repoMap: options.repoMap,
     sandbox: options.sandbox,

@@ -61,6 +61,7 @@ export interface NitiOptions {
   watch?: boolean; // false → stop announcing edits made outside niti
   instructions?: string[]; // files (AGENTS.md, CLAUDE.md, …) appended to every agent's system prompt
   maxTurns?: number; // tool-loop cap per agent turn; the built-in default is 12
+  approvalTimeout?: number; // seconds an approval waits before it is refused on its own; 0 = wait forever; default 300
   maxAgents?: number; // ceiling on team size, enforced when agents.yaml is loaded
   worktree?: boolean; // isolate each run's file writes in a fresh git worktree (same as --worktree)
   // Commands an agent's changes must pass before it may report a task done, e.g.
@@ -89,6 +90,7 @@ export function loadOptions(path = CONFIG): NitiOptions {
     watch: raw.watch === undefined ? undefined : raw.watch !== false,
     instructions: Array.isArray(raw.instructions) ? raw.instructions.filter((i): i is string => typeof i === "string") : undefined,
     maxTurns: num(raw.maxTurns),
+    approvalTimeout: typeof raw.approvalTimeout === "number" && raw.approvalTimeout >= 0 ? raw.approvalTimeout : undefined,
     maxAgents: num(raw.maxAgents),
     worktree: raw.worktree === true,
     // `false` is meaningful here (turn detection off), so it can't collapse into undefined.

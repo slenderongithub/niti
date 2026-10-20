@@ -103,6 +103,9 @@ func (m Model) View() (frame string) {
 	}
 	if len(m.approvals) > 0 && !compact {
 		promptRows = 3 + len(m.approvalCallLines(w)) // border, "who wants to run:", the call, border
+		if m.approvals[0].ExpiresAt != 0 {
+			promptRows++ // the countdown
+		}
 	}
 	fixed := headerRows + promptRows + 1 // +1: the footer
 	bodyH := h - fixed - feedRows - menuRows
@@ -719,6 +722,9 @@ func (m Model) approvalBanner(w, rows int, compact bool) string {
 	lines := []string{txt(theme.Fg, bg).Bold(true).Render(r.AgentID) + txt(theme.Fg, bg).Render(" wants to run:")}
 	for _, l := range m.approvalCallLines(w) {
 		lines = append(lines, txt(theme.Amber, bg).Bold(true).Render(l))
+	}
+	if c := approvalCountdown(r.ExpiresAt, time.Now()); c != "" {
+		lines = append(lines, txt(theme.Muted, bg).Render(truncate(c, max(w-4, 10))))
 	}
 	text := strings.Join(lines, "\n")
 	if compact {
