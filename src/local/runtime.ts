@@ -6,18 +6,24 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Subprocess } from "bun";
-import { getInstalled, modelPath, modelsDir, updateManifest, type InstalledModel } from "./store.ts";
+import { getInstalled, modelPath, modelsDir, updateManifest, formatOf, type InstalledModel } from "./store.ts";
+import { ensureMlxEngine } from "./mlx.ts";
 import { fitModel, device, MIN_CONTEXT } from "./fit.ts";
 import { learnContext } from "../providers/catalog.ts";
 
-export type RuntimeState = "loading" | "ready" | "stopped" | "error";
+export type RuntimeState = "installing" | "loading" | "ready" | "stopped" | "error";
 
 export interface RuntimeStatus {
   model: string;
   state: RuntimeState;
+  engine?: "llama.cpp" | "mlx";
   ctx?: number; // per slot
   slots?: number;
   error?: string;
+  // While the MLX engine installs (its first use): which step, and bytes of the Python download.
+  stage?: "python" | "packages";
+  received?: number;
+  total?: number;
 }
 
 // Where the server binary is, in the order a user would expect to be honoured: an explicit
@@ -70,6 +76,21 @@ export function serverArgs(m: InstalledModel, opts: { port: number; slots: numbe
     // the user's browser could find the port and use the model.
     ...(opts.apiKey ? ["--api-key", opts.apiKey] : []),
     ...(opts.log ? ["--log-file", opts.log] : []),
+  ];
+}
+
+// The MLX server: niti's wrapper (mlx.ts WRAPPER) around mlx_lm.server. No KV preallocation to
+// size — it grows with the conversation; the context niti compacts at is the fitted one.
+export function mlxServerArgs(m: InstalledModel, opts: { port: number }): string[] {
+  return [
+    "--model", modelPath(m),
+    "--host", "127.0.0.1",
+    "--port", String(opts.port),
+    // Browsers get no CORS grant: only niti (which isn't a browser) calls this server.
+    "--allowed-origins", "http://127.0.0.1",
+    // Several agents on one model decode together instead of waiting their turn.
+    "--decode-concurrency", "4",
+    "--log-level", "WARNING",
   ];
 }
 
@@ -145,9 +166,17 @@ export class LocalRuntime {
   }
 
   private async start(m: InstalledModel): Promise<Server> {
-    const bin = findLlamaServer();
-    if (!bin) throw new Error("the local model runtime (llama-server) is missing — reinstall niti, or `brew install llama.cpp` when running from source");
-    const slots = Math.max(1, this.wanted.get(m.id)?.size ?? 1);
+    const mlx = formatOf(m) === "mlx";
+    const bin = mlx ? undefined : findLlamaServer();
+    if (!mlx && !bin) throw new Error("the local model runtime (llama-server) is missing — reinstall niti, or `brew install llama.cpp` when running from source");
+    // MLX: its engine arrives on first use. Every agent waiting on this model waits on the install.
+    const mlxCmd = mlx
+      ? await ensureMlxEngine((p) => {
+          if (p.stage === "python" || p.stage === "packages") this.onStatus({ model: m.id, engine: "mlx", state: "installing", stage: p.stage, received: p.received, total: p.total });
+        })
+      : undefined;
+    // The MLX server batches every agent onto one model and shares cached prefixes itself.
+    const slots = mlx ? 1 : Math.max(1, this.wanted.get(m.id)?.size ?? 1);
     const dev = device();
     // Free memory for this one: a model nobody is using right now gives way.
     for (const other of this.servers.values()) {
@@ -158,18 +187,18 @@ export class LocalRuntime {
     const port = await freePort();
     mkdirSync(modelsDir(), { recursive: true });
     const apiKey = crypto.randomUUID();
-    const args = serverArgs(m, { port, slots, ctx, apiKey, log: join(modelsDir(), "llama-server.log") });
-    const cmd = [...bin, ...args];
+    const cmd = mlx ? [...mlxCmd!, ...mlxServerArgs(m, { port })] : [...bin!, ...serverArgs(m, { port, slots, ctx, apiKey, log: join(modelsDir(), "llama-server.log") })];
     const s: Server = { model: m.id, port, slots, ctx, apiKey, state: "loading", inFlight: 0, lastUsed: Date.now(), slotOf: new Map(), ready: Promise.resolve() };
     this.servers.set(m.id, s);
-    this.onStatus({ model: m.id, state: "loading", ctx, slots });
-    s.proc = Bun.spawn(cmd, { stdout: "ignore", stderr: "pipe" });
+    this.onStatus({ model: m.id, engine: mlx ? "mlx" : "llama.cpp", state: "loading", ctx, slots });
+    // The MLX wrapper reads its key from the environment, never the command line (which ps shows).
+    s.proc = Bun.spawn(cmd, { stdout: "ignore", stderr: "pipe", env: mlx ? { ...process.env, NITI_MLX_KEY: apiKey, PYTHONNOUSERSITE: "1" } : undefined });
     recordPids([...this.servers.values()].map((x) => x.proc?.pid).filter((p): p is number => !!p));
     const stderr = collect(s.proc.stderr as ReadableStream<Uint8Array>);
     s.ready = (async () => {
       const deadline = Date.now() + Number(process.env.NITI_LOCAL_LOAD_MS ?? 300_000);
       for (;;) {
-        if (s.proc!.exitCode !== null || s.proc!.killed) throw new Error(`llama-server exited while loading ${m.id}: ${lastLines(stderr.text())}`);
+        if (s.proc!.exitCode !== null || s.proc!.killed) throw new Error(`${mlx ? "the MLX engine" : "llama-server"} exited while loading ${m.id}: ${lastLines(stderr.text())}`);
         try {
           const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2000) });
           if (res.ok) break;
@@ -179,9 +208,10 @@ export class LocalRuntime {
         if (Date.now() > deadline) throw new Error(`${m.id} took too long to load`);
         await Bun.sleep(250);
       }
-      await this.learn(s, m);
+      if (mlx) learnContext("local", m.id, s.ctx);
+      else await this.learn(s, m);
       s.state = "ready";
-      this.onStatus({ model: m.id, state: "ready", ctx: s.ctx, slots });
+      this.onStatus({ model: m.id, engine: mlx ? "mlx" : "llama.cpp", state: "ready", ctx: s.ctx, slots });
       this.watchIdle();
     })().catch((err) => {
       s.state = "error";
@@ -282,7 +312,7 @@ export function reapOrphans(): number {
     for (const pid of pids) {
       if (!alive(pid)) continue;
       const comm = Bun.spawnSync(["ps", "-p", String(pid), "-o", "command="]).stdout.toString();
-      if (!/llama-server|fakellama/.test(comm)) continue;
+      if (!/llama-server|niti_mlx_server|fakellama|fakemlx/.test(comm)) continue;
       process.kill(pid, "SIGTERM");
       reaped++;
     }

@@ -22,11 +22,18 @@ export interface Sampling {
   repeat_penalty?: number;
 }
 
+export type ModelFormat = "gguf" | "mlx";
+
 export interface InstalledModel {
-  id: string; // "<repo>:<quant>" — what an agent's `model:` names
+  id: string; // "<repo>:<quant>" — what an agent's `model:` names; MLX models use the quant "mlx"
   repo: string;
   quant: string;
-  files: string[]; // relative to the repo directory, shards in order
+  format?: ModelFormat; // unset = gguf (manifests written before MLX support)
+  files: string[]; // relative to the model's directory, shards in order
+  // A model that stays where it already was (one added from LM Studio's folder): its directory.
+  // niti reads it there and never deletes it — removing it only forgets it.
+  path?: string;
+  source?: string; // where an added model came from: "LM Studio", "Hugging Face cache"
   bytes: number;
   params?: number;
   architecture?: string;
@@ -60,6 +67,13 @@ export function repoDir(repo: string): string {
   return join(modelsDir(), repo.replace("/", "__"));
 }
 
+export const formatOf = (m: InstalledModel): ModelFormat => m.format ?? "gguf";
+
+// Where a model's files are: its own folder for one niti downloaded, or where it was found.
+export function modelDir(m: InstalledModel): string {
+  return m.path ?? repoDir(m.repo);
+}
+
 const manifestName = (quant: string) => `manifest.${quant}.json`;
 
 export function listInstalled(): InstalledModel[] {
@@ -73,7 +87,7 @@ export function listInstalled(): InstalledModel[] {
       for (const f of readdirSync(dir)) {
         if (!/^manifest\..+\.json$/.test(f)) continue;
         const m = JSON.parse(readFileSync(join(dir, f), "utf8")) as InstalledModel;
-        if (m.id && m.files?.length && m.files.every((x) => existsSync(join(dir, x)))) out.push(m);
+        if (m.id && m.files?.length && m.files.every((x) => existsSync(join(modelDir(m), x)))) out.push(m);
       }
     } catch {
       // an unreadable entry is skipped, never fatal to the listing
@@ -89,14 +103,15 @@ export function getInstalled(id: string): InstalledModel | undefined {
   if (!existsSync(file)) return undefined;
   try {
     const m = JSON.parse(readFileSync(file, "utf8")) as InstalledModel;
-    return m.files.every((x) => existsSync(join(repoDir(p.repo), x))) ? m : undefined;
+    return m.files.every((x) => existsSync(join(modelDir(m), x))) ? m : undefined;
   } catch {
     return undefined;
   }
 }
 
+// What the engine is pointed at: the first .gguf file for llama-server, the folder for MLX.
 export function modelPath(m: InstalledModel): string {
-  return join(repoDir(m.repo), m.files[0]!);
+  return formatOf(m) === "mlx" ? modelDir(m) : join(modelDir(m), m.files[0]!);
 }
 
 export function saveManifest(m: InstalledModel): void {
@@ -121,7 +136,8 @@ export function removeInstalled(id: string): boolean {
   const dir = repoDir(p.repo);
   if (!existsSync(dir)) return false;
   rmSync(join(dir, manifestName(p.quant)), { force: true });
-  for (const f of m?.files ?? []) {
+  // An added model's files belong to wherever it came from: only niti's record of it goes.
+  for (const f of m?.path ? [] : (m?.files ?? [])) {
     rmSync(join(dir, f), { force: true });
     rmSync(join(dir, `${f}.part`), { force: true });
   }
@@ -129,6 +145,7 @@ export function removeInstalled(id: string): boolean {
   return !!m;
 }
 
+// What niti's own downloads take (added models live elsewhere and aren't counted).
 export function diskUsage(): number {
-  return listInstalled().reduce((n, m) => n + m.bytes, 0);
+  return listInstalled().reduce((n, m) => n + (m.path ? 0 : m.bytes), 0);
 }

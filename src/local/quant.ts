@@ -105,3 +105,28 @@ export function quantFiles(siblings: { rfilename: string; size?: number; lfs?: {
 export function estimateBytes(params: number, quant: string): number {
   return Math.round((params * bitsPerWeight(quant)) / 8 * 1.04);
 }
+
+// MLX repos hold one quantization each, named in the repo ("Qwen2.5-Coder-14B-Instruct-MLX-4bit",
+// "gemma-3-12b-it-qat-8bit", "…-bf16"). Its bit width, for the size estimate and the label.
+export function mlxBits(name: string): number {
+  const m = /(?:^|[-_.])(\d)\s*-?bit(?:$|[-_.])/i.exec(name) ?? /(\d)bit/i.exec(name);
+  if (m) return Number(m[1]);
+  if (/bf16|fp16|f16/i.test(name)) return 16;
+  if (/fp8|int8/i.test(name)) return 8;
+  return 4; // the mlx-community default
+}
+
+// MLX quantization stores a scale and bias per group of 64 weights: about half a bit more each.
+export function mlxBitsPerWeight(name: string): number {
+  const b = mlxBits(name);
+  return b >= 16 ? 16 : b + 0.5;
+}
+
+// "Qwen2.5-Coder-14B-Instruct" → 14e9, "SmolLM3-3B" → 3e9, "Ministral-8B" → 8e9; mixture-of-experts
+// names count total parameters ("Qwen3-30B-A3B" → 30e9). Undefined when the name doesn't say.
+export function paramsFromName(name: string): number | undefined {
+  const m = /(?:^|[-_.\s])(\d+(?:\.\d+)?)\s*([bm])(?=$|[-_.\s])/i.exec(name);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  return m[2]!.toLowerCase() === "b" ? n * 1e9 : n * 1e6;
+}

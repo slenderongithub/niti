@@ -64,8 +64,11 @@ The published package (`@slenderbuilds/niti` on npm) ships per-platform binaries
 its next round, and the header shows the round.
 
 **Local models and the web.** A teammate can run on this Mac: provider `local`, model
-`<huggingface repo>:<quant>` (the picker lists what you've downloaded). niti downloads GGUF models
-itself and runs them with a bundled llama.cpp, with no Ollama or LM Studio needed. To get one, use
+`<huggingface repo>:<quant>` (the picker lists what you've downloaded). niti downloads models itself
+and runs them on its own engines, with no Ollama or LM Studio needed: GGUF on a bundled llama.cpp, and
+on Apple Silicon also MLX, on Apple's mlx-lm (fetched once, about 140 MB, the first time an MLX model
+runs; ids end in `:mlx`). Models you already have in LM Studio's folder or the Hugging Face cache can
+be added in place (`niti-core models found`, then `add`), with no second download. To get one, use
 `niti-core models` (below) or the desktop app's Models page. Local agents use the harness's local
 profile (`profile: local|standard` on an agent overrides it): short guidance, fewer tools, earlier
 compaction, and a guard against repeated calls. Their shell has no internet unless you approve the
@@ -91,7 +94,7 @@ niti-core auth login|list|logout <provider> · login copilot · auth login tavil
 niti-core models [recommended]     # models that run well here and can call tools
 niti-core models search <query>    # the Hugging Face catalogue
 niti-core models get <repo>[:<quant>]   # download (the best quant for this Mac by default)
-niti-core models list · rm <repo>:<quant>
+niti-core models list · found · add <id> · rm <repo>:<quant>
 niti-core audit verify             # check the tool-call log's hash chain
 niti-core trust check|grant
 # flags: --auto · --worktree · --trust · --show-url · --version

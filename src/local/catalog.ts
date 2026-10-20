@@ -3,7 +3,8 @@
 // call tools — and what this Mac can run. One list request carries everything the rows show
 // (`expand[]=gguf` returns parameters, architecture, context and chat template per repo); the exact
 // file sizes and checksums come from a per-repo request when the detail sheet opens.
-import { quantFiles, estimateBytes, type QuantFile } from "./quant.ts";
+import { quantFiles, estimateBytes, mlxBitsPerWeight, mlxBits, paramsFromName, type QuantFile } from "./quant.ts";
+import { mlxSupported } from "./mlx.ts";
 import { bestQuant, fitModel, type Device, type Fit } from "./fit.ts";
 import { listInstalled, type Sampling } from "./store.ts";
 
@@ -12,8 +13,11 @@ export const hfBase = () => (process.env.NITI_HF_URL ?? "https://huggingface.co"
 export type SortKey = "downloads" | "likes" | "trendingScore" | "lastModified";
 export const SORTS: SortKey[] = ["downloads", "likes", "trendingScore", "lastModified"];
 
+export type Format = "gguf" | "mlx";
+
 export interface CatalogModel {
   repo: string; // "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+  format: Format; // GGUF runs on llama.cpp; MLX on Apple's mlx-lm (Apple Silicon only)
   name: string; // "Qwen3-4B-Instruct-2507"
   author: string;
   downloads: number; // last 30 days
@@ -42,6 +46,7 @@ export interface CatalogQuery {
   tools?: boolean; // only models that can call tools
   fits?: boolean; // only models that run well here
   size?: "small" | "medium" | "large"; // < 8B, 8–32B, > 32B parameters
+  format?: Format | "any";
   limit?: number;
 }
 
@@ -64,6 +69,8 @@ interface HubModel {
   tags?: string[];
   cardData?: { license?: string; base_model?: string | string[] };
   gguf?: { total?: number; architecture?: string; context_length?: number; chat_template?: string };
+  safetensors?: { total?: number };
+  config?: { model_type?: string; tokenizer_config?: { chat_template?: unknown }; chat_template_jinja?: string };
   siblings?: { rfilename: string; size?: number; lfs?: { sha256?: string; size?: number } }[];
 }
 
@@ -77,7 +84,29 @@ export function templateHasThinking(t?: string): boolean {
   return !!t && /enable_thinking|<think>|reasoning_content|thinking/.test(t);
 }
 
-const EXPAND = ["gguf", "downloads", "downloadsAllTime", "likes", "trendingScore", "lastModified", "createdAt", "gated", "tags", "cardData", "siblings"];
+// An MLX repo's chat template sits in its tokenizer config (a string, or named variants) or in a
+// separate chat_template.jinja, which the Hub surfaces as config.chat_template_jinja.
+function mlxTemplate(m: HubModel): string {
+  const t = m.config?.tokenizer_config?.chat_template;
+  const fromTok = typeof t === "string" ? t : Array.isArray(t) ? t.map((x) => (x as { template?: string }).template ?? "").join("\n") : "";
+  return `${fromTok}\n${m.config?.chat_template_jinja ?? ""}`;
+}
+
+// The files the MLX engine loads: weights, configs, tokenizer, chat template. Not the README, images,
+// licences, PyTorch or GGUF copies, and never Python (which only runs with trust_remote_code).
+export function mlxFiles(siblings: { rfilename: string }[]): string[] {
+  return siblings
+    .map((s) => s.rfilename)
+    .filter((f) => /\.(safetensors|json|jinja|model|tiktoken)$/i.test(f) || /^(merges|vocab)[^/]*\.txt$/i.test(f))
+    .filter((f) => !/^\.|(^|\/)(README|LICENSE|NOTICE)|\.gguf$|\.py$|^(onnx|original)\//i.test(f));
+}
+
+export function isMlxRepo(m: HubModel): boolean {
+  const sib = m.siblings ?? [];
+  return sib.some((s) => s.rfilename.endsWith(".safetensors")) && !sib.some((s) => s.rfilename.endsWith(".gguf")) && sib.some((s) => s.rfilename === "config.json");
+}
+
+const EXPAND = ["gguf", "safetensors", "config", "downloads", "downloadsAllTime", "likes", "trendingScore", "lastModified", "createdAt", "gated", "tags", "cardData", "siblings"];
 
 function licenseOf(m: HubModel): string | undefined {
   return m.cardData?.license ?? m.tags?.find((t) => t.startsWith("license:"))?.slice(8);
@@ -88,13 +117,55 @@ function baseModelOf(m: HubModel): string | undefined {
   return Array.isArray(b) ? b[0] : b;
 }
 
+function toMlxModel(m: HubModel, dev: Pick<Device, "gpuBudget">, installed: string[]): CatalogModel {
+  const name = m.id.slice(m.id.indexOf("/") + 1);
+  const files = mlxFiles(m.siblings ?? []);
+  const sizes = (m.siblings ?? []).filter((s) => files.includes(s.rfilename));
+  const known = sizes.every((s) => s.size !== undefined || s.lfs?.size !== undefined);
+  const params = paramsFromName(name) ?? m.safetensors?.total;
+  const bpw = mlxBitsPerWeight(name);
+  const exact = known && sizes.length ? sizes.reduce((n, s) => n + (s.lfs?.size ?? s.size ?? 0), 0) : undefined;
+  const size = exact ?? (params ? Math.round((params * bpw) / 8 * 1.03) : undefined);
+  // One entry per file, in order: the Hub's sha256 for the large (LFS) ones, "" for the small JSON
+  // and tokenizer files it publishes none for.
+  const bySib = new Map((m.siblings ?? []).map((x) => [x.rfilename, x]));
+  const shas = files.map((f) => bySib.get(f)?.lfs?.sha256 ?? "");
+  const quant: QuantFile = { quant: "mlx", files, bpw, ...(size ? { size } : {}), ...(exact === undefined && size ? { estimated: true } : {}), ...(shas.some(Boolean) ? { sha256: shas } : {}) };
+  const template = mlxTemplate(m);
+  const fit = params ? fitModel({ params, fileBytes: size, quant: `${mlxBits(name)}bit`, contextLength: undefined }, dev) : undefined;
+  return {
+    repo: m.id,
+    format: "mlx",
+    name: name.replace(/[-_.]?MLX(?=[-_.]|$)/i, "").replace(/--/g, "-"),
+    author: m.author ?? m.id.split("/")[0]!,
+    downloads: m.downloads ?? 0,
+    downloadsAllTime: m.downloadsAllTime,
+    likes: m.likes ?? 0,
+    trendingScore: m.trendingScore,
+    lastModified: m.lastModified,
+    createdAt: m.createdAt,
+    license: licenseOf(m),
+    baseModel: baseModelOf(m),
+    gated: !!m.gated,
+    params,
+    architecture: m.config?.model_type,
+    tools: templateHasTools(template),
+    thinking: templateHasThinking(template),
+    quants: files.length ? [quant] : [],
+    pick: fit && files.length ? { quant: "mlx", fit } : undefined,
+    installed,
+  };
+}
+
 export function toCatalogModel(m: HubModel, dev: Pick<Device, "gpuBudget">, installed: string[] = []): CatalogModel {
+  if (isMlxRepo(m)) return toMlxModel(m, dev, installed);
   const quants = quantFiles(m.siblings ?? []);
   const params = m.gguf?.total;
   const pick = params ? bestQuant(quants, params, dev, 1, m.gguf?.context_length) : undefined;
   const name = m.id.slice(m.id.indexOf("/") + 1).replace(/[-_.]?GGUF$/i, "");
   return {
     repo: m.id,
+    format: "gguf",
     name,
     author: m.author ?? m.id.split("/")[0]!,
     downloads: m.downloads ?? 0,
@@ -139,8 +210,8 @@ export function clearCatalogCache(): void {
   cache.clear();
 }
 
-function listPath(sort: SortKey, q: string | undefined, limit: number): string {
-  const params = new URLSearchParams({ filter: "gguf", pipeline_tag: "text-generation", sort, direction: "-1", limit: String(limit) });
+function listPath(format: Format, sort: SortKey, q: string | undefined, limit: number): string {
+  const params = new URLSearchParams({ filter: format, pipeline_tag: "text-generation", sort, direction: "-1", limit: String(limit) });
   if (q) params.set("search", q);
   for (const e of EXPAND) params.append("expand[]", e);
   return `/api/models?${params}`;
@@ -167,20 +238,28 @@ export async function searchCatalog(query: CatalogQuery, dev: Pick<Device, "gpuB
   const tab = query.tab ?? "all";
   const sort = tab === "recommended" ? "downloads" : (query.sort ?? "downloads");
   const limit = Math.min(Math.max(query.limit ?? 60, 1), 100);
+  // MLX only where it runs. Both formats are asked for at once and merged in the chosen order.
+  const mlxOk = mlxSupported() || !!process.env.NITI_MLX_SERVER; // tests stand an engine in anywhere
+  const wanted = query.format && query.format !== "any" ? [query.format] : (["gguf", ...(mlxOk ? ["mlx"] : [])] as Format[]);
+  const formats = wanted.filter((f) => f === "gguf" || mlxOk);
   let raw: HubModel[];
   try {
-    raw = await hubJson<HubModel[]>(listPath(sort, query.q?.trim() || undefined, tab === "recommended" ? 100 : limit), fetchImpl);
+    const lists = await Promise.all(formats.map((f) => hubJson<HubModel[]>(listPath(f, sort, query.q?.trim() || undefined, tab === "recommended" ? 100 : limit), fetchImpl)));
+    const key = (m: HubModel): number | string => (sort === "lastModified" ? (m.lastModified ?? "") : ((m[sort as "downloads" | "likes" | "trendingScore"] as number | undefined) ?? 0));
+    const seenIds = new Set<string>();
+    raw = lists.flat().filter((m) => !seenIds.has(m.id) && (seenIds.add(m.id), true)).sort((a, b) => (key(a) < key(b) ? 1 : key(a) > key(b) ? -1 : 0));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const offline = /fetch failed|ENOTFOUND|ECONNREFUSED|timed out|abort|network|Unable to connect/i.test(msg);
     return { models: [], offline, error: offline ? undefined : msg };
   }
   const inst = installedByRepo();
-  let models = raw.filter((m) => m.gguf).map((m) => toCatalogModel(m, dev, inst.get(m.id)));
+  let models = raw.filter((m) => m.gguf || isMlxRepo(m)).map((m) => toCatalogModel(m, dev, inst.get(m.id)));
   if (tab === "recommended") {
     const seen = new Set<string>();
     models = models.filter((m) => {
       if (!m.tools || m.gated || !m.pick || m.pick.fit.tier !== "runs-well") return false;
+      // One per model family: GGUF and MLX uploads of the same weights count as one.
       const key = (m.baseModel ?? m.name).toLowerCase();
       if (seen.has(key)) return false;
       seen.add(key);
@@ -206,6 +285,19 @@ export async function modelDetail(repo: string, dev: Pick<Device, "gpuBudget">, 
   for (const e of EXPAND) params.append("expand[]", e);
   const m = await hubJson<HubModel>(`/api/models/${repo}?${params}`, fetchImpl);
   const base = toCatalogModel(m, dev, installedByRepo().get(repo));
+  // An MLX repo's context window is in its config.json, not the Hub's summary.
+  if (base.format === "mlx" && !base.contextLength) {
+    try {
+      const res = await fetchImpl(`${hfBase()}/${repo}/raw/main/config.json`, { signal: AbortSignal.timeout(10_000) });
+      if (res.ok) {
+        const c = (await res.json()) as { max_position_embeddings?: number; text_config?: { max_position_embeddings?: number } };
+        base.contextLength = c.max_position_embeddings ?? c.text_config?.max_position_embeddings;
+        if (base.pick && base.params) base.pick = { quant: "mlx", fit: fitModel({ params: base.params, fileBytes: base.quants[0]?.size, quant: "mlx", contextLength: base.contextLength }, dev) };
+      }
+    } catch {
+      // the default context applies
+    }
+  }
   const fits: Record<string, Fit> = {};
   for (const q of base.quants) {
     if (base.params) fits[q.quant] = fitModel({ params: base.params, fileBytes: q.size, quant: q.quant, contextLength: base.contextLength }, dev);

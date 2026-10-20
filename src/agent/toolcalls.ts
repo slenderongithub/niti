@@ -103,6 +103,7 @@ export function checkArgs(spec: ToolSpec, input: Record<string, unknown>): strin
 }
 
 // Calls a model wrote into its reply as text: Hermes/Qwen `<tool_call>{json}</tool_call>`,
+// Qwen2.5-Coder's `<function>{json}</function>`,
 // Qwen3-Coder's `<function=name><parameter=k>v</parameter></function>`, and a reply that is nothing
 // but a JSON `{name, arguments}` object (fenced or not). Only names in `names` count, so prose that
 // merely shows an example of some other API never becomes a call. `rest` is the reply without them.
@@ -123,6 +124,9 @@ export function extractTextToolCalls(text: string, names: string[]): { calls: To
   };
 
   rest = rest.replace(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g, (m, body: string) => (fromObject(repairJson(body)) ? "" : m));
+  // Qwen2.5-Coder (seen through mlx-lm, whose parser expects <tool_call>): the JSON call wrapped
+  // in a bare <function> tag.
+  rest = rest.replace(/<function>\s*([\s\S]*?)\s*<\/function>/g, (m, body: string) => (fromObject(repairJson(body)) ? "" : m));
   rest = rest.replace(/<function=([\w.-]+)>([\s\S]*?)<\/function>/g, (m, name: string, body: string) => {
     const input: Record<string, unknown> = {};
     for (const p of body.matchAll(/<parameter=([\w.-]+)>\n?([\s\S]*?)\n?<\/parameter>/g)) {

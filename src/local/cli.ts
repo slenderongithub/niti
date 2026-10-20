@@ -5,6 +5,7 @@ import { device } from "./fit.ts";
 import { searchCatalog, modelDetail, type CatalogModel } from "./catalog.ts";
 import { listInstalled, removeInstalled, parseModelId } from "./store.ts";
 import { DownloadManager, type DownloadProgress } from "./downloads.ts";
+import { discoverModels, addFoundModel } from "./discover.ts";
 
 const GB = 1000 ** 3;
 const size = (n?: number) => (n ? (n >= GB ? `${(n / GB).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`) : "?");
@@ -14,7 +15,7 @@ const TIER: Record<string, string> = { "runs-well": "runs well", tight: "tight",
 function row(m: CatalogModel): string {
   const q = m.pick ? m.quants.find((x) => x.quant === m.pick!.quant) : undefined;
   const tags = [m.tools ? "tools" : "chat only", m.thinking ? "thinking" : "", m.license ?? ""].filter(Boolean).join(", ");
-  return `  ${m.repo}\n      ${params(m.params)} · ${m.pick ? `${m.pick.quant} ${size(q?.size)} · ${TIER[m.pick.fit.tier]}` : "no GGUF quants"} · ${tags} · ${m.downloads.toLocaleString("en-US")} downloads/mo${m.installed.length ? " · installed" : ""}`;
+  return `  ${m.repo}${m.format === "mlx" ? "  [MLX]" : ""}\n      ${params(m.params)} · ${m.pick ? `${m.pick.quant} ${size(q?.size)} · ${TIER[m.pick.fit.tier]}` : "no GGUF quants"} · ${tags} · ${m.downloads.toLocaleString("en-US")} downloads/mo${m.installed.length ? " · installed" : ""}`;
 }
 
 export async function modelsCommand(args: string[], out: (s: string) => void = console.log, fetchImpl: typeof fetch = fetch): Promise<number> {
@@ -63,16 +64,37 @@ export async function modelsCommand(args: string[], out: (s: string) => void = c
     }
     case "list": {
       const ms = listInstalled();
-      if (!ms.length) return (out("No models installed. See: niti-core models"), 0);
-      for (const m of ms) out(`  ${m.id}  ${size(m.bytes)} · ${params(m.params)}${m.tools ? " · tools" : " · chat only"}${m.lastUsed ? ` · used ${new Date(m.lastUsed).toLocaleDateString()}` : ""}`);
+      if (!ms.length) return (out("No models installed. See: niti-core models (or niti-core models found)"), 0);
+      for (const m of ms) out(`  ${m.id}  ${(m.format ?? "gguf").toUpperCase()} · ${size(m.bytes)} · ${params(m.params)}${m.tools ? " · tools" : m.tools === false ? " · chat only" : ""}${m.path ? ` · from ${m.source ?? m.path}` : ""}${m.lastUsed ? ` · used ${new Date(m.lastUsed).toLocaleDateString()}` : ""}`);
       return 0;
+    }
+    case "found": {
+      const found = discoverModels();
+      if (!found.length) return (out("No other models found on this Mac (looked in LM Studio's models folder and the Hugging Face cache)."), 0);
+      out("Already on this Mac — add one to use it in niti without downloading it again:");
+      for (const f of found) out(`  ${f.id}  ${f.format.toUpperCase()} · ${size(f.bytes)} · ${params(f.params)}${f.tools ? " · tools" : f.tools === false ? " · chat only" : ""} · ${f.source}${f.added ? " · added" : ""}`);
+      out("\nAdd one: niti-core models add <id>");
+      return 0;
+    }
+    case "add": {
+      const id = rest[0];
+      if (!id) return (out("usage: niti-core models add <id from niti-core models found>"), 2);
+      try {
+        const m = addFoundModel(id);
+        out(`Added ${m.id} (files stay in ${m.path}). Use it: provider local, model ${m.id}`);
+        if (m.format === "mlx") out("MLX models run on niti's MLX engine; it downloads once (about 140 MB) the first time one runs.");
+        return 0;
+      } catch (err) {
+        return (out(`error: ${(err as Error).message}`), 1);
+      }
     }
     case "rm": {
       const id = rest[0];
       if (!id || !parseModelId(id)) return (out("usage: niti-core models rm <repo>:<quant>"), 2);
-      return removeInstalled(id) ? (out(`Removed ${id}.`), 0) : (out(`${id} is not installed.`), 1);
+      const external = listInstalled().find((m) => m.id === id)?.path;
+      return removeInstalled(id) ? (out(external ? `Removed ${id} from niti (its files in ${external} are untouched).` : `Removed ${id}.`), 0) : (out(`${id} is not installed.`), 1);
     }
   }
-  out("usage: niti-core models [recommended | search <query> | get <repo>[:<quant>] | list | rm <repo>:<quant>]");
+  out("usage: niti-core models [recommended | search <query> | get <repo>[:<quant>] | list | found | add <id> | rm <repo>:<quant>]");
   return 2;
 }

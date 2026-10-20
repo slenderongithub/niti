@@ -66,6 +66,10 @@ test("text tool calls: Hermes <tool_call>, Qwen3-Coder <function=>, and a reply 
   expect(hermes.rest).toBe("Let me look.");
   const coder = extractTextToolCalls("<function=edit>\n<parameter=path>\na.ts\n</parameter>\n<parameter=replaceAll>\ntrue\n</parameter>\n</function>", NAMES)!;
   expect(coder.calls[0]).toMatchObject({ name: "edit", input: { path: "a.ts", replaceAll: true } });
+  // Exactly what Qwen2.5-Coder-14B-Instruct-MLX-4bit wrote through mlx-lm's server.
+  const qwen25 = extractTextToolCalls('<function>\n{"name": "read_file", "arguments": {"path": "src/a.ts"}}\n</function>', NAMES)!;
+  expect(qwen25.calls[0]).toMatchObject({ name: "read_file", input: { path: "src/a.ts" } });
+  expect(qwen25.rest).toBe("");
   const whole = extractTextToolCalls('```json\n{"name": "shell", "parameters": {"command": "bun", "args": ["test"]}}\n```', NAMES)!;
   expect(whole.calls[0]).toMatchObject({ name: "shell", input: { command: "bun", args: ["test"] } });
   expect(whole.rest).toBe("");

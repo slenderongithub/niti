@@ -64,8 +64,23 @@ const hubModel = (sizes: boolean) => ({
   gguf: { total: 1_000_000_000, architecture: "qwen3", context_length: 32768, chat_template: "{% if tools %}<tool_call>{{ tools }}</tool_call>{% endif %}" },
   siblings: [{ rfilename: "Tiny-Coder-Q4_K_M.gguf", ...(sizes ? { size: WEIGHTS.length, lfs: { sha256: WEIGHTS_SHA, size: WEIGHTS.length } } : {}) }, { rfilename: "README.md" }],
 });
-function hub(path: string): Response | undefined {
-  if (path === "/api/models") return Response.json([hubModel(false)]);
+// And one MLX repo, for the MLX side of the Models page.
+const mlxModel = {
+  id: "fake-org/Tiny-Coder-MLX-4bit",
+  author: "fake-org",
+  downloads: 900,
+  likes: 9,
+  lastModified: "2026-10-01T00:00:00.000Z",
+  gated: false,
+  tags: ["mlx", "license:apache-2.0"],
+  cardData: { license: "apache-2.0", base_model: "fake-org/Tiny-Coder-Base" },
+  config: { model_type: "qwen2", tokenizer_config: { chat_template: "{% if tools %}<tool_call>{{ tools }}</tool_call>{% endif %}" } },
+  siblings: ["config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json"].map((rfilename) => ({ rfilename, size: 64 })),
+};
+
+function hub(path: string, filter?: string | null): Response | undefined {
+  if (path === "/api/models") return Response.json(filter === "mlx" ? [mlxModel] : [hubModel(false)]);
+  if (path === `/api/models/${mlxModel.id}`) return Response.json(mlxModel);
   if (path === `/api/models/${HUB_REPO}`) return Response.json(hubModel(true));
   if (path === `/${HUB_REPO}/resolve/main/Tiny-Coder-Q4_K_M.gguf`) return new Response(WEIGHTS);
   if (path === `/${HUB_REPO}/raw/main/README.md`) return new Response("---\nlicense: apache-2.0\n---\n# Tiny Coder\n\nA scripted model for niti's tests.");
@@ -78,7 +93,7 @@ Bun.serve({
   hostname: "127.0.0.1",
   async fetch(req) {
     const url = new URL(req.url);
-    const fromHub = hub(url.pathname);
+    const fromHub = hub(url.pathname, url.searchParams.get("filter"));
     if (fromHub) return fromHub;
     if (url.pathname.endsWith("/models")) return Response.json({ data: [{ id: "fake" }] });
     // What llama-server answers, for scripts/e2e/fakellama.ts standing in for the local runtime.
@@ -92,6 +107,8 @@ Bun.serve({
     const r = reply(body);
     if (JSON.stringify(body.messages ?? []).includes("STEER-MARKER")) log.push("SAW-STEER");
     if (body.id_slot !== undefined) log.push(`LOCAL slot=${body.id_slot} temp=${body.temperature} max=${body.max_tokens}`);
+    // What niti sends the MLX engine: the served model's fixed name, and a request for usage.
+    if (body.model === "default_model") log.push(`MLX model=default_model temp=${body.temperature} usage=${body.stream_options?.include_usage === true} slot=${body.id_slot ?? "none"}`);
     log.push(JSON.stringify({ stream: !!body.stream, tool: r.tool?.name, text: r.text?.slice(0, 40) }));
     void flush(); // on every request too: a check reading the log right after a run sees it whole
     const usage = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 };

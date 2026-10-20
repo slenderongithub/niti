@@ -1,12 +1,14 @@
 import { test, expect, beforeEach, afterAll } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const dir = mkdtempSync(join(tmpdir(), "niti-local-"));
 process.env.NITI_LOCAL_MODELS_DIR = join(dir, "models");
 process.env.NITI_LOCAL_IDLE_MS = "600000";
+process.env.NITI_DISCOVER_DIRS = join(dir, "found"); // a fake LM Studio folder, filled by the tests
+process.env.NITI_MLX_ENGINE_DIR = join(dir, "engine");
 delete process.env.NITI_HF_URL;
 delete process.env.NITI_OFFLINE;
 
@@ -19,6 +21,7 @@ const { LocalRuntime, serverArgs } = await import("./runtime.ts");
 const { LocalProvider, requestExtras } = await import("./provider.ts");
 const { localApi } = await import("./routes.ts");
 const { contextWindow } = await import("../providers/catalog.ts");
+const { ensureMlxEngine, mlxEngineInstalled, removeMlxEngine, mlxSupported } = await import("./mlx.ts");
 
 const GB = 1024 ** 3;
 const MAC16 = { gpuBudget: gpuBudget(16 * GB, true) };
@@ -50,6 +53,25 @@ function hubModel(id: string, over: Record<string, unknown> = {}) {
   };
 }
 
+// One MLX repo: weights, config, tokenizer and a chat template with tools; the README, licence and a
+// stray Python file are not part of the model.
+const MLX_FILES = ["config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "generation_config.json"];
+const MLX_LIST = [
+  {
+    id: "mlx-community/Qwen3-4B-Instruct-4bit",
+    author: "mlx-community",
+    downloads: 20000,
+    likes: 30,
+    lastModified: "2026-10-02T00:00:00.000Z",
+    gated: false,
+    tags: ["mlx", "license:apache-2.0", "base_model:Qwen/Qwen3-4B"],
+    cardData: { license: "apache-2.0", base_model: "Qwen/Qwen3-4B" },
+    config: { model_type: "qwen3", tokenizer_config: { chat_template: TOOLS_TEMPLATE } },
+    safetensors: { total: 4e9 },
+    siblings: [...MLX_FILES, "README.md", "LICENSE.txt", "convert.py"].map((rfilename) => ({ rfilename, size: rfilename.endsWith(".safetensors") ? WEIGHTS.length : 64, ...(rfilename.endsWith(".safetensors") ? { lfs: { sha256: SHA, size: WEIGHTS.length } } : {}) })),
+  },
+];
+
 const LIST = [
   hubModel("unsloth/Qwen3-4B-GGUF", { downloads: 9000 }),
   hubModel("bartowski/Qwen3-4B-GGUF", { downloads: 5000 }), // same base model: deduped in Recommended
@@ -63,9 +85,11 @@ const fakeHub: typeof fetch = (async (input: RequestInfo | URL, init?: RequestIn
   const url = new URL(String(input));
   hubRequests.push(url.pathname + url.search);
   const p = url.pathname;
-  if (p === "/api/models") return Response.json(LIST);
+  if (p === "/api/models") return Response.json(url.searchParams.get("filter") === "mlx" ? MLX_LIST : LIST);
   if (p.startsWith("/api/models/")) {
     const id = p.slice("/api/models/".length);
+    const mlx = MLX_LIST.find((x) => x.id === id);
+    if (mlx) return Response.json(mlx);
     const m = LIST.find((x) => x.id === id) ?? hubModel(id);
     return Response.json({
       ...m,
@@ -147,7 +171,7 @@ test("the catalogue reads tools support from the chat template", () => {
 });
 
 test("Recommended keeps tool-capable models that run well here, one per base model", async () => {
-  const r = await searchCatalog({ tab: "recommended" }, MAC16, fakeHub);
+  const r = await searchCatalog({ tab: "recommended", format: "gguf" }, MAC16, fakeHub);
   expect(r.models.map((m) => m.repo)).toEqual(["unsloth/Qwen3-4B-GGUF"]);
   const m = r.models[0]!;
   expect(m.tools).toBe(true);
@@ -159,13 +183,14 @@ test("Recommended keeps tool-capable models that run well here, one per base mod
 
 test("All models passes search and sort to the Hub, applies filters, and caches", async () => {
   hubRequests = [];
-  const all = await searchCatalog({ tab: "all", q: "qwen", sort: "likes" }, MAC16, fakeHub);
+  const all = await searchCatalog({ tab: "all", q: "qwen", sort: "likes", format: "gguf" }, MAC16, fakeHub);
   expect(all.models.length).toBe(4);
   expect(hubRequests[0]).toContain("search=qwen");
   expect(hubRequests[0]).toContain("sort=likes");
   expect(hubRequests[0]).toContain("expand%5B%5D=gguf");
-  await searchCatalog({ tab: "all", q: "qwen", sort: "likes" }, MAC16, fakeHub);
-  expect(hubRequests.length).toBe(1);
+  const asked = hubRequests.length;
+  await searchCatalog({ tab: "all", q: "qwen", sort: "likes", format: "gguf" }, MAC16, fakeHub);
+  expect(hubRequests.length).toBe(asked);
   const tools = await searchCatalog({ tab: "all", tools: true, fits: true }, MAC16, fakeHub);
   expect(tools.models.map((m) => m.repo)).not.toContain("someone/NoTools-7B-GGUF");
   expect(tools.models.map((m) => m.repo)).not.toContain("big/Huge-235B-GGUF");
@@ -364,7 +389,8 @@ test("niti-core models: recommended, search, get the best quant, list, rm", asyn
   const lines: string[] = [];
   const out = (s: string) => lines.push(s);
   expect(await modelsCommand([], out, fakeHub)).toBe(0);
-  expect(lines.join("\n")).toContain("unsloth/Qwen3-4B-GGUF");
+  // One upload per family: the GGUF one, or the more downloaded MLX one where MLX runs.
+  expect(lines.join("\n")).toMatch(mlxSupported() ? /mlx-community\/Qwen3-4B-Instruct-4bit {2}\[MLX\]/ : /unsloth\/Qwen3-4B-GGUF/);
   lines.length = 0;
   expect(await modelsCommand(["search", "qwen"], out, fakeHub)).toBe(0);
   expect(lines.join("\n")).toContain("someone/NoTools-7B-GGUF");
@@ -383,4 +409,155 @@ test("niti-core models: recommended, search, get the best quant, list, rm", asyn
   expect(await modelsCommand(["rm", "unsloth/Qwen3-4B-GGUF:Q4_K_M"], out, fakeHub)).toBe(0);
   expect(await modelsCommand(["rm", "nope"], out, fakeHub)).toBe(2);
   expect(await modelsCommand(["bogus"], out, fakeHub)).toBe(2);
+});
+
+// ---- MLX ---------------------------------------------------------------------------------------
+
+const FAKE_MLX = join(import.meta.dir, "../../scripts/e2e/fakemlx.ts");
+
+test("MLX names say their bits and size; only the files the engine loads are fetched", async () => {
+  const { mlxBits, paramsFromName } = await import("./quant.ts");
+  const { mlxFiles } = await import("./catalog.ts");
+  expect(mlxBits("Qwen2.5-Coder-14B-Instruct-MLX-4bit")).toBe(4);
+  expect(mlxBits("gemma-3-12b-it-qat-8bit")).toBe(8);
+  expect(mlxBits("Llama-3.2-3B-Instruct-bf16")).toBe(16);
+  expect(paramsFromName("Qwen2.5-Coder-14B-Instruct")).toBe(14e9);
+  expect(paramsFromName("Qwen3-30B-A3B-4bit")).toBe(30e9);
+  expect(paramsFromName("SmolLM2-360M-Instruct")).toBe(360e6);
+  expect(mlxFiles(MLX_LIST[0]!.siblings).sort()).toEqual([...MLX_FILES].sort());
+});
+
+test("MLX repos join the catalogue where the engine runs, as one quant per repo", async () => {
+  process.env.NITI_MLX_SERVER = FAKE_MLX;
+  try {
+    const mlx = await searchCatalog({ tab: "all", format: "mlx" }, MAC16, fakeHub);
+    expect(mlx.models.map((m) => [m.repo, m.format])).toEqual([["mlx-community/Qwen3-4B-Instruct-4bit", "mlx"]]);
+    const m = mlx.models[0]!;
+    expect(m.tools).toBe(true);
+    expect(m.quants.map((q) => q.quant)).toEqual(["mlx"]);
+    expect(m.pick?.fit.tier).toBe("runs-well");
+    // Recommended: one per model family across formats — the MLX upload of Qwen3-4B is the more
+    // downloaded one here, so it stands for the family.
+    clearCatalogCache();
+    const rec = await searchCatalog({ tab: "recommended" }, MAC16, fakeHub);
+    expect(rec.models.map((x) => x.repo)).toEqual(["mlx-community/Qwen3-4B-Instruct-4bit"]);
+  } finally {
+    delete process.env.NITI_MLX_SERVER;
+  }
+});
+
+test("an MLX download fetches the model's files into one folder and records the format", async () => {
+  const done: string[] = [];
+  const dm = new DownloadManager((p) => done.push(p.state), MAC16, fakeHub);
+  await dm.start("mlx-community/Qwen3-4B-Instruct-4bit", "mlx");
+  await waitFor(() => done.find((x) => x === "done" || x === "error"));
+  expect(done.at(-1)).toBe("done");
+  const m = getInstalled("mlx-community/Qwen3-4B-Instruct-4bit:mlx")!;
+  expect(m.format).toBe("mlx");
+  expect([...m.files].sort()).toEqual([...MLX_FILES].sort());
+  for (const f of m.files) expect(existsSync(join(repoDir(m.repo), f))).toBe(true);
+});
+
+test("an MLX model runs on the MLX engine: default_model, usage in the stream, no llama.cpp slot", async () => {
+  process.env.NITI_MLX_SERVER = FAKE_MLX;
+  const statuses: { state: string; engine?: string }[] = [];
+  const rt = new LocalRuntime((s) => statuses.push({ state: s.state, engine: s.engine }));
+  const id = "mlx-community/Qwen3-4B-Instruct-4bit:mlx";
+  try {
+    const p = new LocalProvider(id, "coder", undefined, undefined, rt);
+    const r = await p.send("sys", [{ role: "user", text: "hello" }], [], () => {});
+    expect(r.text).toContain("Done");
+    expect(r.usage?.inputTokens).toBe(100);
+    expect(statuses.map((x) => x.state)).toEqual(["loading", "ready"]);
+    expect(statuses.every((x) => x.engine === "mlx")).toBe(true);
+    const log = await waitFor(() => {
+      const f = join(repoDir("mlx-community/Qwen3-4B-Instruct-4bit"), "fakellm.log");
+      return existsSync(f) ? readFileSync(f, "utf8") : undefined;
+    });
+    expect(log).toContain("MLX model=default_model temp=0.7 usage=true slot=none");
+    const args = JSON.parse(readFileSync(join(repoDir("mlx-community/Qwen3-4B-Instruct-4bit"), ".fakemlx-args"), "utf8")) as string[];
+    expect(args[args.indexOf("--host") + 1]).toBe("127.0.0.1");
+    expect(args).not.toContain("--api-key"); // the key travels in the environment, never argv
+  } finally {
+    rt.stopAll();
+    delete process.env.NITI_MLX_SERVER;
+  }
+});
+
+// A minimal GGUF v3 header: four metadata keys and no tensors.
+function ggufBytes(kv: [string, number, string | number][]): Buffer {
+  const parts: Buffer[] = [Buffer.from("GGUF"), u32(3), u64(0), u64(kv.length)];
+  for (const [k, type, v] of kv) {
+    parts.push(str(k), u32(type));
+    parts.push(type === 8 ? str(String(v)) : type === 4 ? u32(Number(v)) : u64(Number(v)));
+  }
+  return Buffer.concat(parts);
+  function u32(n: number) { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; }
+  function u64(n: number) { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b; }
+  function str(x: string) { const t = Buffer.from(x, "utf8"); return Buffer.concat([u64(t.length), t]); }
+}
+
+test("models already on this Mac are found, added where they are, and removing one leaves its files", async () => {
+  const { discoverModels, addFoundModel, ggufMetadata } = await import("./discover.ts");
+  const root = process.env.NITI_DISCOVER_DIRS!;
+  const mlxDir = join(root, "lmstudio-community", "Coder-7B-Instruct-MLX-4bit");
+  mkdirSync(mlxDir, { recursive: true });
+  writeFileSync(join(mlxDir, "config.json"), JSON.stringify({ model_type: "qwen2", max_position_embeddings: 32768 }));
+  writeFileSync(join(mlxDir, "tokenizer_config.json"), JSON.stringify({ chat_template: TOOLS_TEMPLATE }));
+  writeFileSync(join(mlxDir, "model.safetensors"), "weights");
+  writeFileSync(join(mlxDir, "README.md"), "# hi");
+  const ggufDir = join(root, "bartowski", "Small-3B-GGUF");
+  mkdirSync(ggufDir, { recursive: true });
+  writeFileSync(join(ggufDir, "Small-3B-Q4_K_M.gguf"), ggufBytes([["general.architecture", 8, "llama"], ["llama.context_length", 4, 8192], ["general.parameter_count", 10, 3_200_000_000], ["tokenizer.chat_template", 8, "{% if tools %}x{% endif %}"]]));
+  expect(ggufMetadata(join(ggufDir, "Small-3B-Q4_K_M.gguf"))).toEqual({ architecture: "llama", contextLength: 8192, params: 3_200_000_000, chatTemplate: "{% if tools %}x{% endif %}" });
+
+  const found = discoverModels();
+  const mlx = found.find((f) => f.format === "mlx")!;
+  const gguf = found.find((f) => f.format === "gguf")!;
+  expect(mlx).toMatchObject({ id: "lmstudio-community/Coder-7B-Instruct-MLX-4bit:mlx", params: 7e9, contextLength: 32768, tools: true, added: false });
+  expect(mlx.files).not.toContain("README.md");
+  expect(gguf).toMatchObject({ id: "bartowski/Small-3B-GGUF:Q4_K_M", params: 3_200_000_000, contextLength: 8192, tools: true });
+
+  const m = addFoundModel(mlx.id);
+  expect(m.path).toBe(realpathSync(mlxDir));
+  expect(getInstalled(mlx.id)?.format).toBe("mlx");
+  expect(discoverModels().find((f) => f.id === mlx.id)?.added).toBe(true);
+  expect(() => addFoundModel(mlx.id)).toThrow("already");
+  expect(removeInstalled(mlx.id)).toBe(true);
+  expect(existsSync(join(mlxDir, "model.safetensors"))).toBe(true); // LM Studio's file is untouched
+  expect(getInstalled(mlx.id)).toBeUndefined();
+});
+
+test.skipIf(!mlxSupported())("the MLX engine installs from a checksum-pinned Python with hash-locked packages", async () => {
+  // A stand-in Python: records what pip was asked to do, and succeeds.
+  const build = mkdtempSync(join(tmpdir(), "niti-fakepy-"));
+  mkdirSync(join(build, "python", "bin"), { recursive: true });
+  writeFileSync(join(build, "python", "bin", "python3"), `#!/bin/sh\necho "$@" > "$(dirname "$0")/../pip-args"\n`, { mode: 0o755 });
+  Bun.spawnSync(["tar", "-czf", join(build, "py.tgz"), "-C", build, "python"]);
+  const tgz = readFileSync(join(build, "py.tgz"));
+  process.env.NITI_MLX_PYTHON_URL = "https://python.example/py.tgz";
+  process.env.NITI_MLX_PYTHON_SHA = createHash("sha256").update(tgz).digest("hex");
+  const fetchPy = (async () => new Response(tgz, { headers: { "content-length": String(tgz.length) } })) as unknown as typeof fetch;
+  const stages: string[] = [];
+  try {
+    const cmd = await ensureMlxEngine((p) => stages.push(p.stage), fetchPy);
+    expect(cmd[1]).toBe(join(process.env.NITI_MLX_ENGINE_DIR!, "niti_mlx_server.py"));
+    expect(readFileSync(cmd[1]!, "utf8")).toContain("ModelProvider.load = load");
+    const pip = readFileSync(join(process.env.NITI_MLX_ENGINE_DIR!, "python", "pip-args"), "utf8");
+    expect(pip).toContain("--require-hashes");
+    expect(pip).toContain("--only-binary=:all:");
+    expect(readFileSync(join(process.env.NITI_MLX_ENGINE_DIR!, "requirements.txt"), "utf8")).toContain("mlx-lm==");
+    expect(stages).toContain("packages");
+    expect(stages.at(-1)).toBe("done");
+    expect(mlxEngineInstalled()).toBe(true);
+    // A tampered download is refused and leaves nothing behind.
+    removeMlxEngine();
+    process.env.NITI_MLX_PYTHON_SHA = "0".repeat(64);
+    await expect(ensureMlxEngine(() => {}, fetchPy)).rejects.toThrow("checksum");
+    expect(existsSync(process.env.NITI_MLX_ENGINE_DIR!)).toBe(false);
+  } finally {
+    delete process.env.NITI_MLX_PYTHON_URL;
+    delete process.env.NITI_MLX_PYTHON_SHA;
+    removeMlxEngine();
+  }
 });

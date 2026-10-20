@@ -126,6 +126,7 @@ export class DownloadManager {
         id: p.id,
         repo: detail.repo,
         quant: p.quant,
+        format: detail.format,
         files: files.map(safeRel),
         bytes: total,
         params: detail.params,

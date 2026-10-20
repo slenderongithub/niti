@@ -6,7 +6,7 @@
 import type { OnDelta, Provider, ProviderReply, Reasoning, ToolSpec, Turn } from "../providers/provider.ts";
 import { OpenAIProvider } from "../providers/openai.ts";
 import { localRuntime, type LocalRuntime } from "./runtime.ts";
-import type { InstalledModel, Sampling } from "./store.ts";
+import { formatOf, type InstalledModel, type Sampling } from "./store.ts";
 
 // When the model's authors published nothing: what the Qwen, Gemma and Llama cards converge on for
 // agentic work. Never greedy — at temperature 0 small models fall into repeating themselves.
@@ -16,6 +16,11 @@ export const LOCAL_MAX_OUTPUT = 8192;
 
 export function requestExtras(m: InstalledModel, slot: number, thinking: boolean): Record<string, unknown> {
   const s = { ...DEFAULT_SAMPLING, ...m.sampling };
+  // The MLX server calls it repetition_penalty, takes no slot, and caches prefixes on its own.
+  if (formatOf(m) === "mlx") {
+    const { repeat_penalty, ...rest } = s;
+    return { ...rest, ...(repeat_penalty ? { repetition_penalty: repeat_penalty } : {}), ...(m.thinking ? { chat_template_kwargs: { enable_thinking: thinking } } : {}) };
+  }
   return {
     ...s,
     id_slot: slot,
@@ -43,15 +48,21 @@ export class LocalProvider implements Provider {
     // A JSON reply is constrained by grammar from its first token, which leaves no room for a
     // thinking block in front of it.
     const think = thinking && this.reasoning !== "off" && format !== "json";
-    const extras = { ...requestExtras(manifest, slot, think), ...(format === "json" ? { response_format: { type: "json_object" } } : {}) };
+    const mlx = formatOf(manifest) === "mlx";
+    // llama-server constrains JSON by grammar; the MLX server has no such option, and niti's callers
+    // validate and retry what comes back either way.
+    const extras = { ...requestExtras(manifest, slot, think), ...(format === "json" && !mlx ? { response_format: { type: "json_object" } } : {}) };
     if (!this.inner || this.inner.url !== baseURL || this.inner.slot !== slot || this.inner.key !== apiKey) {
       this.inner = {
         url: baseURL,
         slot,
         key: apiKey,
-        provider: new OpenAIProvider(this.model, apiKey, baseURL, undefined, undefined, {
+        // The MLX server loads whatever `model` names; niti's wrapper pins it, and "default_model" is
+        // the name it serves the started model under.
+        provider: new OpenAIProvider(mlx ? "default_model" : this.model, apiKey, baseURL, undefined, undefined, {
           vendor: "local",
           maxOutput: this.maxOutput ?? LOCAL_MAX_OUTPUT,
+          ...(mlx ? { streamUsage: true } : {}),
         }),
       };
     }

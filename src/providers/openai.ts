@@ -61,6 +61,9 @@ interface OpenAIOptions {
   vendor?: string; // catalog key ("openai", "openrouter", "deepseek", …) — picks the per-vendor dialect
   cacheKey?: string; // OpenAI prompt_cache_key: requests sharing it are routed to the same prefix cache
   maxOutput?: number;
+  // Ask for token usage in streams even on a loopback address: a local runtime known to support it
+  // (the MLX server, which reports no llama.cpp timings) — otherwise compaction never sees the fill.
+  streamUsage?: boolean;
 }
 
 export class OpenAIProvider implements Provider {
@@ -83,7 +86,7 @@ export class OpenAIProvider implements Provider {
     private reasoning?: Reasoning,
     private opts: OpenAIOptions = {},
   ) {
-    this.supportsUsageOption = !/localhost|127\.0\.0\.1|\[::1\]/.test(baseURL ?? "");
+    this.supportsUsageOption = opts.streamUsage ?? !/localhost|127\.0\.0\.1|\[::1\]/.test(baseURL ?? "");
     this.client = new OpenAI({
       ...(apiKey ? { apiKey } : {}),
       ...(baseURL ? { baseURL } : {}),

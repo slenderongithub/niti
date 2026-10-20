@@ -236,7 +236,7 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: "models",
-    description: "Models that run on this Mac: /models [search <q> | get <repo>[:<quant>] | list | rm <repo>:<quant>]",
+    description: "Models that run on this Mac: /models [search <q> | get <repo>[:<quant>] | list | found | add <id> | rm <id>]",
     async run(engine, args, ctx) {
       // Gigabytes of downloads and deletes are decided at the Mac (the bridge doesn't forward this
       // command either; this is the second lock).

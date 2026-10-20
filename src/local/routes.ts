@@ -6,6 +6,8 @@ import { searchCatalog, modelDetail, SORTS, type CatalogQuery, type SortKey } fr
 import { listInstalled, removeInstalled, diskUsage, modelsDir, parseModelId } from "./store.ts";
 import { DownloadManager, type DownloadProgress } from "./downloads.ts";
 import { findLlamaServer, localRuntime, type RuntimeStatus } from "./runtime.ts";
+import { discoverModels, addFoundModel } from "./discover.ts";
+import { ensureMlxEngine, mlxEngineStatus, removeMlxEngine, type EngineProgress } from "./mlx.ts";
 
 export interface LocalApi {
   handle(p: string, method: string, u: URL, body: () => Promise<any>): Promise<Response | undefined>;
@@ -18,6 +20,13 @@ export function localApi(publish: { download: (p: DownloadProgress) => void; run
   const dev = device();
   const runtime = localRuntime(publish.runtime);
   const downloads = new DownloadManager(publish.download, dev, fetchImpl);
+  // The MLX engine's install, reported like a model loading: as runtime status for "engine:mlx".
+  const installMlx = () =>
+    ensureMlxEngine((p: EngineProgress) => {
+      if (p.stage === "python" || p.stage === "packages") publish.runtime({ model: "engine:mlx", engine: "mlx", state: "installing", stage: p.stage, received: p.received, total: p.total });
+      else if (p.stage === "done") publish.runtime({ model: "engine:mlx", engine: "mlx", state: "ready" });
+      else publish.runtime({ model: "engine:mlx", engine: "mlx", state: "error", error: p.error });
+    }, fetchImpl);
 
   return {
     downloads,
@@ -30,6 +39,7 @@ export function localApi(publish: { download: (p: DownloadProgress) => void; run
           modelsDir: modelsDir(),
           diskUsage: diskUsage(),
           runtimeAvailable: !!findLlamaServer(),
+          mlx: mlxEngineStatus(),
           runtime: runtime.status(),
         });
       }
@@ -71,10 +81,39 @@ export function localApi(publish: { download: (p: DownloadProgress) => void; run
         const { repo, quant } = (await body()) as { repo?: string; quant?: string };
         if (!repo || !quant || !/^[\w.-]+\/[\w.-]+$/.test(repo)) return json({ error: "expected {repo, quant}" }, 400);
         try {
-          return json({ download: await downloads.start(repo, quant) });
+          const download = await downloads.start(repo, quant);
+          // An MLX model needs the MLX engine: fetch it alongside, so both are ready together.
+          if (quant === "mlx") void installMlx().catch(() => {});
+          return json({ download });
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) }, 400);
         }
+      }
+
+      // Models already on this Mac (LM Studio's folder, the Hugging Face cache), and adding one: niti
+      // records where it is and runs it on its own engine. Nothing is copied or moved.
+      if (p === "/local/discover" && method === "GET") return json({ models: discoverModels() });
+      if (p === "/local/import" && method === "POST") {
+        const { id } = (await body()) as { id?: string };
+        if (!id) return json({ error: "expected {id}" }, 400);
+        try {
+          const m = addFoundModel(id);
+          if (m.format === "mlx") void installMlx().catch(() => {}); // ready by the time it's used
+          return json({ model: m });
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+        }
+      }
+
+      // The MLX engine: install it ahead of time (otherwise the first MLX model does), or remove it.
+      if (p === "/local/engine/mlx" && method === "POST") {
+        void installMlx().catch(() => {});
+        return json({ ok: true, mlx: mlxEngineStatus() });
+      }
+      if (p === "/local/engine/mlx" && method === "DELETE") {
+        if (listInstalled().some((m) => m.format === "mlx")) return json({ error: "remove your MLX models first — they need the engine" }, 409);
+        removeMlxEngine();
+        return json({ ok: true, mlx: mlxEngineStatus() });
       }
 
       if (p === "/local/download/cancel" && method === "POST") {

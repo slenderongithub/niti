@@ -153,6 +153,21 @@ in one disappears from the others (the core answers by id; a second answer gets 
     cached, learns the real per-slot context from `/props`, and unloads after 15 idle minutes or when
     the core exits. `provider.ts` sends the model's sampling (never greedy), the agent's `id_slot`,
     the thinking switch and an 8k output cap on every request. The model id is `<repo>:<quant>`.
+    **MLX** (`mlx.ts`, Apple Silicon): models published in MLX format (safetensors) run on Apple's
+    `mlx_lm.server` instead. Its engine is Python, so it isn't bundled: the first MLX model fetches a
+    standalone CPython (python-build-standalone, pinned by URL and sha256) and installs mlx-lm with
+    `pip --require-hashes` against `mlx-lock.ts` (34 packages, every Apple Silicon wheel's sha256;
+    regenerate with `bun scripts/mlx-lock.ts`) into `<models>/.engines/mlx-<version>/`: about 140 MB
+    down, 520 MB on disk, once per Mac. It runs under niti's wrapper (`WRAPPER`), which requires the
+    per-launch key (passed in the environment) on everything but `/health` and pins the started
+    model, since the stock server loads any model a request names. MLX ids are `<repo>:mlx`;
+    requests send `model: "default_model"` and ask for stream usage; the server batches agents and
+    caches prefixes itself. The catalogue lists both formats (MLX only where it runs), one upload
+    per model family in Recommended.
+    **Found on this Mac** (`discover.ts`): models in LM Studio's folders and the Hugging Face cache
+    (MLX folders, and GGUF files whose own header gives architecture, context and chat template).
+    Adding one writes a manifest with its `path`; the files stay where they are, are never copied,
+    and removing it from niti only drops the manifest.
 
 **Where things are**
 
@@ -196,8 +211,11 @@ in one disappears from the others (the core answers by id; a second answer gets 
   trusted.json       folders you've trusted, with a snapshot of each agents.yaml
   version.json       the last niti version the TUI ran, so an update can say what's new
 ~/Library/Application Support/niti/models/      (NITI_LOCAL_MODELS_DIR; ~/.local/share/niti/models elsewhere)
-  <owner>__<repo>/   a downloaded model's .gguf files (.part while downloading) and one
-                     manifest.<quant>.json per installed quant
+  <owner>__<repo>/   a downloaded model's .gguf files, or an MLX repo's files (.part while
+                     downloading), and one manifest.<quant>.json per installed quant; an added
+                     model's manifest points at its files elsewhere (`path`)
+  .engines/mlx-<v>/  the MLX engine: Python, mlx-lm and niti's server wrapper
+  runtime.pids       servers this core started, so the next one can stop orphans
   llama-server.log   the local runtime's log
 ```
 
@@ -244,7 +262,9 @@ Local only (127.0.0.1), a fresh bearer token per launch, handed over in the core
 - **Local models** (never on the phone bridge): `GET /local/device`, `GET /local/catalog?tab=recommended|all&q&sort&tools&fits&size`,
   `GET /local/catalog/model?repo=`, `GET /local/models` (installed + active downloads),
   `DELETE /local/models?id=`, `POST /local/download {repo, quant}`, `POST /local/download/cancel {id}`,
-  `POST /local/unload {model}`. `GET /models?provider=local` lists installed model ids.
+  `POST /local/unload {model}`, `GET /local/discover` (found on this Mac), `POST /local/import {id}`,
+  `POST|DELETE /local/engine/mlx` (install ahead of time, remove). `/local/catalog` also takes
+  `format=gguf|mlx|any`; `/local/device` reports the MLX engine. `GET /models?provider=local` lists installed model ids.
 
 Events (`server/events.ts`, kind): `agent_event`, `agent_message`, `orchestration`, `approval_request`,
 `usage`, `turn_summary`, `lock`, `session`, `session_reset`, `goal`, `awake`, `remote`, `theme`,
@@ -290,8 +310,9 @@ Everything runs against the repo's scripted model (`scripts/e2e/fakellm.ts`): no
 Test cores never touch your real files: every harness sets the isolation env (`NITI_AUTH_FILE`,
 `NITI_TRUST_FILE`, `NITI_REMOTE_FILE`, `NITI_LOCAL_MODELS_DIR`…) in `scripts/e2e/*` and
 `niti-app/scripts/fixture.ts`. Local models are tested without a model or a GPU:
-`scripts/e2e/fakellama.ts` stands in for `llama-server` (`NITI_LLAMA_SERVER`), and the Hub is a
-fixture (`NITI_HF_URL`, or an injected fetch).
+`scripts/e2e/fakellama.ts` stands in for `llama-server` (`NITI_LLAMA_SERVER`), `fakemlx.ts` for the
+MLX engine (`NITI_MLX_SERVER`), the Hub is a fixture (`NITI_HF_URL`, or an injected fetch), and
+`NITI_DISCOVER_DIRS` replaces the folders "Found on this Mac" scans (empty in every harness).
 
 | What | Command |
 |---|---|

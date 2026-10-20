@@ -30,7 +30,7 @@ writeFileSync(
 mkdirSync(join(P, ".niti/commands"));
 writeFileSync(join(P, ".niti/commands/hi.md"), "---\nname: hi\ndescription: greet the user\n---\nhello $ARGUMENTS\n");
 const llm = Bun.spawn(["bun", join(HERE, "fakellm.ts"), String(LLM), state], { stdout: "ignore", stderr: "inherit" });
-const env = { ...process.env, NITI_TRUST: "1", NITI_AUTH_FILE: join(state, "auth.json"), NITI_TRUST_FILE: join(state, "trust.json"), NITI_REMOTE_FILE: join(state, "remote.json"), NITI_OFFLINE: "1", NITI_MODELS_FILE: join(state, "models.json"), NITI_VERSION_FILE: join(state, "version.json"), NITI_LOCAL_MODELS_DIR: join(state, "local-models"), NITI_HF_URL: `http://127.0.0.1:${LLM}`, NITI_LLAMA_SERVER: join(HERE, "fakellama.ts") };
+const env = { ...process.env, NITI_TRUST: "1", NITI_AUTH_FILE: join(state, "auth.json"), NITI_TRUST_FILE: join(state, "trust.json"), NITI_REMOTE_FILE: join(state, "remote.json"), NITI_OFFLINE: "1", NITI_MODELS_FILE: join(state, "models.json"), NITI_VERSION_FILE: join(state, "version.json"), NITI_LOCAL_MODELS_DIR: join(state, "local-models"), NITI_DISCOVER_DIRS: join(state, "found"), NITI_MLX_SERVER: join(HERE, "fakemlx.ts"), NITI_HF_URL: `http://127.0.0.1:${LLM}`, NITI_LLAMA_SERVER: join(HERE, "fakellama.ts") };
 const core = Bun.spawn(["bun", "run", join(NITI, "src/cli.ts"), "serve"], { cwd: P, env, stdout: "pipe", stderr: Bun.file(join(state, "core.log")) });
 const reader = core.stdout.getReader();
 let first = "";
@@ -307,6 +307,30 @@ try {
   check("the local agent called a tool and read the result", localRun.includes("RESULT<<") && localRun.includes("b = 2"), localRun.slice(-600));
   const llamaLog = join(state, "local-models", "fakellm.log");
   check("requests carried the slot and the model's sampling", existsSync(llamaLog) && readFileSync(llamaLog, "utf8").includes("LOCAL slot=0"), existsSync(llamaLog) ? readFileSync(llamaLog, "utf8").slice(-400) : `no log; dir has ${JSON.stringify(Bun.spawnSync(["ls", "-la", join(state, "local-models")]).stdout.toString())}`);
+  // MLX: a model already on this Mac (a fake LM Studio folder) is found, added in place, and runs on
+  // the MLX engine (fakemlx.ts) when an agent uses it.
+  const found = join(state, "found", "lmstudio-community", "Tiny-Coder-MLX-4bit");
+  mkdirSync(found, { recursive: true });
+  writeFileSync(join(found, "config.json"), JSON.stringify({ model_type: "qwen2", max_position_embeddings: 32768 }));
+  writeFileSync(join(found, "tokenizer_config.json"), JSON.stringify({ chat_template: "{% if tools %}<tool_call>{% endif %}" }));
+  writeFileSync(join(found, "model.safetensors"), "weights");
+  const disc = (await (await get("/local/discover")).json()) as any;
+  const mlxId = "lmstudio-community/Tiny-Coder-MLX-4bit:mlx";
+  check("a model in LM Studio's folder is found", disc.models?.some((m: any) => m.id === mlxId && m.format === "mlx" && m.tools === true && !m.added), JSON.stringify(disc).slice(0, 400));
+  check("adding it records it in place", (await post("/local/import", { id: mlxId })).status === 200 && ((await (await get("/models?provider=local")).json()) as any).models?.includes(mlxId));
+  const mlxCat = (await (await get("/local/catalog?tab=all&format=mlx")).json()) as any;
+  check("the catalogue lists MLX repos", mlxCat.models?.some((m: any) => m.repo === "fake-org/Tiny-Coder-MLX-4bit" && m.format === "mlx"), JSON.stringify(mlxCat).slice(0, 300));
+  check("an agent switches to the MLX model", (await post("/model", { agentId: "backend", provider: "local", model: mlxId })).status === 200);
+  const mlxMark = events.length;
+  await post("/prompt", { text: 'CALL:{"name":"read_file","args":{"path":"src/b.ts"}}END' });
+  check("the MLX run finished", await idle(60_000));
+  check("the MLX engine served it", events.slice(mlxMark).some((e) => e.kind === "local_runtime" && e.runtime?.model === mlxId && e.runtime?.engine === "mlx" && e.runtime?.state === "ready"));
+  const mlxRun = JSON.stringify(events.slice(mlxMark).filter((e) => e.kind === "agent_event" && e.event?.agentId === "backend"));
+  check("the MLX agent called a tool and read the result", mlxRun.includes("RESULT<<") && mlxRun.includes("b = 2"), mlxRun.slice(-400));
+  const mlxLog = join(found, "fakellm.log");
+  check("requests named the served model and asked for usage", existsSync(mlxLog) && readFileSync(mlxLog, "utf8").includes("MLX model=default_model") && readFileSync(mlxLog, "utf8").includes("usage=true"));
+  check("unload the MLX model", (await post("/local/unload", { model: mlxId })).status === 200);
+  check("removing it from niti leaves LM Studio's files", (await fetch(hs.url + `/local/models?id=${encodeURIComponent(mlxId)}`, { method: "DELETE", headers: H })).status === 200 && existsSync(join(found, "model.safetensors")));
   check("unload", (await post("/local/unload", { model: id })).status === 200);
   check("delete the model", (await fetch(hs.url + `/local/models?id=${encodeURIComponent(id)}`, { method: "DELETE", headers: H })).status === 200);
 } catch (err) {
