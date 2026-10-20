@@ -53,6 +53,8 @@ Bun.serve({
     if (url.pathname.endsWith("/models")) return Response.json({ data: [{ id: "fake" }] });
     // What llama-server answers, for scripts/e2e/fakellama.ts standing in for the local runtime.
     if (url.pathname === "/health") return Response.json({ status: "ok" });
+    const key = process.env.NITI_FAKE_API_KEY;
+    if (key && req.headers.get("authorization") !== `Bearer ${key}`) return Response.json({ error: { message: "Invalid API Key" } }, { status: 401 });
     if (url.pathname === "/props") return Response.json({ default_generation_settings: { n_ctx: 16384 }, chat_template: "{% if tools %}<tool_call>{{ tools }}</tool_call>{% endif %}" });
     if (!url.pathname.endsWith("/chat/completions")) return new Response("nope", { status: 404 });
     const body = await req.json();

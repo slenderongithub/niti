@@ -46,7 +46,7 @@ async function freePort(): Promise<number> {
 }
 
 // Arguments for one server. Kept pure so a test can check what a model is launched with.
-export function serverArgs(m: InstalledModel, opts: { port: number; slots: number; ctx: number; log?: string }): string[] {
+export function serverArgs(m: InstalledModel, opts: { port: number; slots: number; ctx: number; apiKey?: string; log?: string }): string[] {
   return [
     "-m", modelPath(m),
     "--host", "127.0.0.1",
@@ -66,6 +66,9 @@ export function serverArgs(m: InstalledModel, opts: { port: number; slots: numbe
     // Reuse cached chunks even when an earlier part of the conversation changed.
     "--cache-reuse", "256",
     "--no-webui",
+    // A key only this core knows. The server allows any origin, so without one a web page open in
+    // the user's browser could find the port and use the model.
+    ...(opts.apiKey ? ["--api-key", opts.apiKey] : []),
     ...(opts.log ? ["--log-file", opts.log] : []),
   ];
 }
@@ -76,6 +79,7 @@ interface Server {
   port: number;
   slots: number;
   ctx: number;
+  apiKey: string;
   ready: Promise<void>;
   state: RuntimeState;
   inFlight: number;
@@ -109,7 +113,7 @@ export class LocalRuntime {
   }
 
   // The model's server, started if needed. Resolves with the address and this agent's slot.
-  async ensure(model: string, agentId: string): Promise<{ baseURL: string; slot: number; ctx: number; manifest: InstalledModel }> {
+  async ensure(model: string, agentId: string): Promise<{ baseURL: string; apiKey: string; slot: number; ctx: number; manifest: InstalledModel }> {
     const manifest = getInstalled(model);
     if (!manifest) throw new Error(`local model '${model}' is not installed — download it from the Models page (or /models in the CLI)`);
     if (!this.wanted.get(model)?.has(agentId)) this.register(agentId, model);
@@ -123,7 +127,7 @@ export class LocalRuntime {
       s.slotOf.set(agentId, slot);
     }
     updateManifest(model, { lastUsed: Date.now() });
-    return { baseURL: `http://127.0.0.1:${s.port}/v1`, slot, ctx: s.ctx, manifest: getInstalled(model) ?? manifest };
+    return { baseURL: `http://127.0.0.1:${s.port}/v1`, apiKey: s.apiKey, slot, ctx: s.ctx, manifest: getInstalled(model) ?? manifest };
   }
 
   begin(model: string): void {
@@ -152,9 +156,10 @@ export class LocalRuntime {
     const ctx = Math.max(MIN_CONTEXT, fit.ctx);
     const port = await freePort();
     mkdirSync(modelsDir(), { recursive: true });
-    const args = serverArgs(m, { port, slots, ctx, log: join(modelsDir(), "llama-server.log") });
+    const apiKey = crypto.randomUUID();
+    const args = serverArgs(m, { port, slots, ctx, apiKey, log: join(modelsDir(), "llama-server.log") });
     const cmd = [...bin, ...args];
-    const s: Server = { model: m.id, port, slots, ctx, state: "loading", inFlight: 0, lastUsed: Date.now(), slotOf: new Map(), ready: Promise.resolve() };
+    const s: Server = { model: m.id, port, slots, ctx, apiKey, state: "loading", inFlight: 0, lastUsed: Date.now(), slotOf: new Map(), ready: Promise.resolve() };
     this.servers.set(m.id, s);
     this.onStatus({ model: m.id, state: "loading", ctx, slots });
     s.proc = Bun.spawn(cmd, { stdout: "ignore", stderr: "pipe" });
@@ -199,7 +204,7 @@ export class LocalRuntime {
   // tool calls or falls back to its generic format.
   private async learn(s: Server, m: InstalledModel): Promise<void> {
     try {
-      const res = await fetch(`http://127.0.0.1:${s.port}/props`, { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(`http://127.0.0.1:${s.port}/props`, { signal: AbortSignal.timeout(3000), headers: { authorization: `Bearer ${s.apiKey}` } });
       if (!res.ok) return;
       const props = (await res.json()) as {
         default_generation_settings?: { n_ctx?: number };

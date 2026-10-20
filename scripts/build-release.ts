@@ -10,6 +10,7 @@
 // and degrades to the file/env credential path when its binding is missing (src/keystore).
 import { rmSync, mkdirSync, cpSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fetchLlamaServer } from "./llama.ts";
 
 const TARGETS = [
   { platform: "darwin-arm64", goos: "darwin", goarch: "arm64", bun: "bun-darwin-arm64" },
@@ -60,6 +61,9 @@ for (const t of targets) {
   });
   await run(["bun", "build", "--compile", `--target=${t.bun}`, "./src/cli.ts", "--outfile", join(out, "bin", "niti-core")]);
   for (const f of WEB_FILES) cpSync(join("web", f), join(out, "web", f));
+  // Local models: the macOS packages carry llama-server beside niti-core (bin/llama/). Elsewhere a
+  // local agent says the runtime is missing and points at the desktop app or a llama.cpp install.
+  if (t.goos === "darwin") await fetchLlamaServer(t.goarch === "arm64" ? "arm64" : "x64", join(out, "bin", "llama"));
 
   writeFileSync(
     join(out, "package.json"),

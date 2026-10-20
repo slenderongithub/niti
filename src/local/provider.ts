@@ -26,7 +26,7 @@ export function requestExtras(m: InstalledModel, slot: number, thinking: boolean
 }
 
 export class LocalProvider implements Provider {
-  private inner?: { url: string; slot: number; provider: OpenAIProvider };
+  private inner?: { url: string; slot: number; key: string; provider: OpenAIProvider };
 
   constructor(
     private model: string,
@@ -39,16 +39,17 @@ export class LocalProvider implements Provider {
   }
 
   async send(sysPrompt: string, turns: Turn[], tools: ToolSpec[], onDelta?: OnDelta, signal?: AbortSignal, thinking = true, format?: "json"): Promise<ProviderReply> {
-    const { baseURL, slot, manifest } = await this.runtime.ensure(this.model, this.agentId);
+    const { baseURL, apiKey, slot, manifest } = await this.runtime.ensure(this.model, this.agentId);
     // A JSON reply is constrained by grammar from its first token, which leaves no room for a
     // thinking block in front of it.
     const think = thinking && this.reasoning !== "off" && format !== "json";
     const extras = { ...requestExtras(manifest, slot, think), ...(format === "json" ? { response_format: { type: "json_object" } } : {}) };
-    if (!this.inner || this.inner.url !== baseURL || this.inner.slot !== slot) {
+    if (!this.inner || this.inner.url !== baseURL || this.inner.slot !== slot || this.inner.key !== apiKey) {
       this.inner = {
         url: baseURL,
         slot,
-        provider: new OpenAIProvider(this.model, "local", baseURL, undefined, undefined, {
+        key: apiKey,
+        provider: new OpenAIProvider(this.model, apiKey, baseURL, undefined, undefined, {
           vendor: "local",
           maxOutput: this.maxOutput ?? LOCAL_MAX_OUTPUT,
         }),

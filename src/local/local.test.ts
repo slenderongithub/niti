@@ -265,7 +265,7 @@ const FAKE = join(import.meta.dir, "../../scripts/e2e/fakellama.ts");
 
 test("serverArgs: loopback only, jinja, reasoning extracted, one full-context slot per agent, f16 KV", () => {
   saveManifest({ id: "a/b-GGUF:Q4_K_M", repo: "a/b-GGUF", quant: "Q4_K_M", files: ["b-Q4_K_M.gguf"], bytes: 1, installedAt: 0 });
-  const args = serverArgs(getInstalled("a/b-GGUF:Q4_K_M") ?? ({ id: "a/b-GGUF:Q4_K_M", repo: "a/b-GGUF", quant: "Q4_K_M", files: ["b-Q4_K_M.gguf"], bytes: 1, installedAt: 0 } as never), { port: 1234, slots: 3, ctx: 16384 });
+  const args = serverArgs(getInstalled("a/b-GGUF:Q4_K_M") ?? ({ id: "a/b-GGUF:Q4_K_M", repo: "a/b-GGUF", quant: "Q4_K_M", files: ["b-Q4_K_M.gguf"], bytes: 1, installedAt: 0 } as never), { port: 1234, slots: 3, ctx: 16384, apiKey: "k" });
   const at = (f: string) => args[args.indexOf(f) + 1];
   expect(at("--host")).toBe("127.0.0.1");
   expect(args).toContain("--jinja");
@@ -274,6 +274,7 @@ test("serverArgs: loopback only, jinja, reasoning extracted, one full-context sl
   expect(at("-c")).toBe(String(16384 * 3));
   expect(args).toContain("--no-kv-unified");
   expect(args).not.toContain("-ctk");
+  expect(at("--api-key")).toBe("k");
 });
 
 test("requestExtras: the model's sampling over the defaults, the slot, and the thinking switch", () => {

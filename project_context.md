@@ -147,7 +147,7 @@ in one disappears from the others (the core answers by id; a second answer gets 
     the download (Q4_K_M unless there's room to step up or a need to step down). `downloads.ts`
     resumes with Range requests, verifies each file's sha256, and writes the manifest last, so only
     whole models count as installed; it also saves the authors' `generation_config.json` sampling.
-    `runtime.ts` starts one server per model on first use (127.0.0.1, a free port, `--jinja`,
+    `runtime.ts` starts one server per model on first use (127.0.0.1, a free port, a random `--api-key` only this core knows, `--jinja`,
     `--reasoning-format deepseek`, f16 KV cache because a quantized one hurts tool calls), one
     full-context slot per agent using it (`-np N --no-kv-unified`) so each agent's prompt prefix stays
     cached, learns the real per-slot context from `/props`, and unloads after 15 idle minutes or when
@@ -172,7 +172,7 @@ in one disappears from the others (the core answers by id; a second answer gets 
 | `commands/registry.ts` | Slash commands, shared by every front end; project commands from `.niti/commands/*.md` |
 | `server/*` | The HTTP + SSE API (`server.ts`), the event hub with replay (`events.ts`), the headless core and its handshake line (`main.ts`) |
 | `remote/*` | Remote control: the wire protocol, this Mac's identity, the bridge to the relay |
-| `local/*` | Local models: the Hub catalogue, fit, downloads, the installed store, the `llama-server` runtime, the `local` provider, `/local/*` routes |
+| `local/*` | Local models (`scripts/llama.ts` fetches the pinned, checksum-verified `llama-server` both packagings ship: `bin/llama/` in the macOS npm packages, `Contents/Resources/llama` in the app): the Hub catalogue, fit, downloads, the installed store, the `llama-server` runtime, the `local` provider, `/local/*` routes |
 | `graph/filegraph.ts` | The project's import graph; its `IGNORE` set also bounds the project map every agent sees |
 
 ## Data on disk
