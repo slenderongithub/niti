@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowLeft, ArrowRight, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, Users, Zap, RefreshCw, Crown } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, Users, Zap, RefreshCw, Crown, Cloud, Cpu } from "lucide-react";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { LocalPicker } from "./local-picker";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -65,6 +67,8 @@ export function TeamSetup() {
   const [lead, setLead] = useState(0);
   const [auto, setAuto] = useState(Boolean(info?.auto));
   const [saving, setSaving] = useState(false);
+  // Cloud or this Mac, for the teammate being picked — remembered from the last pick.
+  const [where, setWhere] = useState<"cloud" | "local">("cloud");
   const history = useRef<Step[]>([]);
 
   useEffect(() => {
@@ -240,24 +244,53 @@ export function TeamSetup() {
 
                   {step.k === "provider" && providers && (
                     <StepBody
-                      icon={<Sparkles />}
-                      title="Provider"
+                      icon={where === "local" ? <Cpu /> : <Cloud />}
+                      title={where === "local" ? "A model on this Mac" : "Provider"}
                       eyebrow={`Teammate ${step.i + 1} of ${size}`}
-                      description="Where this teammate's model runs. Providers with a saved key are ready to go."
+                      description={where === "local" ? "Runs privately on this Mac — no key, no cost, works offline. niti loads it when the team starts." : "Where this teammate's model runs. Providers with a saved key are ready to go."}
                     >
-                      <ProviderPicker
-                        providers={providers}
-                        creds={creds}
-                        value={cur?.provider}
-                        onPick={(id) => {
-                          setTeam((t) => {
-                            const next = [...t];
-                            next[step.i] = { ...(next[step.i] ?? { model: "", role: "", desc: "" }), provider: id };
-                            return next;
-                          });
-                          go(creds.has(id) ? { k: "model", i: step.i } : { k: "key", i: step.i });
-                        }}
-                      />
+                      <ToggleGroup
+                        type="single"
+                        variant="outline"
+                        value={where}
+                        onValueChange={(v) => v && setWhere(v as "cloud" | "local")}
+                        aria-label="Where this teammate runs"
+                        className="mb-3 w-full"
+                      >
+                        <ToggleGroupItem value="cloud" className="flex-1 gap-2">
+                          <Cloud /> Cloud
+                        </ToggleGroupItem>
+                        <ToggleGroupItem value="local" className="flex-1 gap-2">
+                          <Cpu /> On this Mac
+                        </ToggleGroupItem>
+                      </ToggleGroup>
+                      {where === "local" ? (
+                        <LocalPicker
+                          value={cur?.provider === "local" ? cur.model : undefined}
+                          onPick={(id) => {
+                            setTeam((t) => {
+                              const next = [...t];
+                              next[step.i] = { ...(next[step.i] ?? { role: "", desc: "" }), provider: "local", model: id, baseURL: undefined };
+                              return next;
+                            });
+                            go({ k: "identity", i: step.i });
+                          }}
+                        />
+                      ) : (
+                        <ProviderPicker
+                          providers={{ ...providers, local: providers.local.filter((p) => p.id !== "local") }}
+                          creds={creds}
+                          value={cur?.provider}
+                          onPick={(id) => {
+                            setTeam((t) => {
+                              const next = [...t];
+                              next[step.i] = { ...(next[step.i] ?? { model: "", role: "", desc: "" }), provider: id };
+                              return next;
+                            });
+                            go(creds.has(id) ? { k: "model", i: step.i } : { k: "key", i: step.i });
+                          }}
+                        />
+                      )}
                     </StepBody>
                   )}
 

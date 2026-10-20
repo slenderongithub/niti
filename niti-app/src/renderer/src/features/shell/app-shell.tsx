@@ -20,8 +20,9 @@ import TokensPage from "@/features/tokens/tokens-page";
 import GraphPage from "@/features/graph/graph-page";
 import DashboardPage from "@/features/dashboard/dashboard-page";
 import SettingsPage from "@/features/settings/settings-page";
+import ModelsPage from "@/features/models/models-page";
 
-const PAGE_TITLE: Record<Page, string> = { session: "Session", tasks: "Tasks", tokens: "Tokens", graph: "Graph", dashboard: "Dashboard", settings: "Settings" };
+const PAGE_TITLE: Record<Page, string> = { session: "Session", tasks: "Tasks", tokens: "Tokens", graph: "Graph", dashboard: "Dashboard", models: "Models", settings: "Settings" };
 
 export function AppShell() {
   const page = useUI((s) => s.page);
@@ -47,6 +48,7 @@ export function AppShell() {
               {page === "tokens" && <TokensPage />}
               {page === "graph" && <GraphPage />}
               {page === "dashboard" && <DashboardPage />}
+              {page === "models" && <ModelsPage />}
               {page === "settings" && <SettingsPage />}
             </ErrorBoundary>
           </motion.div>

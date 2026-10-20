@@ -28,3 +28,9 @@ test("durations and groups", () => {
   expect(groupLabel("Read", 1, "a.ts")).toBe("Read a.ts");
   expect(groupLabel("Run", 2, "")).toBe("Ran 2 shell commands");
 });
+
+test("the web tools read as what they do", () => {
+  expect(describeCall("web_fetch", '{"url":"https://bun.sh/docs"}')).toEqual({ verb: "Fetch", target: "https://bun.sh/docs" });
+  expect(describeCall("lookup", '{"source":"npm","query":"zod"}')).toEqual({ verb: "Look up", target: "zod" });
+  expect(describeCall("web_search", '{"query":"bun test timeout"}')).toEqual({ verb: "Search the web", target: "bun test timeout" });
+});

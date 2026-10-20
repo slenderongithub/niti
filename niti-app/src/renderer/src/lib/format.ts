@@ -55,3 +55,39 @@ export function greeting(d = new Date()): string {
   if (h < 17) return "Good afternoon";
   return "Good evening";
 }
+
+// Sizes the way Finder shows them (decimal: a "4.9 GB" download is 4.9 GB in Finder too).
+export function fmtBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1000 && i < units.length - 1) {
+    n /= 1000;
+    i++;
+  }
+  return `${n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1).replace(/\.0$/, "")} ${units[i]}`;
+}
+
+// A model's size by parameters: 4022468096 → "4B", 30_500_000_000 → "30.5B", 600M stays "600M".
+export function fmtParams(n: number | undefined): string {
+  if (!n) return "?";
+  if (n < 1e9) return `${Math.round(n / 1e6)}M`;
+  const b = n / 1e9;
+  return `${b >= 10 ? (Math.round(b * 10) / 10).toString().replace(/\.0$/, "") : b.toFixed(1).replace(/\.0$/, "")}B`;
+}
+
+// Downloads and likes: 4991826 → "5M", 1427665 → "1.4M", 566 → "566".
+export function fmtCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0).replace(/\.0$/, "")}k`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0).replace(/\.0$/, "")}M`;
+}
+
+// Time left at the current rate, for a download: "4m left", "1h 12m left".
+export function fmtEta(remaining: number, bytesPerSec: number): string {
+  if (bytesPerSec <= 0 || remaining <= 0) return "";
+  const s = Math.round(remaining / bytesPerSec);
+  if (s < 60) return `${s}s left`;
+  if (s < 3600) return `${Math.round(s / 60)}m left`;
+  return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m left`;
+}

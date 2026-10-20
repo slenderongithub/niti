@@ -7,6 +7,8 @@ import type {
   AgentUsage,
   ApprovalRequest,
   AwakeState,
+  DownloadProgress,
+  RuntimeStatus,
   GoalStatus,
   RemoteState,
   HunkLine,
@@ -104,6 +106,8 @@ export interface SessionState {
   awake: AwakeState; // /awake — the status-bar chip
   goalStatus: GoalStatus | null; // /goal — the status-bar chip, and where the composer sends text while it is live
   remote: RemoteState | null; // remote control — the status-bar chip
+  // Local models: downloads in flight (and how each ended), and what the runtime has loaded.
+  local: { downloads: Record<string, DownloadProgress>; runtime: Record<string, RuntimeStatus> };
   progress: number;
   status: string;
   plannedGoal: string; // the goal last planned in Plan mode: sending it in Build runs that plan
@@ -145,6 +149,7 @@ export function emptyState(): SessionState {
     awake: "off",
     goalStatus: null,
     remote: null,
+    local: { downloads: {}, runtime: {} },
     progress: 0,
     status: "",
     plannedGoal: "",
@@ -519,7 +524,7 @@ function resetSession(d: Draft) {
     agents[id] = { ...a, status: "idle", activity: "", usage: zeroUsage(), items: [], todos: null };
   }
   const keep = d.s;
-  d.s = { ...emptyState(), ready: true, root: keep.root, agents, order: keep.order, leadId: keep.leadId, lastSeq: keep.lastSeq, nextId: keep.nextId, fileEpoch: keep.fileEpoch + 1, awake: keep.awake, goalStatus: keep.goalStatus, remote: keep.remote, status: "session cleared" }; // /clear wipes the transcript, not the Mac's sleep state
+  d.s = { ...emptyState(), ready: true, root: keep.root, agents, order: keep.order, leadId: keep.leadId, lastSeq: keep.lastSeq, nextId: keep.nextId, fileEpoch: keep.fileEpoch + 1, awake: keep.awake, goalStatus: keep.goalStatus, remote: keep.remote, local: keep.local, status: "session cleared" }; // /clear wipes the transcript, not the Mac's sleep state
 }
 
 function applyEvent(d: Draft, e: ServerEvent) {
@@ -608,6 +613,12 @@ function applyEvent(d: Draft, e: ServerEvent) {
       break;
     case "remote":
       d.s.remote = e.remote;
+      break;
+    case "local_download":
+      d.s.local = { ...d.s.local, downloads: { ...d.s.local.downloads, [e.download.id]: e.download } };
+      break;
+    case "local_runtime":
+      d.s.local = { ...d.s.local, runtime: { ...d.s.local.runtime, [e.runtime.model]: e.runtime } };
       break;
     case "theme":
       break;

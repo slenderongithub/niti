@@ -10,6 +10,9 @@ files:
 extraResources:
   - from: resources/${arch}/niti-core
     to: niti-core
+  # llama.cpp's llama-server for local models (scripts/bundle-llama.ts); niti-core looks in ./llama.
+  - from: resources/${arch}/llama
+    to: llama
 asar: true
 mac:
   category: public.app-category.developer-tools

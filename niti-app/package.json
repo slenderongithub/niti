@@ -16,12 +16,13 @@
     "live": "bun scripts/live.ts",
     "smoke": "bun scripts/smoke.ts",
     "bundle-core": "bun scripts/bundle-core.ts",
-    "dist": "bun scripts/bundle-core.ts && electron-vite build && electron-builder --mac --$(node -p process.arch)",
-    "dist:dir": "bun scripts/bundle-core.ts && electron-vite build && electron-builder --mac --dir",
+    "bundle-llama": "bun scripts/bundle-llama.ts",
+    "dist": "bun scripts/bundle-core.ts && bun scripts/bundle-llama.ts && electron-vite build && electron-builder --mac --$(node -p process.arch)",
+    "dist:dir": "bun scripts/bundle-core.ts && bun scripts/bundle-llama.ts && electron-vite build && electron-builder --mac --dir",
     "check": "npm run typecheck && bun test ./src && npm run build && bun scripts/live.ts && bun scripts/smoke.ts && bun scripts/audit.ts && bun scripts/perf.ts",
     "perf": "bun scripts/perf.ts",
     "audit": "bun scripts/audit.ts",
-    "dist:all": "bun scripts/bundle-core.ts arm64 x64 && electron-vite build && electron-builder --mac --arm64 --x64"
+    "dist:all": "bun scripts/bundle-core.ts arm64 x64 && bun scripts/bundle-llama.ts arm64 x64 && electron-vite build && electron-builder --mac --arm64 --x64"
   },
   "devDependencies": {
     "@codemirror/autocomplete": "^6.20.3",

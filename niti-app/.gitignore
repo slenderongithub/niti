@@ -3,4 +3,5 @@ out/
 release/
 resources/*/niti-core
 resources/*/niti-core.exe
+resources/*/llama/
 *.tsbuildinfo

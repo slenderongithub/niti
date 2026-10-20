@@ -6,6 +6,7 @@ const RE_PATH = strField("(?:path|file_path|filePath)");
 const RE_CMD = strField("command");
 const RE_Q = strField("(?:query|pattern|symbol)");
 const RE_KEY = strField("key");
+const RE_URL = strField("url");
 const RE_KEY_ERROR = /api[ _-]?key|\b(401|403)\b|unauthori[sz]ed|forbidden|invalid (x-api-key|credential|token)|authentication|no API key/i;
 const RE_TASK = /^(starting|queued) (\S+?)(?: → (\S+))?: (.*)$/;
 
@@ -25,6 +26,9 @@ const TOOL_VERBS: Record<string, string> = {
   todo: "Plan",
   hover: "Inspect",
   diagnostics: "Check",
+  web_fetch: "Fetch",
+  web_search: "Search the web",
+  lookup: "Look up",
 };
 
 export const PAST_VERB: Record<string, string> = {
@@ -39,6 +43,9 @@ export const PAST_VERB: Record<string, string> = {
   Inspect: "Inspected",
   Remember: "Remembered",
   Recall: "Recalled",
+  Fetch: "Fetched",
+  "Search the web": "Searched the web",
+  "Look up": "Looked up",
 };
 
 const NOUNS: Record<string, [string, string]> = {
@@ -82,7 +89,7 @@ export function describeCall(name: string, args: string): { verb: string; target
       /* cut at 180 chars: fall through to the regexes */
     }
   }
-  for (const re of [RE_PATH, RE_CMD, RE_Q, RE_KEY]) {
+  for (const re of [RE_PATH, RE_CMD, RE_Q, RE_URL, RE_KEY]) {
     const m = re.exec(args);
     if (m) return { verb, target: unescape(m[1]!) };
   }

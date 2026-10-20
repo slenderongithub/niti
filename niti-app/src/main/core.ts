@@ -112,7 +112,11 @@ export class Core extends EventEmitter {
     if (this.info && this.proc && this.proc.exitCode === null) return this.info;
     const launch = await resolveCore();
     if (!launch) throw new Error(notFound());
-    const env = { ...(await userEnv()), NITI_TRUST: "1" };
+    const env: Record<string, string | undefined> = { ...(await userEnv()), NITI_TRUST: "1" };
+    // A dev run (bun run src/cli.ts) has no llama/ beside the core: point it at the one
+    // scripts/bundle-llama.ts fetched, unless the user set their own.
+    const devLlama = join(app.getAppPath(), "resources", process.arch === "arm64" ? "arm64" : "x64", "llama", "llama-server");
+    if (!app.isPackaged && !env.NITI_LLAMA_SERVER && existsSync(devLlama)) env.NITI_LLAMA_SERVER = devLlama;
     mkdirSync(join(this.root, ".niti"), { recursive: true });
     // Keep the previous run's log: after a crash, Restart must not erase the reason it crashed.
     try {

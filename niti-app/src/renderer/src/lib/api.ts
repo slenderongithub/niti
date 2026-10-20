@@ -10,6 +10,12 @@ import type {
   SessionRow,
   Stats,
   WorktreeStatus,
+  CatalogQuery,
+  CatalogResult,
+  ModelDetail,
+  InstalledModel,
+  DownloadProgress,
+  LocalDevice,
 } from "./types";
 
 // A typed client for every niti-core route the app uses (src/server/server.ts). Errors come back
@@ -102,6 +108,27 @@ export class Api {
   discardWorktree = () => this.post<{ ok: boolean; message: string }>("/worktree/discard");
   files = () => this.get<{ files: string[]; truncated: boolean }>("/files");
   file = (path: string) => this.get<{ path: string; content: string }>(`/file?path=${encodeURIComponent(path)}`);
+  // Local models (src/local/routes.ts). The catalogue can take a while on a slow network.
+  localDevice = () => this.get<LocalDevice>("/local/device");
+  catalog = (q: CatalogQuery) => {
+    const p = new URLSearchParams({ tab: q.tab });
+    if (q.q) p.set("q", q.q);
+    if (q.sort) p.set("sort", q.sort);
+    if (q.tools) p.set("tools", "1");
+    if (q.fits) p.set("fits", "1");
+    if (q.size) p.set("size", q.size);
+    return this.req<CatalogResult>("GET", `/local/catalog?${p}`, undefined, 45_000);
+  };
+  modelDetail = (repo: string) => this.req<ModelDetail>("GET", `/local/catalog/model?repo=${encodeURIComponent(repo)}`, undefined, 45_000);
+  installedModels = () => this.get<{ models: InstalledModel[]; downloads: DownloadProgress[] }>("/local/models");
+  download = (repo: string, quant: string) => this.req<{ download: DownloadProgress }>("POST", "/local/download", { repo, quant }, 45_000);
+  cancelDownload = (id: string) => this.post<{ ok: boolean }>("/local/download/cancel", { id });
+  deleteModel = (id: string) => this.req<{ ok: boolean }>("DELETE", `/local/models?id=${encodeURIComponent(id)}`);
+  unloadModel = (model: string) => this.post<{ ok: boolean }>("/local/unload", { model });
+  // Web search (Tavily). Saving tests the key with one search first.
+  webSearch = () => this.get<{ configured: boolean; saved: boolean }>("/websearch");
+  saveWebSearchKey = (key: string) => this.req<{ ok: boolean; configured: boolean }>("POST", "/websearch", { key }, 45_000);
+  removeWebSearchKey = () => this.req<{ ok: boolean; configured: boolean }>("DELETE", "/websearch");
   approve = (ok: boolean, scope?: "agent" | "path", edited?: Record<string, unknown>, id?: number) =>
     this.post<{ ok: boolean }>("/approval", { ok, ...(scope ? { scope } : {}), ...(edited ? { edited } : {}), ...(id !== undefined ? { id } : {}) });
 }

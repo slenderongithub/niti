@@ -10,6 +10,7 @@ import {
   Hammer,
   History,
   Keyboard,
+  Boxes,
   LayoutDashboard,
   LayoutGrid,
   ListChecks,
@@ -114,6 +115,7 @@ function PaletteBody() {
                       ["tokens", "Tokens", Coins, "⌘3"],
                       ["graph", "Graph", Waypoints, "⌘4"],
                       ["dashboard", "Dashboard", LayoutDashboard, "⌘5"],
+                      ["models", "Models", Boxes, "⌘6"],
                       ["settings", "Settings", Settings2, "⌘,"],
                     ] as const
                   ).map(([p, label, Icon, k]) => (

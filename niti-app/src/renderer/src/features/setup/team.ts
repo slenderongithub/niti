@@ -4,7 +4,8 @@ import type { AgentConfig } from "@/lib/types";
 // so a team built here is byte-for-byte what the TUI would have written.
 
 export const MAX_AGENTS = 6;
-const DEFAULT_TOOLS = ["read_file", "write_file", "edit", "shell"];
+// `web`: web_fetch and lookup, plus web_search once a Tavily key is saved — every call still asks.
+const DEFAULT_TOOLS = ["read_file", "write_file", "edit", "shell", "web"];
 
 export function teamHint(n: number): string {
   if (n === 1) return "solo — one model does everything";

@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { Coins, LayoutDashboard, ListTodo, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings2, Waypoints, type LucideIcon } from "lucide-react";
+import { Boxes, Coins, LayoutDashboard, ListTodo, MessagesSquare, PanelLeftClose, PanelLeftOpen, Settings2, Waypoints, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Kbd } from "@/components/ui/kbd";
@@ -17,6 +17,7 @@ const ITEMS: { page: Page; label: string; icon: LucideIcon; shortcut: string }[]
   { page: "tokens", label: "Tokens", icon: Coins, shortcut: "3" },
   { page: "graph", label: "Graph", icon: Waypoints, shortcut: "4" },
   { page: "dashboard", label: "Dashboard", icon: LayoutDashboard, shortcut: "5" },
+  { page: "models", label: "Models", icon: Boxes, shortcut: "6" },
 ];
 
 export function NavRail() {
@@ -31,7 +32,9 @@ export function NavRail() {
   const approvals = useApp((s) => s.session.approvals.length);
   const running = taskCounts(tasks).running;
 
-  const badge = (p: Page) => (p === "tasks" && running ? running : p === "session" && approvals ? approvals : 0);
+  // Models: how many downloads are running, so one started from a sheet stays in view.
+  const downloading = useApp((s) => Object.values(s.session.local.downloads).filter((d) => d.state === "downloading" || d.state === "queued" || d.state === "verifying").length);
+  const badge = (p: Page) => (p === "tasks" && running ? running : p === "session" && approvals ? approvals : p === "models" && downloading ? downloading : 0);
 
   return (
     <motion.nav

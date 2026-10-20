@@ -32,7 +32,7 @@ test("teams are written exactly like the TUI writes them", () => {
   expect([a.id, b.id]).toEqual(["dev", "dev-2"]);
   expect(a.lead).toBe(true);
   expect(b.lead).toBeUndefined();
-  expect(a.allowedTools).toEqual(["read_file", "write_file", "edit", "shell"]);
+  expect(a.allowedTools).toEqual(["read_file", "write_file", "edit", "shell", "web"]);
   expect(systemPrompt("Dev", "Owns it.")).toStartWith("You are the Dev. Owns it. Implement your assigned tasks");
 });
 
@@ -73,4 +73,21 @@ test("fmtApprovalCountdown counts minutes and seconds down to the core's deadlin
   expect(fmtApprovalCountdown(undefined)).toBe("");
   expect(fmtApprovalCountdown(1_063_000, 1_000_000)).toContain("in 1:03,");
   expect(fmtApprovalCountdown(999_000, 1_000_000)).toContain("in 0:00,");
+});
+
+test("model sizes, parameter counts, popularity and download ETAs read like Finder and the Hub", async () => {
+  const { fmtBytes, fmtParams, fmtCount, fmtEta } = await import("./format");
+  expect(fmtBytes(0)).toBe("0 B");
+  expect(fmtBytes(2_381_343_840)).toBe("2.4 GB");
+  expect(fmtBytes(512_000_000)).toBe("512 MB");
+  expect(fmtParams(4_022_468_096)).toBe("4B");
+  expect(fmtParams(30_532_122_624)).toBe("30.5B");
+  expect(fmtParams(600_000_000)).toBe("600M");
+  expect(fmtParams(undefined)).toBe("?");
+  expect(fmtCount(566)).toBe("566");
+  expect(fmtCount(4_991_826)).toBe("5M");
+  expect(fmtCount(1_427_665)).toBe("1.4M");
+  expect(fmtCount(12_400)).toBe("12k");
+  expect(fmtEta(600_000_000, 10_000_000)).toBe("1m left");
+  expect(fmtEta(100, 0)).toBe("");
 });

@@ -50,6 +50,7 @@ export type MenuCommand =
   | "page:tokens"
   | "page:graph"
   | "page:dashboard"
+  | "page:models"
   | "page:settings"
   | "toggle-sidebar"
   | "focus-mode"

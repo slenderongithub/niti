@@ -100,7 +100,7 @@ async function run() {
   // --- navigation: click → the new page fully shown ---------------------------------------
   const nav: number[] = [];
   const navSettled: number[] = [];
-  const order: Page[] = ["tasks", "tokens", "graph", "dashboard", "settings", "session"];
+  const order: Page[] = ["tasks", "tokens", "graph", "dashboard", "models", "settings", "session"];
   // pct() over n samples is the max until n ≥ 21: 7 rounds (n=42) lets p95 skip the two worst
   // clicks, so one GC or vsync hiccup doesn't fail a run that is otherwise 1-2 frames per click.
   for (let round = 0; round < 7; round++) {

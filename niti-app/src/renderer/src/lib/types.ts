@@ -17,6 +17,7 @@ export interface AgentConfig {
   reasoning?: unknown;
   maxOutput?: number;
   editFormat?: "hashline"; // anchored edits (src/agent/agent.ts AgentConfig.editFormat)
+  profile?: "local" | "standard"; // how the harness talks to it (src/agent/profile.ts); unset = from the provider
 }
 
 export type TaskStatus = "pending" | "in_progress" | "done" | "failed";
@@ -234,6 +235,8 @@ type ServerEventBody =
   | { kind: "remote"; remote: RemoteState }
   | { kind: "session_reset" }
   | ({ kind: "turn_summary" } & TurnSummary)
+  | { kind: "local_download"; download: DownloadProgress }
+  | { kind: "local_runtime"; runtime: RuntimeStatus }
   | { kind: "resync"; missed: number }
   // Synthesized by the client's SSE layer — the core never sends this.
   | { kind: "connection"; state: "lost" | "restored" };
@@ -298,3 +301,102 @@ export interface SessionRow {
 }
 
 export type WorktreeStatus = { active: false } | { active?: undefined; path: string; branch: string; diffStat: string };
+
+// --- local models (src/local/*) ---------------------------------------------------------------
+
+export type FitTier = "runs-well" | "tight" | "wont-fit";
+export interface Fit {
+  tier: FitTier;
+  need: number; // bytes
+  budget: number;
+  ctx: number;
+}
+export interface QuantFile {
+  quant: string;
+  files: string[];
+  bpw: number;
+  size?: number;
+  sha256?: string[];
+  estimated?: boolean;
+}
+export interface CatalogModel {
+  repo: string;
+  name: string;
+  author: string;
+  downloads: number;
+  downloadsAllTime?: number;
+  likes: number;
+  trendingScore?: number;
+  lastModified?: string;
+  createdAt?: string;
+  license?: string;
+  baseModel?: string;
+  gated: boolean;
+  params?: number;
+  architecture?: string;
+  contextLength?: number;
+  tools: boolean;
+  thinking: boolean;
+  quants: QuantFile[];
+  pick?: { quant: string; fit: Fit };
+  installed: string[];
+}
+export interface ModelDetail extends CatalogModel {
+  readme: string;
+  fits: Record<string, Fit>;
+}
+export interface CatalogResult {
+  models: CatalogModel[];
+  offline?: boolean;
+  error?: string;
+}
+export type SortKey = "downloads" | "likes" | "trendingScore" | "lastModified";
+export interface CatalogQuery {
+  tab: "recommended" | "all";
+  q?: string;
+  sort?: SortKey;
+  tools?: boolean;
+  fits?: boolean;
+  size?: "small" | "medium" | "large";
+}
+export interface InstalledModel {
+  id: string;
+  repo: string;
+  quant: string;
+  files: string[];
+  bytes: number;
+  params?: number;
+  architecture?: string;
+  contextLength?: number;
+  tools?: boolean;
+  thinking?: boolean;
+  license?: string;
+  installedAt: number;
+  lastUsed?: number;
+  toolFormat?: "native" | "generic" | "none";
+}
+export type DownloadState = "queued" | "downloading" | "verifying" | "done" | "error" | "cancelled";
+export interface DownloadProgress {
+  id: string;
+  repo: string;
+  quant: string;
+  state: DownloadState;
+  received: number;
+  total: number;
+  bytesPerSec: number;
+  error?: string;
+}
+export interface RuntimeStatus {
+  model: string;
+  state: "loading" | "ready" | "stopped" | "error";
+  ctx?: number;
+  slots?: number;
+  error?: string;
+}
+export interface LocalDevice {
+  device: { totalMemory: number; gpuBudget: number; appleSilicon: boolean; chip: string };
+  modelsDir: string;
+  diskUsage: number;
+  runtimeAvailable: boolean;
+  runtime: RuntimeStatus[];
+}

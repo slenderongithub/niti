@@ -2,7 +2,7 @@ import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { motion } from "motion/react";
-import { Check, CheckCheck, MessageSquareWarning, Pencil, ShieldAlert, Terminal, X, FileCode2, Clock } from "lucide-react";
+import { Check, CheckCheck, MessageSquareWarning, Pencil, ShieldAlert, Terminal, X, FileCode2, Clock, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -36,6 +36,9 @@ function describe(r: ApprovalRequest): { verb: string; target: string } {
   if (r.tool === "shell" || r.tool === "bash") return { verb: "run", target: [str(i.command), ...(Array.isArray(i.args) ? (i.args as string[]) : [])].join(" ").trim() };
   if (r.tool === "write_file") return { verb: "write", target: str(i.path) };
   if (r.tool === "edit") return { verb: "edit", target: str(i.path) };
+  if (r.tool === "web_fetch") return { verb: "fetch", target: str(i.url) };
+  if (r.tool === "web_search") return { verb: "search the web for", target: str(i.query) };
+  if (r.tool === "lookup") return { verb: `look up on ${str(i.source)}`, target: str(i.query) };
   return { verb: `use ${r.tool}`, target: str(i.path ?? i.query ?? "") };
 }
 
@@ -164,6 +167,8 @@ export function ApprovalCenter() {
                     <ShieldAlert className="size-3.5" /> Runs in the project folder{navigator.userAgent.includes("Mac") ? ", inside the macOS sandbox" : ""}. Network and paths outside the project always ask.
                   </p>
                 </div>
+              ) : head.tool === "web_fetch" || head.tool === "web_search" || head.tool === "lookup" ? (
+                <WebCall tool={head.tool} input={head.input} />
               ) : hunks.length ? (
                 <div className="py-2">
                   <DiffRows hunks={hunks} fold={400} />
@@ -286,4 +291,30 @@ function ApprovalCountdown({ expiresAt }: { expiresAt?: number }) {
   }, [expiresAt]);
   if (!expiresAt) return null;
   return <p className="mt-1 text-[11.5px] text-muted-foreground tabular-nums">{fmtApprovalCountdown(expiresAt, now)}</p>;
+}
+
+// A web call, as what leaves this Mac: where it goes, and what is sent. web_fetch only reaches
+// public addresses (src/tools/web.ts); search goes to Tavily; lookup to the named registry.
+function WebCall({ tool, input }: { tool: string; input: Record<string, unknown> }) {
+  const url = str(input.url);
+  let host = "";
+  try {
+    host = tool === "web_fetch" ? new URL(url).host : tool === "web_search" ? "api.tavily.com" : str(input.source);
+  } catch {
+    host = url;
+  }
+  const what = tool === "web_fetch" ? url : str(input.query);
+  return (
+    <div className="p-5">
+      <div className="overflow-hidden rounded-xl border bg-muted/40">
+        <div className="flex items-center gap-2 border-b px-3 py-1.5 text-[11px] text-muted-foreground">
+          <Globe className="size-3.5" /> {tool === "web_fetch" ? "fetch a page from" : tool === "web_search" ? "search through" : "look up on"} <span className="font-mono text-foreground">{host}</span>
+        </div>
+        <pre className="selectable whitespace-pre-wrap break-all p-4 font-mono text-[13px] leading-relaxed text-info">{what}</pre>
+      </div>
+      <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+        <ShieldAlert className="size-3.5" /> {tool === "web_search" ? "Sends this query to Tavily and uses one of your free monthly searches." : "Sends this request from your Mac. Private and local addresses are never fetched."} Web calls ask even with auto-approve on; “always” covers this agent for the session.
+      </p>
+    </div>
+  );
 }

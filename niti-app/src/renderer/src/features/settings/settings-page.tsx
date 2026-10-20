@@ -30,6 +30,9 @@ import {
   Eraser,
   Play,
   ScrollText,
+  Globe,
+  ExternalLink,
+  BookOpen,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -54,11 +57,12 @@ import { useOutput } from "@/store/output";
 import { useUI } from "@/store/ui";
 import type { ThemeSource } from "../../../../shared/bridge";
 
-type Section = "appearance" | "team" | "providers" | "behaviour" | "integrations" | "worktree" | "history" | "about";
+type Section = "appearance" | "team" | "providers" | "web" | "behaviour" | "integrations" | "worktree" | "history" | "about";
 const SECTIONS: { id: Section; label: string; icon: LucideIcon }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "team", label: "Team", icon: Users },
   { id: "providers", label: "Providers & keys", icon: KeyRound },
+  { id: "web", label: "Web search", icon: Globe },
   { id: "behaviour", label: "Agent behaviour", icon: SlidersHorizontal },
   { id: "integrations", label: "Integrations", icon: Plug },
   { id: "worktree", label: "Worktree", icon: GitBranch },
@@ -102,6 +106,7 @@ export default function SettingsPage() {
             {section === "appearance" && <Appearance />}
             {section === "team" && <Team />}
             {section === "providers" && <ProvidersSection />}
+            {section === "web" && <WebSearch />}
             {section === "behaviour" && <Behaviour />}
             {section === "integrations" && <Integrations />}
             {section === "worktree" && <Worktree />}
@@ -506,6 +511,120 @@ function CommandOutput({ name, title, description, icon }: { name: string; title
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// Agents read the web with web_fetch and lookup, no account needed; web_search needs a Tavily key.
+// The key is tested with one real search before it is saved, and never comes back from the core.
+function WebSearch() {
+  const api = useApp((s) => s.api);
+  const [state, setState] = useState<{ configured: boolean; saved: boolean } | null>(null);
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const load = useCallback(() => void api?.webSearch().then(setState).catch(() => setState({ configured: false, saved: false })), [api]);
+  useEffect(load, [load]);
+  const save = async () => {
+    if (!api || !key.trim()) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.saveWebSearchKey(key.trim());
+      setKey("");
+      toast.success("Web search is on", { description: "Agents with the web tools can now search." });
+      load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    try {
+      await api?.removeWebSearchKey();
+      toast.success("Tavily key removed");
+      load();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+  return (
+    <>
+      <Heading title="Web search" description="Every web call asks you first, even with auto-approve on." />
+      <Card className="gap-0 py-1 shadow-none">
+        <CardContent className="divide-y">
+          <Row icon={Globe} title="Read pages and look things up" description="web_fetch reads a page as text; lookup checks npm, PyPI, crates.io, Go, GitHub, Stack Overflow and Wikipedia. No account needed.">
+            <Badge variant="outline" className="border-success/30 bg-success/10 text-success">
+              Always on
+            </Badge>
+          </Row>
+          <Row
+            icon={Search}
+            title="Search the web"
+            description={
+              <>
+                Through Tavily. The free plan is 1,000 searches a month and asks for no card, so it can never charge you; past that, searches stop until the month resets.
+              </>
+            }
+          >
+            {state === null ? (
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            ) : state.configured ? (
+              <Badge variant="outline" className="gap-1 border-success/30 bg-success/10 text-success">
+                <Check className="size-3" /> On
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-muted-foreground">
+                Off
+              </Badge>
+            )}
+          </Row>
+        </CardContent>
+      </Card>
+      <Card className="gap-4 py-5 shadow-none">
+        <CardHeader>
+          <CardTitle className="text-sm">{state?.saved ? "Replace the Tavily key" : "Turn on web search"}</CardTitle>
+          <CardDescription className="text-[12.5px]">
+            Get a free key at{" "}
+            <button type="button" className="font-medium text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary" onClick={() => void window.niti.openExternal("https://app.tavily.com")}>
+              app.tavily.com <ExternalLink className="inline size-3" />
+            </button>
+            , then paste it here. niti checks it with one search before saving it with your other keys.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save();
+            }}
+          >
+            <Input type="password" value={key} onChange={(e) => (setKey(e.target.value), setErr(null))} placeholder="tvly-…" aria-label="Tavily API key" aria-invalid={!!err} autoComplete="off" spellCheck={false} className="font-mono" />
+            <Button type="submit" disabled={!key.trim() || busy} className="gap-1.5">
+              {busy ? <Loader2 className="animate-spin" /> : <Check />} Test and save
+            </Button>
+          </form>
+          {err && (
+            <p className="text-[12px] text-destructive" role="alert">
+              {err}
+            </p>
+          )}
+          {state?.saved && (
+            <div className="flex items-center justify-between pt-1">
+              <span className="text-[12px] text-muted-foreground">A key is saved.</span>
+              <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground hover:text-destructive" onClick={() => void remove()}>
+                <Trash2 /> Remove key
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      <p className="flex items-start gap-2 px-1 text-[12px] leading-relaxed text-muted-foreground">
+        <BookOpen className="mt-0.5 size-3.5 shrink-0" />
+        Agents get the web tools when <code className="font-mono">web</code> is in their tools (new teams include it). Pages from private or local addresses are never fetched.
+      </p>
+    </>
   );
 }
 

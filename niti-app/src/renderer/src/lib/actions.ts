@@ -38,6 +38,7 @@ const LOCAL: Record<string, (args: string) => void | Promise<void>> = {
   tasks: () => useUI.getState().go("tasks"),
   graph: () => useUI.getState().go("graph"),
   dashboard: () => useUI.getState().go("dashboard"),
+  models: () => useUI.getState().go("models"),
   api: () => {
     useUI.getState().go("settings");
     location.hash = "providers";
@@ -60,6 +61,7 @@ export const LOCAL_COMMANDS: { name: string; description: string }[] = [
   { name: "tokens", description: "token usage and cost" },
   { name: "graph", description: "the project's dependency graph" },
   { name: "dashboard", description: "mission control for the whole team" },
+  { name: "models", description: "download and manage models that run on this Mac" },
   { name: "settings", description: "settings, team and providers" },
   { name: "model", description: "switch an agent's model" },
   { name: "api", description: "add or change a provider key" },

@@ -4,8 +4,8 @@ import type { ThemeSource } from "../../../shared/bridge";
 // Per-viewer UI state. Remembered locally (theme, sidebar, panel sizes); everything about the
 // project itself lives in the core and arrives through the session store.
 
-export type Page = "session" | "tasks" | "tokens" | "graph" | "dashboard" | "settings";
-export const PAGES: Page[] = ["session", "tasks", "tokens", "graph", "dashboard", "settings"];
+export type Page = "session" | "tasks" | "tokens" | "graph" | "dashboard" | "models" | "settings";
+export const PAGES: Page[] = ["session", "tasks", "tokens", "graph", "dashboard", "models", "settings"];
 
 // A `niti.`-prefixed localStorage value, or `fallback` when it is missing, unreadable or unavailable.
 export function load<T>(key: string, fallback: T): T {
