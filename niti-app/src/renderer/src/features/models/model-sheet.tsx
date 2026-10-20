@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownToLine, Clock3, ExternalLink, Heart, Layers, Lock, ScanText, Sparkles } from "lucide-react";
+import { ArrowDownToLine, Clock3, ExternalLink, Heart, Layers, Lock, ScanText, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Markdown } from "@/features/session/markdown";
@@ -20,7 +20,12 @@ export function ModelSheet({ repo, preview, onClose }: { repo: string | null; pr
   const m: CatalogModel | ModelDetail | undefined = detail ?? preview;
   return (
     <Sheet open={!!repo} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="right" className="w-[min(640px,92vw)] gap-0 p-0 sm:max-w-none">
+      <SheetContent side="right" showCloseButton={false} className="w-[min(640px,92vw)] gap-0 p-0 sm:max-w-none">
+        <SheetClose asChild>
+          <Button variant="ghost" size="icon-sm" aria-label="Close" className="absolute right-3 top-3 z-10">
+            <X />
+          </Button>
+        </SheetClose>
         {m ? (
           <>
             <SheetHeader className="relative gap-3 overflow-hidden border-b px-6 pb-5 pt-6">

@@ -184,11 +184,23 @@ async function run() {
     useUI.getState().go("session");
     useUI.getState().viewFile("src/a.ts");
     await check(`editor · ${at}`);
-    for (const section of ["team", "providers", "behaviour", "integrations", "worktree", "history", "about"]) {
+    for (const section of ["team", "providers", "web", "behaviour", "integrations", "worktree", "history", "about"]) {
       useUI.getState().go("settings");
       location.hash = section;
       await check(`settings#${section} · ${at}`);
     }
+    // Models: each tab, and a model's detail sheet (the fixture's Hub is fakellm's pocket copy).
+    useUI.getState().go("models");
+    for (const tab of ["All models", "Installed", "Recommended for this Mac"]) {
+      [...document.querySelectorAll<HTMLButtonElement>("[role=tab]")].find((b) => b.textContent?.includes(tab))?.click();
+      await check(`models · ${tab} · ${at}`);
+    }
+    const card = document.querySelector<HTMLElement>("[aria-label$='— details']");
+    if (!card) note(`models · ${at}`, ["no model card on Recommended (is the fixture's Hub up?)"]);
+    card?.click();
+    await check(`models · sheet · ${at}`);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait(300);
   });
 
   // The setup wizard, step by step (Settings → Rebuild team), and Esc back from each step —
@@ -210,6 +222,10 @@ async function run() {
     await check(`setup · size · ${w}×${h}`);
     button("3 teammates")?.click();
     await check(`setup · provider · ${w}×${h}`);
+    button("On this Mac")?.click();
+    await check(`setup · on this mac · ${w}×${h}`);
+    button("Cloud")?.click();
+    await wait(300);
     (document.querySelector("[cmdk-input]") as HTMLElement | null)?.focus();
     await esc("Provider", "How many teammates");
     button("3 teammates")?.click();

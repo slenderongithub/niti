@@ -59,6 +59,8 @@ export async function fixture(opts: { agents?: string[]; chunked?: boolean } = {
     NITI_MODELS_FILE: join(state, "models.json"),
     NITI_VERSION_FILE: join(state, "version.json"),
     NITI_LOCAL_MODELS_DIR: join(state, "local-models"), // a test core never fills the real models folder
+    // The Models page browses fakellm's pocket Hugging Face, so the checks see real cards.
+    NITI_HF_URL: `http://127.0.0.1:${llmPort}`,
   };
   return {
     project,

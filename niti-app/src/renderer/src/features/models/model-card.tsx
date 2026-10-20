@@ -60,13 +60,13 @@ export const ModelCard = memo(function ModelCard({ m, index, onOpen }: { m: Cata
         </CardHeader>
         <CardContent className="relative flex flex-col gap-3 px-4">
           <CapabilityBadges tools={m.tools} thinking={m.thinking} license={m.license} />
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11.5px] text-muted-foreground tabular">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11.5px] text-muted-foreground tabular">
             <Stat icon={ArrowDownToLine} label="Downloads this month" value={fmtCount(m.downloads)} />
             <Stat icon={Heart} label="Likes" value={fmtCount(m.likes)} />
             <Stat icon={Layers} label="Parameters" value={fmtParams(m.params)} />
             <Stat icon={ScanText} label="Context window" value={m.contextLength ? `${Math.round(m.contextLength / 1024)}k ctx` : "—"} />
             <Stat icon={Clock3} label="Last updated" value={m.lastModified ? `updated ${fmtAgo(Date.parse(m.lastModified))}` : "—"} className="col-span-2" />
-          </dl>
+          </div>
         </CardContent>
         <CardFooter className="relative mt-auto flex items-center gap-2 border-t px-4 pt-3 [.border-t]:pt-3" onClick={(e) => e.stopPropagation()}>
           {pick && quant ? (
@@ -95,10 +95,12 @@ export const ModelCard = memo(function ModelCard({ m, index, onOpen }: { m: Cata
 
 function Stat({ icon: Icon, label, value, className }: { icon: typeof Heart; label: string; value: string; className?: string }) {
   return (
-    <div className={cn("flex min-w-0 items-center gap-1.5", className)}>
+    // The label is the row's accessible name and its hover title; the icon says it to the eye.
+    <div className={cn("flex min-w-0 items-center gap-1.5", className)} title={label} aria-label={`${label}: ${value}`} role="group">
       <Icon className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
-      <dt className="sr-only">{label}</dt>
-      <dd className="truncate">{value}</dd>
+      <span className="truncate" aria-hidden>
+        {value}
+      </span>
     </div>
   );
 }
