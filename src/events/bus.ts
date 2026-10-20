@@ -51,7 +51,9 @@ export interface AgentEvent {
   // their own rows and for `niti-core models doctor`: a turn refused for not being an action, a file
   // saved out of a reply, an acceptance check that failed, a model swapped in or out, a plan that
   // fell back, a model being checked.
-  protocol?: "rejected_turn" | "salvaged" | "check_failed" | "model_swap" | "plan_fallback" | "probe";
+  protocol?: "rejected_turn" | "salvaged" | "checks" | "check_failed" | "model_swap" | "plan_fallback" | "probe";
+  // protocol "checks": each acceptance check (src/agent/accept.ts) and whether it passed.
+  checks?: { name: string; ok: boolean; detail?: string; grade: "must" | "quality" }[];
 }
 
 // Thin typed wrapper over node:events. Many agents publish; the log/TUI subscribes.

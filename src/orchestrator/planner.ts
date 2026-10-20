@@ -281,13 +281,14 @@ export function rolePlan(goal: string, roles: RoleInfo[], leadId: string): TaskN
   return withIntegration(
     parts.map((p, i) => ({ id: `t${i + 1}`, description: `${goal}\n\nYour part: ${p.part}. Teammates do the rest.`, status: "pending", role: p.id, assignedTo: p.id, dependsOn: [], handoffTo: [] })),
     owner,
+    goal,
   );
 }
 
 // Two or more parts built side by side by small models rarely fit on the first try (a stylesheet the
 // page links under another name, a fetch to a route the server doesn't have). A last task checks the
 // seams and fixes them — real work with tools, unlike the integrate pass, which only summarises.
-function withIntegration(tasks: TaskNode[], owner: string): TaskNode[] {
+function withIntegration(tasks: TaskNode[], owner: string, goal: string): TaskNode[] {
   if (tasks.length < 2) return tasks;
   const id = `t${tasks.length + 1}`;
   return [
@@ -296,7 +297,7 @@ function withIntegration(tasks: TaskNode[], owner: string): TaskNode[] {
       id,
       description:
         "Check that the parts your teammates built fit together, and fix what doesn't: every file a page links (stylesheets, scripts, images) exists under that name, " +
-        "the page's requests match the server's routes, and the run steps in the README work.",
+        `the page's requests match the server's routes, and the run steps in the README work.\n\n(Part of the request: ${goal})`,
       status: "pending",
       role: owner,
       assignedTo: owner,
@@ -352,7 +353,7 @@ async function makeLocalPlan(lead: PlannerAgent, goal: string, roles: RoleInfo[]
     const tasks: TaskNode[] = ready
       .filter((r) => lines[r.id])
       .map((r, i) => ({ id: `t${i + 1}`, description: `${lines[r.id]}\n\n(Part of the request: ${goal})`, status: "pending", role: r.id, assignedTo: r.id, dependsOn: [], handoffTo: [] }));
-    return { goal, tasks: withIntegration(tasks, leadId) };
+    return { goal, tasks: withIntegration(tasks, leadId, goal) };
   }
   return { goal, tasks: rolePlan(goal, roles, leadId), fallback: `${lead.config.id} couldn't split the work (${correction}) — split by role instead` };
 }

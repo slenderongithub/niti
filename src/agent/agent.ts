@@ -31,6 +31,7 @@ import { createHash } from "node:crypto";
 import { defaultSettings, type RuntimeSettings } from "../settings.ts";
 import { runChecks, checkSurface, enforcerFiles, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
+import { acceptMessage, acceptWork, isIntegration } from "./accept.ts";
 
 // Sent back to a model whose turn wasn't an action (the local action protocol). Concrete, because
 // "use your tools" is what it already failed to act on.
@@ -73,6 +74,7 @@ const MAX_FORKS_PER_RUN = 4;
 // import — the overwhelming majority of what a check catches. Beyond that the model is usually
 // re-asserting the same fix, and the honest outcome is a failing task a human can see, not a loop.
 const MAX_VERIFY_ROUNDS = 2;
+const MAX_ACCEPT_ROUNDS = 3;
 const WARN_RATIO = 0.85; // heads-up when input tokens pass this fraction of the context window
 // The context thresholds (warn, compact) and result caps come from the agent's profile
 // (src/agent/profile.ts): 0.85 / 0.95 / 60k chars for cloud models, earlier and smaller locally.
@@ -430,6 +432,7 @@ interface LoopCtx {
   task?: string; // the request this run is carrying out, for what the gaming guard may not second-guess
   protocol?: boolean; // this loop runs the local action protocol (a task run on a model that can call tools)
   todoCalls?: number; // checklist writes so far — the first is planning, the rest aren't progress
+  written?: Set<string>; // project-relative paths this run wrote, for the acceptance checks
   // Characters each tool result may take this turn, sized to the room left in the context window.
   // Set just before the turn's tools run; unset means only the fixed per-result ceiling applies.
   resultBudget?: number;
@@ -584,6 +587,7 @@ export class Agent {
     // many times a reply that only described the work has been sent back (the local profile).
     let acted = false;
     let rejected = 0; // turns in a row that weren't an action (the local protocol)
+    let acceptRounds = 0; // times the acceptance checks sent the work back
     this.inFlightCount++;
     try {
       for (let i = 0; i < this.maxTurns; i++) {
@@ -686,6 +690,31 @@ export class Agent {
             // so a nudge landing on the final allowed turn can't downgrade a finished task to
             // "exhausted" — there, the run ends and the message waits, as it did before.
             if (i < this.maxTurns - 1 && this.pendingInbox() > 0) continue;
+            // A local task isn't done on the model's word: niti reads what it wrote (and starts its
+            // server) — see accept.ts. Failures go back as the next turn, three times; then a must
+            // failure leaves the task unverified, and quality ones are shown with the finished task.
+            if (protocol && (ctx.wrote || isIntegration(task))) {
+              const a = await acceptWork(this.root, { task, written: [...(ctx.written ?? [])], sandbox: this.sandbox, signal: this.signal() });
+              const failing = a.checks.filter((c) => !c.ok);
+              if (a.checks.length) {
+                this.bus.publish({ agentId: id, type: failing.length ? "warning" : "thought", protocol: "checks", checks: a.checks.map((c) => ({ name: c.name, ok: c.ok, detail: c.detail, grade: c.grade })), payload: failing.length ? `checked the work: ${failing.length} of ${a.checks.length} checks fail — ${failing.map((c) => c.name).join("; ")}` : `checked the work: all ${a.checks.length} checks pass`, time: Date.now() });
+              }
+              if (!a.ok) {
+                if (acceptRounds < MAX_ACCEPT_ROUNDS && i < this.maxTurns - 1) {
+                  acceptRounds++;
+                  this.push(turns, { role: "user", text: acceptMessage(a) }, sessionId);
+                  continue;
+                }
+                const must = failing.filter((c) => c.grade === "must");
+                if (must.length) {
+                  error = `the work still fails niti's checks after ${acceptRounds} round(s):\n${must.map((c) => `- ${c.detail ?? c.name}`).join("\n")}`;
+                  if (sessionId) this.store?.setStatus(sessionId, "failed");
+                  this.bus.publish({ agentId: id, type: "error", protocol: "check_failed", payload: error, time: Date.now() });
+                  return { outcome: "unverified", text: finalText, error };
+                }
+                this.bus.publish({ agentId: id, type: "warning", protocol: "check_failed", payload: `finished, but still short of: ${failing.map((c) => c.name).join("; ")}`, time: Date.now() });
+              }
+            }
             // Ground truth before "done". Only for a run that actually changed files — a review or
             // research task cannot have broken the build, and running one for it would be a minute
             // of latency for a foregone conclusion.
@@ -1729,6 +1758,7 @@ export class Agent {
       // Only reached when the write actually landed (runTool throws on a failed one), so a run
       // whose every edit missed is not sent off to a build that cannot have changed.
       if (mayWrite) ctx.wrote = true;
+      if (mayWrite && writeRel !== undefined) (ctx.written ??= new Set()).add(writeRel);
       // `before` is this file's content as of the first time this run touched it; recording it
       // only once is what makes a later revert recognisable as a revert.
       if (writeRel !== undefined && this.isCheckFile(writeRel) !== undefined) {

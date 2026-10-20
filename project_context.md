@@ -110,7 +110,22 @@ in one disappears from the others (the core answers by id; a second answer gets 
    docs) from the goal's own words. A cloud lead's failed plan falls back to the same split. The
    lead plans unless its model couldn't split work in its check and a teammate's could. Chat-only
    teammates are offered to the planner as "answers and reviews only", and a file-changing task
-   given to one moves to the best-fitting ready teammate (`keepOffChatOnly`). An engine that dies
+   given to one moves to the best-fitting ready teammate (`keepOffChatOnly`).
+   **Acceptance checks** (`agent/accept.ts`) replace a local model's word that it's done. When a
+   local task that wrote files calls `finish` (and always for the integration task), niti reads
+   what was written and runs it:
+   - pages: linked files exist, no placeholder copy, the business named in the request appears,
+     some styling; then a palette of its own, its own fonts, enough CSS, and for a polished or
+     responsive request media queries, a viewport and hover states; title, `lang`, one `<h1>`;
+   - the server: started in the sandbox (network off, localhost on) with `PORT`, it must answer
+     within 10 s, serve the site's `index.html` at `/` and answer the routes the task names;
+   - the seams: the page's `fetch` paths against the server's routes;
+   - when deployment was asked for: run steps in the README.
+   A split task's server and deploy checks follow its own part (`ownPart`); the look and the name
+   follow the whole request. Failures go back as the next turn, naming file and fix, three times.
+   After that, a must failure leaves the task `unverified`, and quality failures are shown with the
+   finished task. Each run of the checks is published as `protocol: "checks"` with the list. An
+   engine that dies
    under a request (the MLX server's generation thread) is restarted and the request retried once;
    the MLX server's errors go to `mlx-server.log`, and agents batch on it only when two contexts fit.
    `/model` rebuilds the prompt for the new model's profile.
