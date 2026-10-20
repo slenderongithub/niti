@@ -57,6 +57,7 @@ export async function fixture(opts: { agents?: string[]; chunked?: boolean } = {
     // The core refreshes model lists from models.dev; the checks stay offline, like scripts/e2e.
     NITI_OFFLINE: "1",
     NITI_MODELS_FILE: join(state, "models.json"),
+    NITI_VERSION_FILE: join(state, "version.json"),
   };
   return {
     project,
