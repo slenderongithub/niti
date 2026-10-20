@@ -85,14 +85,13 @@ A doc change belongs in the same commit as the change it describes. `README.md`,
 For the **desktop app (`niti-app/`), the web dashboard and the mobile app (`niti-mobile/`)**. The CLI's
 UI is a Go/Bubbletea terminal app (`tui/`) with none of this in it.
 
-- **Rule 0:** Any UI design work follows `~/.claude/rules/ui-design.md`: `ui-ux-pro-max` and
-  `design-taste-frontend` for direction, the shadcn and Magic UI MCPs for components, Context7 for
-  library docs. Here they refine and extend the graphite design language rather than replace it.
+- **Rule 0:** Any UI design work uses `ui-ux-pro-max` for direction and the shadcn MCP for
+  components. Here they refine and extend the graphite design language rather than replace it.
 - **Rule 1 (desktop, web):** use `shadcn/ui` for every interactive component (`niti-app/components.json`;
   primitives in `niti-app/src/renderer/src/components/ui`). Check the shadcn MCP for an official
-  primitive before building one; for animated or showcase elements, also check the Magic UI MCP.
+  primitive before building one.
 - **Rule 2 (desktop, web):** never write raw Tailwind buttons, inputs or modals; use the shadcn
-  equivalent. Magic UI adds flair on top of shadcn, never replaces it. Animate with `motion`.
+  equivalent. Animate with `motion`.
 - **Rule 3:** keep compound structures: a Card is `CardHeader` / `CardTitle` / `CardContent`, not
   arbitrary containers. The phone's `src/components/ui.tsx` mirrors the same variants and parts.
 - **Rule 4:** semantic tokens only, never raw hex in components. Desktop: Tailwind variables from
