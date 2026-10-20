@@ -30,7 +30,7 @@ writeFileSync(
 mkdirSync(join(P, ".niti/commands"));
 writeFileSync(join(P, ".niti/commands/hi.md"), "---\nname: hi\ndescription: greet the user\n---\nhello $ARGUMENTS\n");
 const llm = Bun.spawn(["bun", join(HERE, "fakellm.ts"), String(LLM), state], { stdout: "ignore", stderr: "inherit" });
-const env = { ...process.env, NITI_TRUST: "1", NITI_AUTH_FILE: join(state, "auth.json"), NITI_TRUST_FILE: join(state, "trust.json"), NITI_REMOTE_FILE: join(state, "remote.json"), NITI_OFFLINE: "1", NITI_MODELS_FILE: join(state, "models.json"), NITI_VERSION_FILE: join(state, "version.json"), NITI_LOCAL_MODELS_DIR: join(state, "local-models") };
+const env = { ...process.env, NITI_TRUST: "1", NITI_AUTH_FILE: join(state, "auth.json"), NITI_TRUST_FILE: join(state, "trust.json"), NITI_REMOTE_FILE: join(state, "remote.json"), NITI_OFFLINE: "1", NITI_MODELS_FILE: join(state, "models.json"), NITI_VERSION_FILE: join(state, "version.json"), NITI_LOCAL_MODELS_DIR: join(state, "local-models"), NITI_HF_URL: `http://127.0.0.1:${LLM}`, NITI_LLAMA_SERVER: join(HERE, "fakellama.ts") };
 const core = Bun.spawn(["bun", "run", join(NITI, "src/cli.ts"), "serve"], { cwd: P, env, stdout: "pipe", stderr: Bun.file(join(state, "core.log")) });
 const reader = core.stdout.getReader();
 let first = "";
@@ -100,11 +100,10 @@ try {
   check("file viewer reads a file", ((await (await get("/file?path=src/b.ts")).json()) as any).content?.includes("b = 1"));
   check("file viewer refuses ../", (await get("/file?path=../etc/passwd")).status >= 400);
   check("dashboard page served", (await fetch(hs.url + "/dashboard")).status === 200);
-  // Local models: offline here (NITI_OFFLINE), so the catalogue says so instead of failing, and the
-  // isolated models directory starts empty.
+  // Local models: the Hub is fakellm's pocket copy (NITI_HF_URL), the isolated models directory starts
+  // empty, and the runtime is fakellama.ts (NITI_LLAMA_SERVER). The download-and-run path is below.
   const dev = (await (await get("/local/device")).json()) as any;
-  check("local device reports memory and the isolated models dir", dev.device?.totalMemory > 0 && dev.modelsDir === join(state, "local-models"), JSON.stringify(dev));
-  check("local catalogue offline is not an error", ((await (await get("/local/catalog?tab=recommended")).json()) as any).offline === true);
+  check("local device reports memory, the isolated models dir and the runtime", dev.device?.totalMemory > 0 && dev.modelsDir === join(state, "local-models") && dev.runtimeAvailable === true, JSON.stringify(dev));
   check("no local models installed", ((await (await get("/models?provider=local")).json()) as any).models?.length === 0);
   check("local download validates its body", (await post("/local/download", { repo: "../x" })).status === 400);
   check("graph page served", (await fetch(hs.url + "/graph/view")).status === 200);
@@ -281,6 +280,32 @@ try {
   const cl = await cmd("clear");
   check("/clear", cl.ok && ((await (await post("/session")).json()) as any).tasks.length === 0, JSON.stringify(cl));
   check("worktree status idle", ((await (await get("/worktree")).json()) as any).active === false);
+
+  // --- local models: find, download, switch an agent to it, run a task with a tool call, delete
+  const rec = (await (await get("/local/catalog?tab=recommended")).json()) as any;
+  const tiny = rec.models?.find((m: any) => m.repo === "fake-org/Tiny-Coder-GGUF");
+  check("recommended lists a tool-capable model that runs here", tiny?.tools === true && tiny?.pick?.fit?.tier === "runs-well", JSON.stringify(rec).slice(0, 400));
+  const detail = (await (await get("/local/catalog/model?repo=fake-org/Tiny-Coder-GGUF")).json()) as any;
+  check("model detail has the card and exact sizes", detail.readme?.includes("Tiny Coder") && detail.quants?.[0]?.size > 0, JSON.stringify(detail).slice(0, 400));
+  const id = `fake-org/Tiny-Coder-GGUF:${tiny?.pick?.quant}`;
+  check("download starts", (await post("/local/download", { repo: "fake-org/Tiny-Coder-GGUF", quant: tiny?.pick?.quant })).status === 200);
+  for (let i = 0; i < 50 && !events.some((e) => e.kind === "local_download" && e.download?.state === "done"); i++) await sleep(100);
+  check("download finished and was announced", events.some((e) => e.kind === "local_download" && e.download?.id === id && e.download?.state === "done"));
+  check("installed model is listed for the picker", ((await (await get("/models?provider=local")).json()) as any).models?.includes(id));
+  check("an agent switches to the local model", (await post("/model", { agentId: "backend", provider: "local", model: id })).status === 200);
+  approvePolicy = () => true;
+  const mark = events.length;
+  await post("/prompt", { text: 'CALL:{"name":"read_file","args":{"path":"src/b.ts"}}END' });
+  check("the local run finished", await idle(60_000));
+  check("the runtime loaded the model", events.some((e) => e.kind === "local_runtime" && e.runtime?.model === id && e.runtime?.state === "ready"));
+  // Only this run's events, from the agent now on the local model: the file it read (edited to
+  // b = 2 earlier in this suite) came back through its tool call.
+  const localRun = JSON.stringify(events.slice(mark).filter((e) => e.kind === "agent_event" && e.event?.agentId === "backend"));
+  check("the local agent called a tool and read the result", localRun.includes("RESULT<<") && localRun.includes("b = 2"), localRun.slice(-600));
+  const llamaLog = join(state, "local-models", "fakellm.log");
+  check("requests carried the slot and the model's sampling", existsSync(llamaLog) && readFileSync(llamaLog, "utf8").includes("LOCAL slot=0"), existsSync(llamaLog) ? readFileSync(llamaLog, "utf8").slice(-400) : `no log; dir has ${JSON.stringify(Bun.spawnSync(["ls", "-la", join(state, "local-models")]).stdout.toString())}`);
+  check("unload", (await post("/local/unload", { model: id })).status === 200);
+  check("delete the model", (await fetch(hs.url + `/local/models?id=${encodeURIComponent(id)}`, { method: "DELETE", headers: H })).status === 200);
 } catch (err) {
   check("harness crashed", false, String((err as Error).stack ?? err));
 } finally {

@@ -45,11 +45,41 @@ function reply(body: any): { text?: string; tool?: { name: string; args: unknown
   return { text: "Done. Summary: the files were created." };
 }
 
+// A pocket Hugging Face for the local-models path (NITI_HF_URL points here): one tool-capable GGUF
+// repo, its file, and its model card. The "weights" are a few KB, so a download is instant.
+const HUB_REPO = "fake-org/Tiny-Coder-GGUF";
+const WEIGHTS = new TextEncoder().encode("GGUF" + "w".repeat(64 * 1024));
+const WEIGHTS_SHA = new Bun.CryptoHasher("sha256").update(WEIGHTS).digest("hex");
+const hubModel = (sizes: boolean) => ({
+  id: HUB_REPO,
+  author: "fake-org",
+  downloads: 4200,
+  likes: 42,
+  trendingScore: 7,
+  lastModified: "2026-10-01T00:00:00.000Z",
+  createdAt: "2026-09-01T00:00:00.000Z",
+  gated: false,
+  tags: ["gguf", "license:apache-2.0"],
+  cardData: { license: "apache-2.0", base_model: "fake-org/Tiny-Coder" },
+  gguf: { total: 1_000_000_000, architecture: "qwen3", context_length: 32768, chat_template: "{% if tools %}<tool_call>{{ tools }}</tool_call>{% endif %}" },
+  siblings: [{ rfilename: "Tiny-Coder-Q4_K_M.gguf", ...(sizes ? { size: WEIGHTS.length, lfs: { sha256: WEIGHTS_SHA, size: WEIGHTS.length } } : {}) }, { rfilename: "README.md" }],
+});
+function hub(path: string): Response | undefined {
+  if (path === "/api/models") return Response.json([hubModel(false)]);
+  if (path === `/api/models/${HUB_REPO}`) return Response.json(hubModel(true));
+  if (path === `/${HUB_REPO}/resolve/main/Tiny-Coder-Q4_K_M.gguf`) return new Response(WEIGHTS);
+  if (path === `/${HUB_REPO}/raw/main/README.md`) return new Response("---\nlicense: apache-2.0\n---\n# Tiny Coder\n\nA scripted model for niti's tests.");
+  if (path.startsWith("/api/") || path.includes("/raw/main/") || path.includes("/resolve/main/")) return new Response("not found", { status: 404 });
+  return undefined;
+}
+
 Bun.serve({
   port,
   hostname: "127.0.0.1",
   async fetch(req) {
     const url = new URL(req.url);
+    const fromHub = hub(url.pathname);
+    if (fromHub) return fromHub;
     if (url.pathname.endsWith("/models")) return Response.json({ data: [{ id: "fake" }] });
     // What llama-server answers, for scripts/e2e/fakellama.ts standing in for the local runtime.
     if (url.pathname === "/health") return Response.json({ status: "ok" });
@@ -63,6 +93,7 @@ Bun.serve({
     if (JSON.stringify(body.messages ?? []).includes("STEER-MARKER")) log.push("SAW-STEER");
     if (body.id_slot !== undefined) log.push(`LOCAL slot=${body.id_slot} temp=${body.temperature} max=${body.max_tokens}`);
     log.push(JSON.stringify({ stream: !!body.stream, tool: r.tool?.name, text: r.text?.slice(0, 40) }));
+    void flush(); // on every request too: a check reading the log right after a run sees it whole
     const usage = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 };
     if (!body.stream) {
       const message = r.tool
@@ -85,5 +116,7 @@ Bun.serve({
     return new Response(sse, { headers: { "content-type": "text/event-stream" } });
   },
 });
-setInterval(() => Bun.write(`${process.argv[3] ?? "/tmp"}/fakellm.log`, log.join("\n")), 300);
+const logFile = `${process.argv[3] ?? "/tmp"}/fakellm.log`;
+const flush = () => Bun.write(logFile, log.join("\n"));
+setInterval(flush, 300);
 console.log(`fake llm on ${port}`);
