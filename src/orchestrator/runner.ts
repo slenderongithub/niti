@@ -55,7 +55,13 @@ export async function runProject(
   deps: RunnerDeps = {},
 ): Promise<RunResult> {
   const lead = leadOf(agents);
-  const roles: RoleInfo[] = agents.map((a) => ({ id: a.config.id, role: a.config.role, description: a.config.systemPrompt.slice(0, 140) }));
+  // A teammate on a local model its check found can't call tools is "chat only": it gets answers and
+  // reviews, never a task that changes files.
+  const roles: RoleInfo[] = agents.map((a) => ({ id: a.config.id, role: a.config.role, description: a.config.systemPrompt.slice(0, 140), ...(a.localProbe()?.verdict === "chat-only" ? { ready: false } : {}) }));
+  // The plan is made by the lead — unless it's a local model that couldn't split work in its check,
+  // and a teammate could.
+  const canPlan = (a: Agent) => a.localProbe()?.planMode !== "none";
+  const planner = canPlan(lead) ? lead : (agents.find((a) => a !== lead && canPlan(a) && a.localProbe()?.verdict !== "chat-only") ?? lead);
 
   // BUILD on a plan the user just read in PLAN mode: run that DAG. Planning again would bill a
   // second orchestrator call and could hand back a different plan than the one they approved.
@@ -65,7 +71,8 @@ export async function runProject(
   } else {
     bus.publish({ agentId: lead.config.id, type: "thought", payload: `thinking about: ${prompt}`, time: Date.now() });
     const unfinished = orch.all.filter((t) => t.status !== "done").map((t) => `${t.id} (${t.assignedTo ?? "?"}, ${t.status}): ${t.description}`);
-    const plan = await makePlan(lead, prompt, roles, deps.history, unfinished);
+    if (planner !== lead) bus.publish({ agentId: planner.config.id, type: "thought", payload: `planning for ${lead.config.id} (its model couldn't split work in its check)`, time: Date.now() });
+    const plan = await makePlan(planner, prompt, roles, deps.history, unfinished);
     // Not work: say it and stop. "hi" used to be forced into 2-6 invented tasks here.
     if (plan.reply !== undefined) {
       bus.publish({ agentId: lead.config.id, type: "message", payload: plan.reply, time: Date.now() });
@@ -77,7 +84,7 @@ export async function runProject(
       return { kind: "answer", text: answer };
     }
     if (plan.fallback) {
-      bus.publish({ agentId: lead.config.id, type: "warning", protocol: "plan_fallback", payload: `the plan fell back to one task on ${lead.config.id}: ${plan.fallback}`, time: Date.now() });
+      bus.publish({ agentId: lead.config.id, type: "warning", protocol: "plan_fallback", payload: `plan fell back (${plan.fallback}) — ${plan.tasks.length > 1 ? `split by role into ${plan.tasks.length} tasks` : `one task on ${plan.tasks[0]?.assignedTo ?? lead.config.id}`}`, time: Date.now() });
     }
     orch.load(plan.tasks); // shares the Task objects — scheduler mutates them, orch/UI/resume see updates
     for (const t of plan.tasks) {

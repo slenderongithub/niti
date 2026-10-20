@@ -132,33 +132,57 @@ test("a follow-up is planned against the unfinished board, so it adjusts the pla
   expect(seen).toContain("keep the tasks the user still wants");
 });
 
-test("a local lead's plan that keeps every task is spread across the team by role", async () => {
-  const { spreadWork } = await import("./planner.ts");
-  const roles = [
-    { id: "frontend", role: "Frontend", description: "Owns the UI" },
-    { id: "backend", role: "Backend", description: "Owns the server and API" },
-  ];
-  const t = (id: string, description: string, dependsOn: string[] = []) => ({ id, description, status: "pending" as const, role: "frontend", assignedTo: "frontend", dependsOn, handoffTo: [] });
-  const plan = { goal: "coffee shop", tasks: [t("t1", "Create index.html with the menu and hero layout"), t("t2", "Create an Express API server with a /menu endpoint"), t("t3", "Write the README"), t("t4", "Polish", ["t1"])] };
-  const spread = spreadWork(plan, roles);
-  expect(spread.tasks.map((x) => x.assignedTo)).toEqual(["frontend", "backend", "frontend", "frontend"]);
-  expect(spread.tasks[1]!.role).toBe("backend");
-  // A plan that already uses the team is left as it is.
-  const mixed = { ...plan, tasks: [plan.tasks[0]!, { ...plan.tasks[1]!, role: "backend", assignedTo: "backend" }] };
-  expect(spreadWork(mixed, roles)).toBe(mixed);
+const team = [
+  { id: "frontend", role: "Frontend", description: "Owns the UI" },
+  { id: "backend", role: "Backend", description: "Owns the server and API" },
+];
+const localLead = (replies: string[], seen: string[] = []) => {
+  let i = 0;
+  return { config: { id: "backend", provider: "local" }, ask: async (p: string) => (seen.push(p), replies[Math.min(i++, replies.length - 1)]!) };
+};
+
+test("a local lead plans in lines: one per teammate, built into parallel parts and an integration task", async () => {
+  const seen: string[] = [];
+  const goal = "make me a stunning coffee shop landing page for Bean There, end-to-end deployment ready";
+  const plan = await makePlan(localLead(["work", "**frontend**: create index.html and styles.css\n- backend: create server.js and package.json with a start script"], seen) as never, goal, team);
+  expect(plan.fallback).toBeUndefined();
+  expect(plan.tasks.map((t) => [t.id, t.assignedTo, t.dependsOn])).toEqual([["t1", "frontend", []], ["t2", "backend", []], ["t3", "backend", ["t1", "t2"]]]);
+  expect(plan.tasks[0]!.description).toContain("Bean There"); // each part carries the whole request
+  expect(seen[1]).toContain("<id>: <their task>");
 });
 
-test("a local lead is told how to plan for a small model; a cloud lead isn't", async () => {
-  for (const [provider, expectBrief] of [["local", true], ["anthropic", false]] as const) {
-    let prompt = "";
-    const lead = { config: { id: "lead", provider }, ask: async (p: string) => ((prompt = p), '[{"description":"Create index.html","role":"lead"}]') };
-    await makePlan(lead as never, "make a page", [{ id: "lead", role: "Lead" }]);
-    expect(prompt.includes("small model on this computer")).toBe(expectBrief);
-  }
+test("a local lead routes chat and questions in one line", async () => {
+  expect((await makePlan(localLead(["chat: Hey! What are we building?"]) as never, "hi", team)).reply).toBe("Hey! What are we building?");
+  expect((await makePlan(localLead(["question: where is the menu data?"]) as never, "where's the menu data", team)).question).toBe("where is the menu data?");
+  // An answer in no known form is read by the message's shape.
+  expect((await makePlan(localLead(["Sure thing!"]) as never, "hello", team)).reply).toBeDefined();
+});
+
+test("a local lead that can't split the work: the goal is split by role, never all on the lead", async () => {
+  const goal = "make me a stunning coffee shop landing page, end-to-end deployment ready";
+  const plan = await makePlan(localLead(["work", "I will start by designing the layout. Then the server."]) as never, goal, team);
+  expect(plan.fallback).toContain("split by role");
+  expect(plan.tasks.map((t) => t.assignedTo)).toEqual(["frontend", "backend", "backend"]);
+  expect(plan.tasks[0]!.description).toContain("the pages and their look");
+  expect(plan.tasks[1]!.description).toContain("package.json with a start script");
+  // A page with no server or deployment asked for doesn't get one invented.
+  expect((await makePlan(localLead(["work", "?"]) as never, "make a landing page", team)).tasks.map((t) => t.assignedTo)).toEqual(["frontend"]);
+});
+
+test("chat-only teammates never get work that changes files", async () => {
+  const roles = [...team, { id: "reviewer", role: "Frontend helper", ready: false }];
+  const seen: string[] = [];
+  await makePlan(localLead(["work", "frontend: index.html\nbackend: server.js"], seen) as never, "build a site with an api", roles);
+  expect(seen[1]).not.toContain("reviewer"); // not offered work at all
+  const { keepOffChatOnly } = await import("./planner.ts");
+  const t = (role: string, description: string) => ({ id: "t1", description, status: "pending" as const, role, assignedTo: role, dependsOn: [], handoffTo: [] });
+  const plan = keepOffChatOnly({ goal: "g", tasks: [t("reviewer", "Create the stylesheet for the page"), t("reviewer", "Review the server code")] }, roles);
+  expect(plan.tasks.map((x) => x.assignedTo)).toEqual(["frontend", "reviewer"]);
 });
 
 test("a plan that falls back says why", async () => {
   const lead = { config: { id: "lead" }, ask: async () => "Sure! Here is my plan: first I will…" };
+  // (a cloud lead: its fallback is the same role split, which for a one-person team is the goal)
   const plan = await makePlan(lead as never, "build it", [{ id: "lead", role: "Lead" }]);
   expect(plan.tasks.length).toBe(1);
   expect(plan.fallback).toContain("expected");

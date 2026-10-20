@@ -591,7 +591,8 @@ test("a local engine that dies is replaced, and an engine error is recognised fo
 });
 
 test("the model check reads plan lines however they're dressed up", async () => {
-  const { parsePlanLines, callOpeners } = await import("./probe.ts");
+  const { callOpeners } = await import("./probe.ts");
+  const { parsePlanLines } = await import("../orchestrator/planner.ts");
   expect(parsePlanLines("- **frontend**: build index.html\n2. backend — build server.js with /menu\nreviewer: -", ["frontend", "backend", "reviewer"])).toEqual({ frontend: "build index.html", backend: "build server.js with /menu" });
   expect(parsePlanLines("Sure! Here is the plan.", ["frontend"])).toEqual({});
   expect(callOpeners("{% if tools %}<tool_call>{% endif %}")[0]).toBe('<tool_call>\n{"name": "');

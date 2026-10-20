@@ -833,7 +833,7 @@ export class Agent {
   }
 
   // What the model check (src/local/probe.ts) found out about this agent's local model, if any.
-  private localProbe() {
+  localProbe() {
     return this.provider instanceof LocalProvider ? getInstalled(this.config.model)?.probe : undefined;
   }
 
@@ -1005,7 +1005,9 @@ export class Agent {
   // Raw single call, no tools/events — used by the orchestrator to plan and to integrate.
   // `json`: the caller parses the reply as JSON (planner, replan, integrate, the goal judge). The
   // local profile has the runtime constrain the output to JSON, so it parses on the first try.
-  async ask(prompt: string, opts: { json?: boolean } = {}): Promise<string> {
+  // `plan`: a planning step answered in plain lines (the local planner) — recorded like a JSON ask,
+  // and sampled cool on a local model so the lines come out in the asked-for form.
+  async ask(prompt: string, opts: { json?: boolean; plan?: boolean } = {}): Promise<string> {
     // Counted as busy like run()/respond(): the lead planning is the lead working. Without it, a
     // message typed while the plan was being made was refused ("isn't running") and lost; now it
     // queues and is read when this agent's work starts.
@@ -1013,7 +1015,8 @@ export class Agent {
     let reply: ProviderReply;
     // A JSON ask is the lead deciding something (a plan, a recovery, a verdict): kept, so that when
     // it goes wrong the reply that caused it can be read.
-    const sessionId = opts.json ? this.store?.createSession({ agentId: this.config.id, kind: "plan", provider: this.config.provider, model: this.config.model }) : undefined;
+    if (opts.plan && this.provider instanceof LocalProvider) this.provider.next = { temperature: 0.2 };
+    const sessionId = opts.json || opts.plan ? this.store?.createSession({ agentId: this.config.id, kind: "plan", provider: this.config.provider, model: this.config.model }) : undefined;
     try {
       reply = await this.send([{ role: "user", text: prompt }], [], undefined, undefined, opts.json && this.profile.jsonAsks ? "json" : undefined);
     } catch (err) {

@@ -6,6 +6,7 @@
 // model's manifest; the agent protocol (agent.ts) and the planner read them.
 import type { ProviderReply, ToolSpec, Turn } from "../providers/provider.ts";
 import { extractTextToolCalls } from "../agent/toolcalls.ts";
+import { parsePlanLines } from "../orchestrator/planner.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getInstalled, updateManifest, formatOf, modelDir, type InstalledModel, type ProbeResult } from "./store.ts";
@@ -184,21 +185,6 @@ export function templateOf(m: InstalledModel): string {
     // none
   }
   return t;
-}
-
-// "frontend: build index.html…" lines → { frontend: "build index.html…" }. Tolerates bullets, bold,
-// quotes and a leading "- ". A teammate given "-" or "none" gets nothing.
-export function parsePlanLines(text: string, ids: string[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const raw of text.split("\n")) {
-    const line = raw.replace(/^[\s>*\-•\d.)]*/, "").replace(/\*\*/g, "").replace(/`/g, "").trim();
-    const m = /^([\w-]+)\s*[:—–-]\s*(.+)$/.exec(line);
-    if (!m) continue;
-    const id = ids.find((x) => x.toLowerCase() === m[1]!.toLowerCase());
-    const task = m[2]!.trim().replace(/^["']|["']$/g, "");
-    if (id && !out[id] && task && !/^(-|none|nothing|n\/a)$/i.test(task)) out[id] = task;
-  }
-  return out;
 }
 
 // One check per model at a time, run before the model's first agent request when it has none (or an

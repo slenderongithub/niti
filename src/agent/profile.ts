@@ -35,8 +35,6 @@ export interface Profile {
   // then withheld from the history. Small models answer "implement X" with prose, paste files into
   // the chat, and say "done" after a stub; this is the format that leaves them no room to.
   actionProtocol: boolean;
-  // A plan that hands every task to one teammate is spread across the team by role.
-  spreadPlan: boolean;
 }
 
 export const STANDARD: Profile = {
@@ -55,7 +53,6 @@ export const STANDARD: Profile = {
   jsonAsks: false,
   shellNetwork: true,
   actionProtocol: false,
-  spreadPlan: false,
 };
 
 // Short, imperative, one idea per line: the same conventions as TOOL_GUIDANCE (stay in the project,
@@ -92,7 +89,6 @@ export const LOCAL: Profile = {
   jsonAsks: true,
   shellNetwork: false,
   actionProtocol: true,
-  spreadPlan: true,
 };
 
 // An explicit `profile:` wins. Otherwise the models served on this Mac — niti's own runtime, Ollama,

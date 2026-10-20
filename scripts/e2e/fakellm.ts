@@ -24,6 +24,19 @@ function script(body: any): { text?: string; tool?: { name: string; args: unknow
   // niti's one-time model check (src/local/probe.ts): a model that calls tools and can plan.
   if (lastText.includes("Create a file named hello.txt") && !hasToolResult) return { tool: { name: "write_file", args: { path: "hello.txt", content: "hi" } } };
   if (lastText.includes("Write exactly one line per teammate")) return { text: "frontend: build index.html and styles.css for the todo list\nbackend: build server.js with a /todos API" };
+  // The local planner's two stages (planner.ts makeLocalPlan): the kind of message, then a line each.
+  if (lastText.endsWith("Your line:")) {
+    const goal = lastText.split("User's message: ")[1]?.split("\n")[0] ?? "";
+    if (/^(hi|hello)/i.test(goal)) return { text: "chat: Hello! What should we build?" };
+    if (goal.trim().endsWith("?")) return { text: `question: ${goal}` };
+    return { text: "work" };
+  }
+  if (lastText.endsWith("Your lines:")) {
+    const goal = lastText.split("User's request: ")[1]?.split("\n")[0] ?? "";
+    const ids = [...lastText.matchAll(/^  ([\w-]+) — /gm)].map((m) => m[1]!);
+    if (goal.includes("CALL:")) return { text: ids.map((id) => (id === "backend" ? `backend: ${goal}` : `${id}: -`)).join("\n") };
+    return { text: ids.map((id, i) => `${id}: ${i === 0 ? "create index.html with a heading" : "create style.css"}`).join("\n") };
+  }
   if (lastText.includes("talking with the user")) {
     const goal = lastText.split("User's message: ")[1]?.split("\n")[0] ?? "";
     if (/^(hi|hello)/i.test(goal)) return { text: JSON.stringify({ reply: "Hello! What should we build?" }) };

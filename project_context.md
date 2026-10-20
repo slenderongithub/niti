@@ -100,10 +100,17 @@ in one disappears from the others (the core answers by id; a second answer gets 
    A turn that still isn't an action (or a `finish` before any work, or a second checklist instead of
    work) is refused: a stub replaces it in the history, the chat never shows it, and three in a row
    fail the task. Silence after real work counts as `finish`. Thinking is on for a task's first turn
-   and right after a refusal only. A chat-only model (`probe.verdict`) runs without the protocol. A
-   local lead gets a planning brief (1-3
-   concrete file-producing tasks, no invented testing or deployment, work split by role), and a plan
-   that still gives every task to one teammate is spread by role (`spreadWork`). An engine that dies
+   and right after a refusal only. A chat-only model (`probe.verdict`) runs without the protocol.
+   A local lead plans in stages (`makeLocalPlan`), with plain-line asks recorded and sampled at 0.2:
+   - it says what the message is in one line (`work`, `question: …`, `chat: …`; `parseRoute`);
+   - it writes one line per ready teammate, `<id>: <task naming its files>` (`parsePlanLines`);
+   - niti builds the graph: the parts in parallel, each carrying the whole request, then an
+     integration task on the lead that checks the seams (linked files, routes, run steps).
+   If the lines don't come, `rolePlan` splits the goal by role (UI, server and deployment, tests,
+   docs) from the goal's own words. A cloud lead's failed plan falls back to the same split. The
+   lead plans unless its model couldn't split work in its check and a teammate's could. Chat-only
+   teammates are offered to the planner as "answers and reviews only", and a file-changing task
+   given to one moves to the best-fitting ready teammate (`keepOffChatOnly`). An engine that dies
    under a request (the MLX server's generation thread) is restarted and the request retried once;
    the MLX server's errors go to `mlx-server.log`, and agents batch on it only when two contexts fit.
    `/model` rebuilds the prompt for the new model's profile.
