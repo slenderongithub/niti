@@ -91,8 +91,9 @@ in one disappears from the others (the core answers by id; a second answer gets 
    real ones, and the planner, replanner, integrate and goal judge get JSON (grammar-constrained on
    llama.cpp, sampled at 0.2 everywhere). A local task runs the **action protocol**
    (`actionProtocol`, `Agent.localTurn`): every turn is one tool call and `finish({summary})` is the
-   only way to end the task. A model its check found to call tools only when made to is forced from
-   the first turn (llama.cpp `tool_choice: "required"`; on MLX the reply is started with its call
+   only way to end the task. Protocol turns don't stream their text (a call written as text would
+   show in the chat as raw JSON); the call shows when it runs. A model its check found to call tools
+   only when made to is forced from the first turn (llama.cpp `tool_choice: "required"`; on MLX the reply is started with its call
    opener, `probe.prefill`). For any other model, a reply without a call is handled in order:
    - a fenced file labelled with its name is saved through `write_file` (`salvageFiles`);
    - a bare "done" becomes `finish`;
@@ -221,7 +222,9 @@ in one disappears from the others (the core answers by id; a second answer gets 
     tools through the API (`native`), only when forced (llama.cpp `tool_choice: "required"`, or on MLX
     a reply started in its own call shape, `prefill`), only as text niti reads (`text`), or not at all;
     whether it can split work one line per teammate (`planMode`); which template tokens it leaks
-    (`stops`, sent as stop sequences from then on). The verdict (`ready`, `partial`, `chat-only`) and
+    (`stops`, sent as stop sequences from then on). A started reply is put back together by
+    `joinPrefill`: the MLX server answers it afresh for some templates (the whole call again), so
+    whichever of `opener + reply` or the reply alone reads as a call is kept. The verdict (`ready`, `partial`, `chat-only`) and
     the notes are on the manifest's `probe`; `models doctor` prints them with the engines' recent
     errors. Local requests always stop at template tokens and strip any that slip through.
     **Found on this Mac** (`discover.ts`): models in LM Studio's folders and the Hugging Face cache
@@ -391,7 +394,9 @@ The personas:
 - `badplanner`: can't route or split work;
 - `todo`: rewrites its checklist instead of working;
 - `lazy`: ships Arial first and fixes it when the checks say so;
-- `chatty`: never calls a tool, even forced.
+- `chatty`: never calls a tool, even forced;
+- `needsforce`: describes the call in prose unless the engine makes it call (Qwen2.5-Coder on MLX).
+The fake MLX engine, like the real one, answers a started reply afresh instead of continuing it.
 Forced turns behave as on the real engines. `scripts/e2e/local-matrix.ts` runs a real core on the
 coffee-shop goal with a two-agent team of them. It checks:
 - a plan with work for every teammate that can build, before work starts;

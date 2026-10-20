@@ -680,3 +680,14 @@ test("team fit: two 6 GB models on a 10 GB budget take turns; one model on two a
   const r = await api.handle("/local/team-fit", "POST", new URL("http://x/local/team-fit"), async () => ({ models: ["fake/Big-A-GGUF:Q4_K_M", "fake/Big-B-GGUF:Q4_K_M"] }));
   expect(((await r!.json()) as { models: unknown[] }).models.length).toBe(2);
 });
+
+test("a started reply is put back together whether or not the engine continued it", async () => {
+  const { joinPrefill } = await import("./provider.ts");
+  const names = ["write_file", "finish"];
+  const opener = '<tool_call>\n{"name": "';
+  // Continued: the rest of the call.
+  expect(joinPrefill(opener, 'write_file", "arguments": {"path": "a", "content": "b"}}\n</tool_call>', names)).toStartWith("<tool_call>");
+  // Started afresh (the MLX server, Qwen2.5-Coder): the whole call again, pretty-printed.
+  const fresh = '{\n  "name": "write_file",\n  "arguments": {\n    "path": "server.js",\n    "content": "const x = `${1}`;\\n"\n  }\n}';
+  expect(joinPrefill(opener, fresh, names)).toBe(fresh);
+});

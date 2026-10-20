@@ -887,7 +887,10 @@ export class Agent {
   //      prose reply never enters the history.
   // Thinking (for models that have it) is on for a task's first turn and right after a refusal, and
   // off for the routine turns between, where it only burned the output budget.
-  private async localTurn(turns: Turn[], tools: ToolSpec[], onDelta: OnDelta | undefined, think: boolean): Promise<ProviderReply> {
+  // No streaming: a turn here is a tool call, and one written as text would stream into the chat as
+  // raw JSON or XML. The call shows when it runs.
+  private async localTurn(turns: Turn[], tools: ToolSpec[], _onDelta: OnDelta | undefined, think: boolean): Promise<ProviderReply> {
+    const onDelta = undefined;
     const provider = this.provider instanceof LocalProvider ? this.provider : undefined;
     const probe = this.localProbe();
     const mlx = getInstalled(this.config.model)?.format === "mlx";

@@ -8,6 +8,7 @@ import { OpenAIProvider } from "../providers/openai.ts";
 import { localRuntime, type LocalRuntime } from "./runtime.ts";
 import { formatOf, getInstalled, type InstalledModel, type Sampling } from "./store.ts";
 import { ensureProbed, PROBE_VERSION } from "./probe.ts";
+import { extractTextToolCalls } from "../agent/toolcalls.ts";
 
 // When the model's authors published nothing: what the Qwen, Gemma and Llama cards converge on for
 // agentic work. Never greedy — at temperature 0 small models fall into repeating themselves.
@@ -49,6 +50,17 @@ export interface TurnOptions {
 // Chat-template tokens a model sometimes writes past its end of turn. They are never content.
 export const TEMPLATE_TOKENS = ["<|im_start|>", "<|im_end|>", "<|endoftext|>", "<|eot_id|>", "<|start_header_id|>", "<|end_header_id|>", "<end_of_turn>", "<start_of_turn>", "<|end|>", "<|user|>", "<|assistant|>"];
 export const stripTemplateTokens = (t: string): string => TEMPLATE_TOKENS.reduce((s, tok) => s.split(tok).join(""), t).replace(/\n{3,}/g, "\n\n");
+
+// A reply niti started for the model, put back together. An engine that continues the started
+// message returns the rest of it; one that doesn't (the MLX server, for some templates) starts a
+// fresh reply — often the whole call again — and gluing the opener on front breaks it. Whichever
+// reads as a tool call wins; failing both, the joined text.
+export function joinPrefill(prefill: string, rest: string, toolNames: string[]): string {
+  const joined = prefill + rest;
+  if (extractTextToolCalls(joined, toolNames)) return joined;
+  if (extractTextToolCalls(rest, toolNames)) return rest;
+  return joined;
+}
 
 export const engineDied = (err: unknown): boolean => /generation thread died|ECONNREFUSED|ECONNRESET|socket hang up|Connection error|fetch failed/i.test(err instanceof Error ? err.message : String(err));
 
@@ -120,8 +132,7 @@ export class LocalProvider implements Provider {
     this.runtime.begin(this.model);
     try {
       const reply = await this.inner.provider.send(sysPrompt, sent, tools, onDelta, signal, think);
-      const text = stripTemplateTokens(turn.prefill ? turn.prefill + reply.text : reply.text);
-      return { ...reply, text };
+      return { ...reply, text: stripTemplateTokens(turn.prefill ? joinPrefill(turn.prefill, reply.text, tools.map((t) => t.name)) : reply.text) };
     } catch (err) {
       // An engine that died under the request (the MLX server's generation thread, a crashed
       // llama-server) answers every later request with the same error. Restart it and try once more.

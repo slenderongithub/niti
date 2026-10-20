@@ -22,6 +22,7 @@ export const PERSONAS = [
   "todo", // rewrites its checklist before doing anything
   "lazy", // ships Arial on white first, styles properly once told what's missing
   "chatty", // never calls a tool, even when forced: chat only
+  "needsforce", // describes the call in prose unless the engine makes it call (Qwen2.5-Coder on MLX)
 ] as const;
 export type Persona = (typeof PERSONAS)[number];
 
@@ -178,6 +179,8 @@ function dress(a: Action, persona: Persona, firstTurn: boolean): Reply {
       return firstTurn ? { text: "Here's my plan:\n1. Write the markup with a hero, menu and visit section.\n2. Style it with a warm palette.\n3. Wire up the menu from the API.\nLet me know if that works!" } : { tool: a };
     case "empty":
       return a.name === "finish" ? { text: "" } : { tool: a };
+    case "needsforce":
+      return { text: `I'll ${a.name === "write_file" ? `write ${a.args.path}` : a.name === "finish" ? "wrap up" : a.name.replace("_", " ")} next.` };
     case "chatty":
       return { text: `To do this, you could ${a.name === "write_file" ? `create ${a.args.path}` : "check the files"} yourself. Happy to explain more!` };
     default:
@@ -230,7 +233,11 @@ export function zooReply(persona: Persona, body: any): Reply {
   const prefill = last?.role === "assistant" ? textOf(last) : undefined;
   if (persona !== "chatty") {
     if (body.tool_choice === "required") return { tool: action };
-    if (prefill) return { text: continuePrefill(prefill, action) };
+    if (prefill) {
+      // An engine that doesn't continue a started reply writes the whole call again, pretty-printed.
+      if (process.env.NITI_FAKE_FRESH_PREFILL === "1") return { text: JSON.stringify({ name: action.name, arguments: action.args }, null, 2) };
+      return { text: continuePrefill(prefill, action) };
+    }
   }
   const firstTurn = !msgs.some((m) => m.role === "assistant" && !String(textOf(m)).startsWith("(reply withheld"));
   const r = dress(action, persona, firstTurn);
