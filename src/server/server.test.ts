@@ -553,3 +553,24 @@ test("POST /approval with an id answers that request, and is a 409 once it's gon
   expect((await answer({ ok: true })).status).toBe(200);
   expect(await a).toBe(true);
 });
+
+test("/websearch saves a Tavily key only after it works, never returns it, and removes it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "niti-srv-"));
+  process.env.NITI_AUTH_FILE = join(dir, "auth.json");
+  try {
+    const engine = new Engine({ configs: [], makeProvider: () => ({ send: async () => ({ text: "", toolCalls: [] }) }), interactive: false });
+    const h = track(startServer(engine, { testSearchKey: async (k) => (k === "tvly-good" ? undefined : "the saved Tavily key was refused") }));
+    const call = (method: string, body?: unknown) => fetch(`${h.url}/websearch?token=${h.token}`, { method, headers: { "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    expect(await (await call("GET")).json()).toEqual({ configured: false, saved: false });
+    const bad = await call("POST", { key: "tvly-bad" });
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error).toContain("refused");
+    expect(await (await call("POST", { key: "tvly-good" })).json()).toEqual({ ok: true, configured: true });
+    expect(await (await call("GET")).json()).toEqual({ configured: true, saved: true });
+    expect(JSON.stringify(await (await fetch(`${h.url}/auth?token=${h.token}`)).json())).not.toContain("tvly-good");
+    expect((await (await call("DELETE")).json()).configured).toBe(false);
+  } finally {
+    delete process.env.NITI_AUTH_FILE;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

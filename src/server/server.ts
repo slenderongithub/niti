@@ -13,7 +13,8 @@ import { costOf } from "../providers/pricing.ts";
 import { buildFileGraph, trackedFiles, projectFiles, ignored } from "../graph/filegraph.ts";
 import { safePath } from "../tools/tools.ts";
 import { normalizePath } from "../permissions.ts";
-import { listCredentials, setCredential, removeCredential, type AuthCredential } from "../auth/auth-store.ts";
+import { listCredentials, setCredential, removeCredential, getCredential, type AuthCredential } from "../auth/auth-store.ts";
+import { webSearchConfigured, testTavilyKey } from "../tools/web.ts";
 import { saveAgents, setTheme, setAuto, setOption, PREF_DEFAULTS, type PrefKey } from "../config/config.ts";
 import { CommandRegistry } from "../commands/registry.ts";
 import type { AgentConfig } from "../agent/agent.ts";
@@ -64,6 +65,7 @@ export function startServer(
     prefs?: Partial<Record<PrefKey, boolean>>; // Config-tab flags from agents.yaml
     makeProvider?: typeof makeProvider;
     localFetch?: typeof fetch; // the Hub, for /local/* (tests serve a fixture)
+    testSearchKey?: (key: string) => Promise<string | undefined>; // POST /websearch's check (tests: no network)
   } = {},
 ): ServerHandle {
   const token = opts.token ?? crypto.randomUUID();
@@ -549,6 +551,22 @@ export function startServer(
         const prov = u.searchParams.get("provider") ?? "";
         removeCredential(prov);
         return json({ ok: true });
+      }
+
+      // Web search (Tavily): whether a key is saved, save one after testing it, or remove it. The
+      // key itself never comes back out — not here, not in /auth's redacted list, not to a phone.
+      if (p === "/websearch" && method === "GET") return json({ configured: webSearchConfigured(), saved: getCredential("tavily") !== undefined });
+      if (p === "/websearch" && method === "POST") {
+        const { key } = (await readBody(req)) as { key?: string };
+        if (typeof key !== "string" || !key.trim()) return json({ error: "expected {key}" }, 400);
+        const bad = await (opts.testSearchKey ?? testTavilyKey)(key.trim());
+        if (bad) return json({ error: bad }, 400);
+        setCredential({ provider: "tavily", type: "api", key: key.trim() });
+        return json({ ok: true, configured: true });
+      }
+      if (p === "/websearch" && method === "DELETE") {
+        removeCredential("tavily");
+        return json({ ok: true, configured: webSearchConfigured() });
       }
 
       if (p === "/worktree" && method === "GET") {

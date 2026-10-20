@@ -12,6 +12,7 @@ import { AuditLog } from "./store/audit-log.ts";
 import { checkTrust, grantTrust } from "./trust/trust-store.ts";
 import { serveMain, buildEngine } from "./server/main.ts";
 import { setCredential, removeCredential, listCredentials } from "./auth/auth-store.ts";
+import { testTavilyKey } from "./tools/web.ts";
 import { CATALOG, providerKeys } from "./providers/catalog.ts";
 import type { AgentConfig } from "./agent/agent.ts";
 import type { AgentEvent } from "./events/bus.ts";
@@ -379,6 +380,17 @@ function onShutdown(engine?: Engine, server?: { stop: () => void }): void {
 // One provider through the opencode-style flow: pick auth method by category, validate-on-first-use.
 async function authLogin(providerArg?: string): Promise<void> {
   const provider = (providerArg || prompt("Provider id (e.g. openai, anthropic, google, github-copilot):")?.trim() || "").trim();
+  // Not a model provider: the key for agents' web_search (src/tools/web.ts).
+  if (provider === "tavily") {
+    console.log("Web search uses Tavily. A free key (1,000 searches a month, no card) is at https://app.tavily.com");
+    const key = await promptSecret("Tavily API key:");
+    if (!key) die("no key entered");
+    const bad = await testTavilyKey(key!);
+    if (bad) die(bad);
+    setCredential({ provider: "tavily", type: "api", key: key! });
+    console.log("Saved. Agents with the web tools can now search.");
+    return;
+  }
   const entry = CATALOG[provider];
   if (!entry) die(`unknown provider '${provider}'. Try one of: ${providerKeys().slice(0, 16).join(", ")}, …`);
   if (entry!.client === "copilot") {

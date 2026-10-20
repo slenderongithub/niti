@@ -124,6 +124,15 @@ in one disappears from the others (the core answers by id; a second answer gets 
     reboot or a dead watchdog: if it is still off, it asks for admin once and turns it back on.
 12. **LSP and MCP** side by side in the tool list; a missing server is a message, never a crash.
     `watch.ts` reports edits made outside niti.
+    **The web** (`tools/web.ts`, `web` in `allowedTools` grants all three): `web_fetch` reads a page
+    as markdown (main content only, 3 MB and 12k characters by default, public addresses only:
+    names are resolved and private, loopback and link-local answers refused on every redirect hop);
+    `lookup` answers from npm, PyPI, crates.io, the Go proxy, GitHub (repo, `owner/repo#n`, a file),
+    Stack Overflow and Wikipedia with no key; `web_search` (Tavily, basic depth, one credit) is offered
+    only once a key is saved under `tavily` (`POST /websearch`, `niti-core auth login tavily`, or
+    `TAVILY_API_KEY`). The free plan is 1,000 credits a month with no card, so it can't bill; past
+    that, searches fail until the month resets. Every web call asks, even under `--auto` (the auto
+    layer is skipped for them); a session or agent grant, or a `permissions:` rule, can allow them.
 13. **Local models** (`local/*`, provider `local`). niti downloads GGUF models from the Hugging Face
     Hub and runs them itself with llama.cpp's `llama-server`, bundled beside `niti-core` (no Ollama or
     LM Studio). `catalog.ts` reads the Hub live (one list request with `expand[]=gguf` carries
@@ -151,7 +160,7 @@ in one disappears from the others (the core answers by id; a second answer gets 
 | `orchestrator/*` | Planner, scheduler, runner, the task queue, file and shell locks, worktrees |
 | `messaging/message-bus.ts` | Agent ↔ agent messages |
 | `providers/*` | Model clients, the catalog, pricing |
-| `tools/*` | `read_file`, `write_file`, `edit`, `shell`, `grep`, `glob`, `list_dir`, LSP tools; output condensing |
+| `tools/*` | `read_file`, `write_file`, `edit`, `shell`, `grep`, `glob`, `list_dir`, LSP tools; output condensing; the web tools (`web.ts`) |
 | `approval.ts`, `permissions.ts`, `sandbox.ts`, `secrets.ts`, `trust/` | The safety layer |
 | `store/*` | SQLite sessions, checkpoints, the audit log; `.niti/.gitignore` |
 | `goal.ts`, `awake.ts` | `/goal` and `/awake` |
@@ -225,6 +234,8 @@ Local only (127.0.0.1), a fresh bearer token per launch, handed over in the core
   `GET /worktree`, `GET /worktree/hunks`, `POST /worktree/merge|discard`, `GET /checkpoints`.
 - **Setup**: `GET /providers`, `GET /models`, `GET/POST/DELETE /auth`, `POST /auto`,
   `POST /settings`, `POST /theme`, `GET /stats`, `GET /sessions`, `POST /complete`, `POST /embed`.
+- **Web search**: `GET /websearch` (`{configured, saved}`), `POST /websearch {key}` (tested with one
+  search, then saved; the key never comes back out), `DELETE /websearch`.
 - **Local models** (never on the phone bridge): `GET /local/device`, `GET /local/catalog?tab=recommended|all&q&sort&tools&fits&size`,
   `GET /local/catalog/model?repo=`, `GET /local/models` (installed + active downloads),
   `DELETE /local/models?id=`, `POST /local/download {repo, quant}`, `POST /local/download/cancel {id}`,

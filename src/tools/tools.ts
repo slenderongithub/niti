@@ -968,9 +968,14 @@ Working habits:
 const SEARCH_TOOLS = ["list_dir", "glob", "grep", "repo_map"];
 
 export function expandTools(allowed: string[]): string[] {
-  if (!allowed.includes("read_file")) return allowed;
-  const missing = SEARCH_TOOLS.filter((t) => !allowed.includes(t));
-  return missing.length > 0 ? [...allowed, ...missing] : allowed;
+  let out = allowed;
+  if (out.includes("read_file")) {
+    const missing = SEARCH_TOOLS.filter((t) => !out.includes(t));
+    if (missing.length) out = [...out, ...missing];
+  }
+  // `web` is shorthand for the three web tools (src/tools/web.ts).
+  if (out.includes("web")) out = [...out.filter((t) => t !== "web"), ...["web_fetch", "lookup", "web_search"].filter((t) => !out.includes(t))];
+  return out;
 }
 
 // Appended after TOOL_GUIDANCE for a hashline agent: TOOL_GUIDANCE's "copy oldString exactly" line

@@ -13,6 +13,8 @@ import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, normalizePath, projectRelative, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
 import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, applyAnchoredEdit, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS, BUILTIN_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
+import { webToolSpecs, runWebTool, webSearchConfigured, WEB_TOOLS } from "../tools/web.ts";
+import { AUTO_RULES } from "../permissions.ts";
 import { isSecretPath, shellTouchesSecret } from "../secrets.ts";
 import type { LspRegistry } from "../lsp/registry.ts";
 import { readFile, writeFile } from "node:fs/promises";
@@ -1020,7 +1022,9 @@ export class Agent {
   private buildTools(allowed: string[], ctx: LoopCtx): ToolSpec[] {
     const peers = this.messenger?.peers(this.config.id) ?? [];
     const profile = this.profile;
-    const key = [profile.name, allowed.join(","), ctx.forkDepth, ctx.askDepth, peers.map((p) => p.id).join(",")].join("|");
+    // web_search appears once a Tavily key is saved — mid-session too, so it is part of the key.
+    const search = webSearchConfigured();
+    const key = [profile.name, allowed.join(","), ctx.forkDepth, ctx.askDepth, peers.map((p) => p.id).join(","), search].join("|");
     if (this.toolsCache?.key === key) return this.toolsCache.specs;
 
     // Three independent tool sources, concatenated: the sandbox, MCP servers, and LSP servers.
@@ -1030,7 +1034,7 @@ export class Agent {
     // entirely, so an agent restricted to `read_file` was still handed every write tool of every
     // configured MCP server — a field named allowedTools that did not bound the tools.
     // `"mcp"` in the list is the opt-in for "all of them", so the common case stays one word.
-    const specs = [...toolSpecs(allowed, { hashline: this.config.editFormat === "hashline" }), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)].filter((t) => !profile.dropTools.includes(t.name));
+    const specs = [...toolSpecs(allowed, { hashline: this.config.editFormat === "hashline" }), ...webToolSpecs(allowed, search), ...this.allowedMcpSpecs(allowed), ...lspToolSpecs(this.lsp)].filter((t) => !profile.dropTools.includes(t.name));
     // Offered even once the breadth budget is spent — fork() refuses it at call time instead.
     // Dropping it mid-task changed the tool list, which sits first in Anthropic's cache prefix, so
     // the whole cached conversation was rewritten at 1.25× on the next call.
@@ -1353,7 +1357,7 @@ export class Agent {
     if (spec) {
       const bad = checkArgs(spec, call.input);
       if (bad) return refuse(bad, bad.replace(/^error: /, ""));
-    } else if (!(this.mcp?.has(call.name) ?? false) && !BUILTIN_TOOLS.has(call.name) && !LSP_TOOLS.has(call.name)) {
+    } else if (!(this.mcp?.has(call.name) ?? false) && !BUILTIN_TOOLS.has(call.name) && !LSP_TOOLS.has(call.name) && !WEB_TOOLS.has(call.name)) {
       // A name that is no tool at all. A real tool this agent wasn't given falls through to the
       // allowedTools gate below, which says exactly that.
       return refuse(unknownToolMessage(call.name, offered.map((t) => t.name)), `${call.name}: not a tool this agent has`);
@@ -1441,7 +1445,11 @@ export class Agent {
       diff = writeFileDiff(before ?? null, String(call.input.content ?? ""));
     }
     // agent config → project config (+ --auto) → built-in safe-shell allowlist → built-in defaults → "ask".
-    const decision = resolvePermission([this.config.permissions, ...this.permissionLayers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input, this.root);
+    // The web tools skip --auto: what leaves this Mac is asked about every time unless the user
+    // grants it for the agent or the session, or a permissions: block allows it by name.
+    const network = WEB_TOOLS.has(call.name);
+    const layers = network ? this.permissionLayers.filter((l) => l !== AUTO_RULES) : this.permissionLayers;
+    const decision = resolvePermission([this.config.permissions, ...layers, SAFE_SHELL_RULES, DEFAULT_RULES], call.name, call.input, this.root);
     // A deny is policy, not a question: it short-circuits without queuing an approval, and it holds
     // in headless mode too (where there is no approver and everything else would just run).
     if (decision === "deny") {
@@ -1489,6 +1497,8 @@ export class Agent {
         output = await this.mcp!.call(call.name, call.input);
       } else if (LSP_TOOLS.has(call.name) && this.lsp) {
         output = await runLspTool(this.lsp, call.name, call.input, this.root);
+      } else if (WEB_TOOLS.has(call.name)) {
+        output = await runWebTool(call.name, call.input);
       } else {
         const sandboxCall = toSandboxCall(call);
         // Keyed on the *resolved* path: `src/api.ts`, `./src/api.ts` and `src/../src/api.ts` are
