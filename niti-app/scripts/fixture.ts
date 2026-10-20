@@ -58,6 +58,7 @@ export async function fixture(opts: { agents?: string[]; chunked?: boolean } = {
     NITI_OFFLINE: "1",
     NITI_MODELS_FILE: join(state, "models.json"),
     NITI_VERSION_FILE: join(state, "version.json"),
+    NITI_LOCAL_MODELS_DIR: join(state, "local-models"), // a test core never fills the real models folder
   };
   return {
     project,
