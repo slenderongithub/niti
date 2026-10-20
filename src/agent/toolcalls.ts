@@ -203,3 +203,26 @@ export function splitThinking(text: string, bareClose = false): { thinking: stri
   }
   return { thinking: "", answer: text };
 }
+
+// Files a model pasted into its reply instead of writing them: each fenced block that is clearly
+// labelled with a file name — on the line just before it ("**index.html**", "Create `styles.css`:"),
+// or in a comment on its own first line (<!-- index.html -->, /* styles.css */, // app.js, # main.py)
+// — becomes a write_file call. Unlabelled blocks are left alone: guessing a path would overwrite the
+// wrong file.
+const FILE = /(?:^|[\s`*"'(])((?:[\w.-]+\/)*[\w.-]+\.(?:html?|css|scss|js|mjs|cjs|jsx|ts|tsx|json|py|md|txt|ya?ml|toml|sh|go|rs|java|rb|php|svelte|vue|sql|env\.example))(?=$|[\s`*"'):,])/i;
+export function salvageFiles(text: string): ToolCall[] {
+  const calls: ToolCall[] = [];
+  const seen = new Set<string>();
+  const re = /```[\w+-]*[^\n]*\n([\s\S]*?)```/g;
+  for (const m of text.matchAll(re)) {
+    const body = m[1]!;
+    const before = text.slice(0, m.index).trimEnd().split("\n").at(-1) ?? "";
+    const firstLine = body.split("\n")[0] ?? "";
+    const fromComment = /^\s*(?:<!--|\/\*|\/\/|#)\s*(.+?)\s*(?:-->|\*\/)?\s*$/.exec(firstLine)?.[1];
+    const path = (fromComment && FILE.exec(` ${fromComment}`)?.[1]) || FILE.exec(` ${before}`)?.[1];
+    if (!path || seen.has(path) || body.trim().length < 20) continue;
+    seen.add(path);
+    calls.push({ id: `salvaged-${crypto.randomUUID().slice(0, 8)}`, name: "write_file", input: { path, content: body.endsWith("\n") ? body : `${body}\n` } });
+  }
+  return calls;
+}

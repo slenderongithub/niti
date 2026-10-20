@@ -89,11 +89,19 @@ in one disappears from the others (the core answers by id; a second answer gets 
    (the same call 3× is nudged, 5× ends the run), tool calls written as text (`<tool_call>`,
    `<function=…>`, `<function>{…}</function>`, or a JSON call on its own line after a sentence) run as
    real ones, and the planner, replanner, integrate and goal judge get JSON (grammar-constrained on
-   llama.cpp, sampled at 0.2 everywhere). Small models answer "build X" with a plan in prose, so a
-   local work task isn't done until the agent has called a tool: a reply that only describes is
-   sent back twice (`actNudge`), then the task fails rather than passing; the first "done" of a task
-   that wrote files is answered with the task to check against (`selfCheckNudge`); an empty reply
-   after real work is asked once, then counts as done. A local lead gets a planning brief (1-3
+   llama.cpp, sampled at 0.2 everywhere). A local task runs the **action protocol**
+   (`actionProtocol`, `Agent.localTurn`): every turn is one tool call and `finish({summary})` is the
+   only way to end the task. A model its check found to call tools only when made to is forced from
+   the first turn (llama.cpp `tool_choice: "required"`; on MLX the reply is started with its call
+   opener, `probe.prefill`). For any other model, a reply without a call is handled in order:
+   - a fenced file labelled with its name is saved through `write_file` (`salvageFiles`);
+   - a bare "done" becomes `finish`;
+   - anything else is asked again with the call forced.
+   A turn that still isn't an action (or a `finish` before any work, or a second checklist instead of
+   work) is refused: a stub replaces it in the history, the chat never shows it, and three in a row
+   fail the task. Silence after real work counts as `finish`. Thinking is on for a task's first turn
+   and right after a refusal only. A chat-only model (`probe.verdict`) runs without the protocol. A
+   local lead gets a planning brief (1-3
    concrete file-producing tasks, no invented testing or deployment, work split by role), and a plan
    that still gives every task to one teammate is spread by role (`spreadWork`). An engine that dies
    under a request (the MLX server's generation thread) is restarted and the request retried once;

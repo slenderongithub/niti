@@ -24,27 +24,25 @@ import { StallGuard, RepeatGuard, stallNudge, recurringNudge, repeatNudge } from
 import { condenseForModel, shellCommandLine } from "../tools/condense.ts";
 import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations } from "./context.ts";
 import { profileFor, type Profile } from "./profile.ts";
-import { checkArgs, extractTextToolCalls, unknownToolMessage } from "./toolcalls.ts";
+import { checkArgs, extractTextToolCalls, salvageFiles, unknownToolMessage } from "./toolcalls.ts";
+import { LocalProvider } from "../local/provider.ts";
+import { getInstalled } from "../local/store.ts";
 import { createHash } from "node:crypto";
 import { defaultSettings, type RuntimeSettings } from "../settings.ts";
 import { runChecks, checkSurface, enforcerFiles, taskEditsCheckFile, failureMessage, type Check, type CheckRole } from "./verify.ts";
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 
-// Sent back to a model that answered a work task with a description of it (the local profile's
-// requireAction). Concrete, because "use your tools" is what it already failed to act on.
-export function actNudge(n: number): string {
+// Sent back to a model whose turn wasn't an action (the local action protocol). Concrete, because
+// "use your tools" is what it already failed to act on.
+export function actNudge(n: number, premature = false, todoAgain = false): string {
+  const why = premature
+    ? "You called finish, but nothing has been done yet."
+    : todoAgain
+      ? "You rewrote the checklist again instead of doing the next step."
+      : "Your reply wasn't a tool call. Every reply must be exactly one tool call.";
   return n === 1
-    ? "[niti: Nothing has been done yet — you described the work instead of doing it. Do the first step now, as a tool call: to create a file call write_file with its path and complete content; to change one, read_file then edit; to run something, shell. Reply with the tool call only, not a plan.]"
-    : "[niti: Still nothing done. This is the last reminder before the task fails. Call write_file (or edit, or shell) now — no explanation, just the call.]";
-}
-
-// The local profile's one check before a task that changed files is done.
-export function selfCheckNudge(task: string): string {
-  return (
-    `[niti: Before you finish, check your work against the task:\n"${task.slice(0, 1500)}"\n` +
-    `Go through each thing it asks for. If any of it is missing from the files, or is only a placeholder or a stub, ` +
-    `keep working now with tool calls (write_file with the complete content, or edit). If every part is really done, reply DONE and one sentence on what you made.]`
-  );
+    ? `[niti: ${why} Do the next step now: to create a file call write_file with its path and complete content; to change one, read_file then edit; to run something, shell. Call finish only when everything the task asks for is in the files.]`
+    : `[niti: ${why} This is the last reminder before the task fails. Make the tool call now.]`;
 }
 
 // Told to the model when its reply hit the output-token limit, in place of running anything in it.
@@ -430,6 +428,8 @@ interface LoopCtx {
   // a file is still writing it.
   checkBaseline?: Map<string, string | undefined>;
   task?: string; // the request this run is carrying out, for what the gaming guard may not second-guess
+  protocol?: boolean; // this loop runs the local action protocol (a task run on a model that can call tools)
+  todoCalls?: number; // checklist writes so far — the first is planning, the rest aren't progress
   // Characters each tool result may take this turn, sized to the room left in the context window.
   // Set just before the turn's tools run; unset means only the fixed per-result ceiling applies.
   resultBudget?: number;
@@ -565,7 +565,11 @@ export class Agent {
       taskId: opts.taskId,
     });
     // A checklist is scoped to the task that wrote it, and the fork budget to the task that spends it.
-    const ctx: LoopCtx = { askDepth, forkDepth: 0, sessionId, task, todos: [], forks: { used: 0 } };
+    // The local action protocol, for a model that can call tools. A chat-only model (its check found
+    // no way to make it call one) is only given answers and reviews; forcing calls on it would fail
+    // every turn.
+    const protocol = this.profile.actionProtocol && this.localProbe()?.verdict !== "chat-only";
+    const ctx: LoopCtx = { askDepth, forkDepth: 0, sessionId, task, todos: [], forks: { used: 0 }, protocol };
     this.push(turns, { role: "user", text: task }, sessionId);
     const onDelta = (text: string) =>
       this.bus.publish({ agentId: id, type: "delta", payload: text, time: Date.now() });
@@ -579,9 +583,7 @@ export class Agent {
     // Whether this run has done anything (a tool call other than writing its checklist), and how
     // many times a reply that only described the work has been sent back (the local profile).
     let acted = false;
-    let describeNudges = 0;
-    let selfChecked = false;
-    let emptyNudged = false;
+    let rejected = 0; // turns in a row that weren't an action (the local protocol)
     this.inFlightCount++;
     try {
       for (let i = 0; i < this.maxTurns; i++) {
@@ -602,8 +604,10 @@ export class Agent {
           this.restateTodos(turns, ctx);
           this.maskOldObservations(turns, ctx);
           const tools = this.buildTools(allowed, ctx);
-          const reply = await this.send(turns, tools, onDelta);
-          if (reply.text) {
+          const reply = protocol ? await this.localTurn(turns, tools, onDelta, i === 0 || rejected > 0) : await this.send(turns, tools, onDelta);
+          // Under the protocol a reply with no call is either refused (and must not reach the chat)
+          // or never happens; finish's summary is published where it's read, below.
+          if (reply.text && !(protocol && reply.toolCalls.length === 0)) {
             finalText = reply.text;
             this.bus.publish({ agentId: id, type: "message", payload: reply.text, time: Date.now() });
           }
@@ -627,21 +631,47 @@ export class Agent {
             this.bus.publish({ agentId: id, type: "warning", payload: `${this.config.provider} rate limit low — ${rr} requests remaining`, time: Date.now() });
           }
           const compacted = await this.compact(turns, ctx, reply, context, "context compacted automatically");
+          // The local action protocol: every turn is a tool call, and `finish` is the only way out.
+          // A turn that isn't one — after the engine was made to start a call, files were salvaged
+          // and a bare DONE read as finish (localTurn) — is withheld from the history (only a stub
+          // stays, so a pasted 4 KB file never fills a small window) and answered with what to do.
+          // A finish before any real work is refused the same way. Three in a row fail the task.
+          if (protocol) {
+            // Silence after real work is its way of saying it's finished; the checks below decide.
+            if (reply.toolCalls.length === 0 && !reply.text && acted) reply.toolCalls = [{ id: "finish-empty", name: "finish", input: { summary: "Done." } }];
+            const finish = reply.toolCalls.find((c) => c.name === "finish");
+            const others = reply.toolCalls.filter((c) => c.name !== "finish");
+            const todoAgain = others.length > 0 && others.every((c) => c.name === "todo") && (ctx.todoCalls ?? 0) > 0 && !acted;
+            const premature = !!finish && others.length === 0 && !acted;
+            if ((others.length === 0 && !finish) || todoAgain || premature) {
+              rejected++;
+              const why = premature ? "finished without doing anything" : todoAgain ? "rewrote its checklist instead of working" : "replied without a tool call";
+              this.bus.publish({ agentId: id, type: "warning", protocol: "rejected_turn", payload: `${why} — ${rejected < 3 ? "asking again" : "giving up"}`, time: Date.now() });
+              if (rejected >= 3) {
+                error = `the model never did the work (${why}, three times running)`;
+                if (sessionId) this.store?.setStatus(sessionId, "failed");
+                this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
+                return { outcome: "failed", text: finalText, error };
+              }
+              this.push(turns, { role: "assistant", text: "(reply withheld by niti: it was not a tool call)", toolCalls: [] }, sessionId, reply.usage);
+              this.push(turns, { role: "user", text: actNudge(rejected, premature, todoAgain) }, sessionId);
+              continue;
+            }
+            rejected = 0;
+            if (finish && others.length === 0) {
+              // The agent says it's done: the completion path below decides whether it is.
+              reply.toolCalls = [];
+              reply.text = String(finish.input.summary ?? "").trim() || "Done.";
+              finalText = reply.text;
+              this.bus.publish({ agentId: id, type: "message", payload: reply.text, time: Date.now() });
+            } else if (finish) {
+              reply.toolCalls = others; // do the work first; it calls finish again when it's done
+            }
+          }
           if (reply.toolCalls.length === 0) {
             // No tools *and* no text is not a completion — it's a Gemini safety block, an OpenAI
             // content filter, or an empty choices array. Every one of those used to present as a
             // finished task, so the orchestrator released dependents on an empty output.
-            // A small model that has done the work often ends on an empty reply. Asked once; then, if it
-            // wrote files, that silence is its "done" — not a failed task that discards finished work.
-            if (!reply.text && this.profile.requireAction && acted) {
-              if (!emptyNudged && i < this.maxTurns - 1) {
-                emptyNudged = true;
-                this.push(turns, { role: "assistant", text: "", toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
-                this.push(turns, { role: "user", text: "[niti: Your reply was empty. If the task is finished, reply DONE and one sentence on what you made. If not, make the next tool call.]" }, sessionId);
-                continue;
-              }
-              if (ctx.wrote) reply.text = "Done.";
-            }
             if (!reply.text) {
               error = "the model returned neither text nor a tool call (safety filter, truncation, or an empty response)";
               if (sessionId) this.store?.setStatus(sessionId, "failed");
@@ -649,30 +679,6 @@ export class Agent {
               return { outcome: "failed", text: finalText, error };
             }
             this.push(turns, { role: "assistant", text: reply.text, toolCalls: [], raw: reply.raw }, sessionId, reply.usage);
-            // A small model answers "implement X" with a plan in prose and stops — which used to be
-            // a finished task with nothing written. Until it has called a tool, a reply is not the
-            // end: it hears what to do instead, twice; then the task fails (and is retried or
-            // re-planned) rather than passing as done.
-            if (this.profile.requireAction && !acted && this.pendingInbox() === 0) {
-              if (describeNudges < 2 && i < this.maxTurns - 1) {
-                describeNudges++;
-                this.bus.publish({ agentId: id, type: "warning", payload: "replied with a plan instead of doing the work — asking it to act", time: Date.now() });
-                this.push(turns, { role: "user", text: actNudge(describeNudges) }, sessionId);
-                continue;
-              }
-              error = "the model described the work but never did it (no tool call, no file written)";
-              if (sessionId) this.store?.setStatus(sessionId, "failed");
-              this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
-              return { outcome: "failed", text: finalText, error };
-            }
-            // It acted, and now says it's finished. A small model often stops after a stub: once
-            // per task, it checks what it wrote against what was asked before the task is done.
-            if (this.profile.selfCheck && ctx.wrote && !selfChecked && i < this.maxTurns - 1 && this.pendingInbox() === 0) {
-              selfChecked = true;
-              this.bus.publish({ agentId: id, type: "thought", payload: "checking the work against the task before finishing", time: Date.now() });
-              this.push(turns, { role: "user", text: selfCheckNudge(task) }, sessionId);
-              continue;
-            }
             // A message that arrived during this turn — a teammate's hand-off, or the user's nudge
             // from the dashboard — would otherwise sit in the inbox until some later, unrelated run,
             // while POST /agents/:id/message had already reported it delivered. Keep looping: the
@@ -734,7 +740,7 @@ export class Agent {
             return { outcome: "done", text: finalText, error: "" };
           }
           ctx.resultBudget = this.resultBudgetFor(reply, context, compacted);
-          if (reply.toolCalls.some((c) => c.name !== "todo")) acted = true;
+          if (reply.toolCalls.some((c) => c.name !== "todo" && c.name !== "finish")) acted = true;
           let results = await this.execCalls(reply.toolCalls, allowed, ctx);
           // Interrupted while its tools ran (a shell killed, an approval refused): the calls still
           // happened, so they stay in the history, marked, and the operator's message comes next.
@@ -824,6 +830,47 @@ export class Agent {
     if (!found) return reply;
     this.bus.publish({ agentId: this.config.id, type: "thought", payload: `read ${found.calls.length} tool call(s) the model wrote as text`, time: Date.now() });
     return { ...reply, text: found.rest, toolCalls: found.calls, raw: undefined };
+  }
+
+  // What the model check (src/local/probe.ts) found out about this agent's local model, if any.
+  private localProbe() {
+    return this.provider instanceof LocalProvider ? getInstalled(this.config.model)?.probe : undefined;
+  }
+
+  // One turn of the local action protocol: the reply should be a tool call, and is made one if it
+  // can be. In order — a model that only calls tools when made to is made to from the start;
+  // otherwise it gets the turn on its own, and a reply without a call is
+  //   1. a file pasted into the chat: saved through write_file (salvageFiles), as the call it meant;
+  //   2. a bare "done": the finish call it meant;
+  //   3. anything else: asked again, this time with the call forced — llama.cpp's grammar
+  //      (tool_choice "required"), or on MLX the reply started in the model's own call format. The
+  //      prose reply never enters the history.
+  // Thinking (for models that have it) is on for a task's first turn and right after a refusal, and
+  // off for the routine turns between, where it only burned the output budget.
+  private async localTurn(turns: Turn[], tools: ToolSpec[], onDelta: OnDelta | undefined, think: boolean): Promise<ProviderReply> {
+    const provider = this.provider instanceof LocalProvider ? this.provider : undefined;
+    const probe = this.localProbe();
+    const mlx = getInstalled(this.config.model)?.format === "mlx";
+    const thinking = probe?.thinking === "none" ? undefined : think ? undefined : false;
+    const forced = { ...(mlx ? { prefill: probe?.prefill ?? '<tool_call>\n{"name": "' } : { toolChoice: "required" as const }), thinking: false };
+    const mustForce = !!provider && probe?.toolMode === "forced";
+    if (provider) provider.next = mustForce ? forced : { thinking };
+    let reply = await this.send(turns, tools, onDelta);
+    if (reply.toolCalls.length > 0 || !reply.text) return reply;
+
+    const salvaged = salvageFiles(reply.text);
+    if (salvaged.length > 0) {
+      this.bus.publish({ agentId: this.config.id, type: "warning", protocol: "salvaged", payload: `saved ${salvaged.map((c) => c.input.path).join(", ")} from the reply (the model pasted ${salvaged.length > 1 ? "them" : "it"} instead of writing ${salvaged.length > 1 ? "them" : "it"})`, time: Date.now() });
+      return { ...reply, text: "", toolCalls: salvaged, raw: undefined };
+    }
+    if (/^\W*(done|finished|complete[d]?|task complete[d]?)\b[\s\S]{0,400}$/i.test(reply.text.trim())) {
+      return { ...reply, toolCalls: [{ id: `finish-${crypto.randomUUID().slice(0, 8)}`, name: "finish", input: { summary: reply.text.replace(/^\W*(done|finished|complete[d]?|task complete[d]?)\W*/i, "").trim() || "Done." } }], text: "", raw: undefined };
+    }
+    if (mustForce || !provider) return reply;
+    this.bus.publish({ agentId: this.config.id, type: "thought", protocol: "rejected_turn", payload: "replied without a tool call — asking again with the call required", time: Date.now() });
+    provider.next = forced;
+    reply = await this.send(turns, tools, onDelta);
+    return reply;
   }
 
   private async sendRaw(turns: Turn[], tools: ToolSpec[], onDelta: OnDelta | undefined, system: string, format?: "json"): Promise<ProviderReply> {
@@ -1140,7 +1187,7 @@ export class Agent {
     const profile = this.profile;
     // web_search appears once a Tavily key is saved — mid-session too, so it is part of the key.
     const search = webSearchConfigured();
-    const key = [profile.name, allowed.join(","), ctx.forkDepth, ctx.askDepth, peers.map((p) => p.id).join(","), search].join("|");
+    const key = [profile.name, allowed.join(","), ctx.forkDepth, ctx.askDepth, peers.map((p) => p.id).join(","), search, !!ctx.protocol].join("|");
     if (this.toolsCache?.key === key) return this.toolsCache.specs;
 
     // Three independent tool sources, concatenated: the sandbox, MCP servers, and LSP servers.
@@ -1187,6 +1234,13 @@ export class Agent {
         required: ["items"],
       },
     });
+    if (ctx.protocol) {
+      specs.push({
+        name: "finish",
+        description: "End the task. Call it only when everything the task asks for is in the files (or, for a review or question, when you have the answer). niti then checks the work; if a check fails you'll be told what to fix.",
+        parameters: { type: "object", properties: { summary: { type: "string", description: "one or two sentences: what you made or changed, or your answer" } }, required: ["summary"] },
+      });
+    }
     if (this.messenger) {
       // Team notes are useful even solo (a running scratchpad of decisions), unlike send_message/
       // ask_agent which need a teammate to exist — so these are added before the peers.length gate.
@@ -1500,6 +1554,7 @@ export class Agent {
     // Harness-internal state, not a sandboxed action: it touches no file and runs no command, so
     // it resolves above the permission gate exactly as the messaging tools do.
     if (call.name === "todo") {
+      ctx.todoCalls = (ctx.todoCalls ?? 0) + 1;
       const todos = (ctx.todos = parseTodos(call.input.items));
       this.bus.publish({ agentId: id, type: "todo", payload: renderTodos(todos), time: Date.now(), todos: todos.map((t) => ({ text: t.text, status: t.status })) });
       return todoAck(todos);

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { profileFor, capInstructions, LOCAL, STANDARD, LOCAL_GUIDANCE } from "./profile.ts";
 import { repairJson, parseToolArgs, extractTextToolCalls, checkArgs, unknownToolMessage, closestTool, splitThinking } from "./toolcalls.ts";
 import { RepeatGuard } from "./stall.ts";
+import { LocalProvider } from "../local/provider.ts";
 import { Agent, type AgentConfig } from "./agent.ts";
 import { Bus } from "../events/bus.ts";
 import { TOOL_GUIDANCE } from "../tools/tools.ts";
@@ -152,7 +153,7 @@ test("a local agent is offered the short tool list; a cloud agent the full one",
     await new Agent(c, scripted([() => ({ text: "done", toolCalls: [] })], seen), new Bus(), { root }).run("hi");
     const names = seen.tools[0]!;
     if (c === localCfg) {
-      expect([...names].sort()).toEqual(["edit", "glob", "grep", "read_file", "shell", "todo", "write_file"]);
+      expect([...names].sort()).toEqual(["edit", "finish", "glob", "grep", "read_file", "shell", "todo", "write_file"]);
       for (const n of ["list_dir", "repo_map", "spawn_fork"]) expect(names).not.toContain(n);
     } else {
       for (const n of ["list_dir", "repo_map", "spawn_fork", "todo"]) expect(names).toContain(n);
@@ -165,7 +166,7 @@ test("local: a tool call written as text runs as a real call and enters the hist
   writeFileSync(join(root, "a.txt"), "hello from a\n");
   const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
   const p = scripted(
-    [() => ({ text: '<tool_call>{"name": "read_file", "arguments": {"path": "a.txt"}}</tool_call>', toolCalls: [] }), () => ({ text: "It says hello.", toolCalls: [] })],
+    [() => ({ text: '<tool_call>{"name": "read_file", "arguments": {"path": "a.txt"}}</tool_call>', toolCalls: [] }), () => ({ text: "", toolCalls: [{ id: "f", name: "finish", input: { summary: "It says hello." } }] })],
     seen,
   );
   expect(await new Agent(localCfg, p, new Bus(), { root }).run("read a.txt")).toBe("done");
@@ -234,40 +235,101 @@ test("asks that expect JSON are constrained for a local lead, left alone for a c
   }
 });
 
-test("local: a plan in prose is sent back until the model acts, and the file gets written", async () => {
+const finishCall = (summary = "made it") => ({ text: "", toolCalls: [{ id: `f${Math.random()}`, name: "finish", input: { summary } }] });
+const warningsOf = (bus: Bus) => {
+  const w: { payload: string; protocol?: string }[] = [];
+  bus.subscribe((e) => (e.type === "warning" || e.type === "thought") && e.protocol && w.push({ payload: String(e.payload), protocol: e.protocol }));
+  return w;
+};
+
+test("local: a plan in prose is refused, kept out of the history, and the file still gets written", async () => {
   const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
   const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
   const p = scripted(
     [
       () => ({ text: "To build the page, I will follow these steps:\n1. Create index.html\n2. Style it", toolCalls: [] }),
       () => ({ text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "index.html", content: "<h1>Coffee</h1>\n" } }] }),
-      () => ({ text: "Created index.html.", toolCalls: [] }),
+      () => finishCall("Created index.html."),
     ],
     seen,
   );
   const bus = new Bus();
-  const warnings: string[] = [];
-  bus.subscribe((e) => e.type === "warning" && warnings.push(String(e.payload)));
+  const events = warningsOf(bus);
+  const messages: string[] = [];
+  bus.subscribe((e) => e.type === "message" && messages.push(String(e.payload)));
   const cfg: AgentConfig = { ...localCfg, allowedTools: ["read_file", "write_file", "edit", "shell"] };
   const r = await new Agent(cfg, p, bus, { root }).runDetailed("Create the coffee shop landing page");
   expect(r.outcome).toBe("done");
+  expect(r.text).toBe("Created index.html.");
   expect(readFileSync(join(root, "index.html"), "utf8")).toContain("Coffee");
-  expect(warnings.some((w) => w.includes("plan instead of doing"))).toBe(true);
-  const nudge = seen.turns[1]!.at(-1) as Extract<Turn, { role: "user" }>;
-  expect(nudge.text).toContain("call write_file");
-  // And once it says it's finished, it checks its work against the task before the task is done.
-  const check = seen.turns.at(-1)!.at(-1) as Extract<Turn, { role: "user" }>;
-  expect(check.text).toContain("check your work against the task");
-  expect(check.text).toContain("Create the coffee shop landing page");
+  expect(events.some((w) => w.protocol === "rejected_turn")).toBe(true);
+  const history = JSON.stringify(seen.turns[1]);
+  expect(history).not.toContain("follow these steps"); // the prose never reached the history…
+  expect(messages.join()).not.toContain("follow these steps"); // …or the chat
+  expect((seen.turns[1]!.at(-1) as Extract<Turn, { role: "user" }>).text).toContain("call write_file");
 });
 
-test("local: a model that only ever describes the work fails the task after two reminders", async () => {
+test("local: a model that never acts fails the task after three refused turns", async () => {
   const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
   const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
   const r = await new Agent(localCfg, scripted([() => ({ text: "Here's the plan: 1. design 2. build", toolCalls: [] })], seen), new Bus(), { root }).runDetailed("Build it");
   expect(r.outcome).toBe("failed");
-  expect(r.error).toContain("described the work but never did it");
+  expect(r.error).toContain("never did the work");
   expect(seen.tools.length).toBe(3);
+});
+
+test("local: finish before any work, or a second checklist instead of work, is refused", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const todo = (n: number) => ({ text: "", toolCalls: [{ id: `t${n}`, name: "todo", input: { items: [{ text: "write it", status: "pending" }] } }] });
+  const p = scripted(
+    [
+      () => finishCall("all done"), // nothing done yet
+      () => todo(1), // a first checklist is planning: fine
+      () => todo(2), // a second one, still with nothing done, is not
+      () => ({ text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "a.txt", content: "a" } }] }),
+      () => finishCall(),
+    ],
+    seen,
+  );
+  const bus = new Bus();
+  const events = warningsOf(bus);
+  const r = await new Agent({ ...localCfg, allowedTools: ["write_file"] }, p, bus, { root }).runDetailed("Write a.txt");
+  expect(r.outcome).toBe("done");
+  expect(events.filter((w) => w.protocol === "rejected_turn").map((w) => w.payload.split(" — ")[0])).toEqual(["finished without doing anything", "rewrote its checklist instead of working"]);
+});
+
+test("local: a file pasted into the reply is saved as the write it meant", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const p = scripted([() => ({ text: "Here it is:\n\n`styles.css`\n```css\nbody { font-family: 'Fraunces', serif; }\n```", toolCalls: [] }), () => finishCall()], seen);
+  const bus = new Bus();
+  const events = warningsOf(bus);
+  const r = await new Agent({ ...localCfg, allowedTools: ["write_file"] }, p, bus, { root }).runDetailed("Style the page");
+  expect(r.outcome).toBe("done");
+  expect(readFileSync(join(root, "styles.css"), "utf8")).toContain("Fraunces");
+  expect(events.find((w) => w.protocol === "salvaged")?.payload).toContain("styles.css");
+});
+
+test("local: a prose reply on the local engine is asked again with the call required, and only the call is kept", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  const sent: { next?: unknown; turns: Turn[] }[] = [];
+  const replies = [
+    { text: "I'll write the server now. It will use express and listen on 3000.", toolCalls: [] },
+    { text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "server.js", content: "x" } }] },
+    { text: "", toolCalls: [{ id: "f", name: "finish", input: { summary: "wrote server.js" } }] },
+  ];
+  const fake = Object.create(LocalProvider.prototype) as LocalProvider;
+  fake.send = async function (_s: string, turns: Turn[]) {
+    sent.push({ next: this.next, turns: structuredClone(turns) });
+    this.next = undefined;
+    return replies[sent.length - 1]!;
+  };
+  const r = await new Agent({ ...localCfg, allowedTools: ["write_file"] }, fake, new Bus(), { root }).runDetailed("Write server.js");
+  expect(r.outcome).toBe("done");
+  expect(sent[1]!.next).toMatchObject({ toolChoice: "required", thinking: false });
+  expect(JSON.stringify(sent[2]!.turns)).not.toContain("express"); // the prose reply never entered the history
+  expect(readFileSync(join(root, "server.js"), "utf8")).toBe("x");
 });
 
 test("cloud: a text answer to a task is still an answer", async () => {
@@ -277,12 +339,20 @@ test("cloud: a text answer to a task is still an answer", async () => {
   expect(seen.tools.length).toBe(1);
 });
 
-test("local: an empty reply after the work is done is asked once, then counts as done", async () => {
+test("local: an empty reply after the work is done counts as finishing", async () => {
   const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
   const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
   const p = scripted([() => ({ text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "server.js", content: "x" } }] }), () => ({ text: "", toolCalls: [] })], seen);
   const r = await new Agent({ ...localCfg, allowedTools: ["write_file"] }, p, new Bus(), { root }).runDetailed("Write server.js");
   expect(r.outcome).toBe("done");
   expect(readFileSync(join(root, "server.js"), "utf8")).toBe("x");
-  expect(JSON.stringify(seen.turns.at(-1))).toContain("check your work"); // and it still self-checked
+});
+
+test("files pasted into a reply are saved when they're labelled, and left alone when they aren't", async () => {
+  const { salvageFiles } = await import("./toolcalls.ts");
+  const text = "Here's the page.\n\n**index.html**\n```html\n<!DOCTYPE html>\n<html><body><h1>Bean There</h1></body></html>\n```\n\nAnd the styles:\n```css\n/* styles.css */\nbody { font-family: 'Fraunces', serif; color: #2b1b12; }\n```\n\nSome code without a name:\n```js\nconsole.log('where would this go?')\n```";
+  const calls = salvageFiles(text);
+  expect(calls.map((c) => c.input.path)).toEqual(["index.html", "styles.css"]);
+  expect(String(calls[0]!.input.content)).toContain("Bean There");
+  expect(salvageFiles("Use `npm start` to run it.\n```\nnpm start\n```")).toEqual([]);
 });

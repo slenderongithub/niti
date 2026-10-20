@@ -6,7 +6,15 @@ const port = Number(process.argv[2] ?? 47990);
 const log: string[] = [];
 let judged = 0; // /goal's judge: "not yet" the first time, "done" after that
 
+// A local agent (the action protocol offers `finish`) ends a task by calling it, as a well-behaved
+// local model does; anything else ends on text.
 function reply(body: any): { text?: string; tool?: { name: string; args: unknown } } {
+  const r = script(body);
+  const tools: string[] = (body.tools ?? []).map((t: any) => t.function?.name);
+  return r.text !== undefined && tools.includes("finish") ? { tool: { name: "finish", args: { summary: r.text } } } : r;
+}
+
+function script(body: any): { text?: string; tool?: { name: string; args: unknown } } {
   const msgs: any[] = body.messages ?? [];
   const all = JSON.stringify(msgs);
   const lastUser = [...msgs].reverse().find((m) => m.role === "user");

@@ -30,14 +30,13 @@ export interface Profile {
   textToolCalls: boolean; // read a tool call the model wrote as text instead of through the API
   jsonAsks: boolean; // constrain planner / judge / integrate replies to JSON
   shellNetwork: boolean; // sandboxed shell may reach the internet without a person approving the command
-  // A work task the model "finishes" without ever calling a tool is sent back (twice), then failed:
-  // small models answer "implement X" with a plan in prose, and that is not done.
-  requireAction: boolean;
+  // The local action protocol (agent.ts localTurn): every turn of a task is one tool call, a `finish`
+  // tool is the only way to end it, a reply that isn't a call is retried with the call forced and
+  // then withheld from the history. Small models answer "implement X" with prose, paste files into
+  // the chat, and say "done" after a stub; this is the format that leaves them no room to.
+  actionProtocol: boolean;
   // A plan that hands every task to one teammate is spread across the team by role.
   spreadPlan: boolean;
-  // The first "done" of a task that changed something is answered with the task to check against:
-  // small models stop after a stub. One extra turn per task.
-  selfCheck: boolean;
 }
 
 export const STANDARD: Profile = {
@@ -55,9 +54,8 @@ export const STANDARD: Profile = {
   textToolCalls: false,
   jsonAsks: false,
   shellNetwork: true,
-  requireAction: false,
+  actionProtocol: false,
   spreadPlan: false,
-  selfCheck: false,
 };
 
 // Short, imperative, one idea per line: the same conventions as TOOL_GUIDANCE (stay in the project,
@@ -67,13 +65,13 @@ export const LOCAL_GUIDANCE = `
 
 Working habits:
 - Stay inside the project. Use paths relative to it. Never use '..' or an absolute path unless the user named that path.
-- Do the work, don't describe it: answer a task with a tool call, not a plan. To create a file, call 'write_file' with its complete content.
+- Every reply is exactly one tool call. Do the work, don't describe it: to create a file, call 'write_file' with its complete content. Never paste a file into your reply.
 - Find before you read: 'grep' finds where something is, 'glob' finds a file by name. Don't guess paths.
 - Read a file before you change it. To change part of a file use 'edit', copying oldString exactly from what 'read_file' showed, without the line numbers. Use 'write_file' only for a new file.
 - Make one tool call at a time and look at its result before the next.
 - After changing code, run the project's tests or checks with 'shell' before you say you are done.
 - Never edit, skip or delete a test or a check to make it pass. Fix the code instead.
-- When the task is done, answer in one or two plain sentences without a tool call.`;
+- When everything the task asks for is in the files, call 'finish' with one sentence on what you made. niti checks the work before the task counts as done.`;
 
 export const LOCAL: Profile = {
   name: "local",
@@ -93,9 +91,8 @@ export const LOCAL: Profile = {
   textToolCalls: true,
   jsonAsks: true,
   shellNetwork: false,
-  requireAction: true,
+  actionProtocol: true,
   spreadPlan: true,
-  selfCheck: true,
 };
 
 // An explicit `profile:` wins. Otherwise the models served on this Mac — niti's own runtime, Ollama,
