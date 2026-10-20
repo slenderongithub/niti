@@ -30,7 +30,7 @@ writeFileSync(
 mkdirSync(join(P, ".niti/commands"));
 writeFileSync(join(P, ".niti/commands/hi.md"), "---\nname: hi\ndescription: greet the user\n---\nhello $ARGUMENTS\n");
 const llm = Bun.spawn(["bun", join(HERE, "fakellm.ts"), String(LLM), state], { stdout: "ignore", stderr: "inherit" });
-const env = { ...process.env, NITI_TRUST: "1", NITI_AUTH_FILE: join(state, "auth.json"), NITI_TRUST_FILE: join(state, "trust.json"), NITI_REMOTE_FILE: join(state, "remote.json"), NITI_OFFLINE: "1", NITI_MODELS_FILE: join(state, "models.json"), NITI_VERSION_FILE: join(state, "version.json") };
+const env = { ...process.env, NITI_TRUST: "1", NITI_AUTH_FILE: join(state, "auth.json"), NITI_TRUST_FILE: join(state, "trust.json"), NITI_REMOTE_FILE: join(state, "remote.json"), NITI_OFFLINE: "1", NITI_MODELS_FILE: join(state, "models.json"), NITI_VERSION_FILE: join(state, "version.json"), NITI_LOCAL_MODELS_DIR: join(state, "local-models") };
 const core = Bun.spawn(["bun", "run", join(NITI, "src/cli.ts"), "serve"], { cwd: P, env, stdout: "pipe", stderr: Bun.file(join(state, "core.log")) });
 const reader = core.stdout.getReader();
 let first = "";
@@ -100,6 +100,13 @@ try {
   check("file viewer reads a file", ((await (await get("/file?path=src/b.ts")).json()) as any).content?.includes("b = 1"));
   check("file viewer refuses ../", (await get("/file?path=../etc/passwd")).status >= 400);
   check("dashboard page served", (await fetch(hs.url + "/dashboard")).status === 200);
+  // Local models: offline here (NITI_OFFLINE), so the catalogue says so instead of failing, and the
+  // isolated models directory starts empty.
+  const dev = (await (await get("/local/device")).json()) as any;
+  check("local device reports memory and the isolated models dir", dev.device?.totalMemory > 0 && dev.modelsDir === join(state, "local-models"), JSON.stringify(dev));
+  check("local catalogue offline is not an error", ((await (await get("/local/catalog?tab=recommended")).json()) as any).offline === true);
+  check("no local models installed", ((await (await get("/models?provider=local")).json()) as any).models?.length === 0);
+  check("local download validates its body", (await post("/local/download", { repo: "../x" })).status === 400);
   check("graph page served", (await fetch(hs.url + "/graph/view")).status === 200);
 
   // --- commands list

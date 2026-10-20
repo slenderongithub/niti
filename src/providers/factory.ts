@@ -6,6 +6,7 @@ import { GeminiProvider } from "./gemini.ts";
 import { CopilotProvider } from "./copilot.ts";
 import { CATALOG, providerKeys, probeOllamaContext } from "./catalog.ts";
 import { resolveApiKey, resolveBaseURL } from "../auth/auth-store.ts";
+import { LocalProvider } from "../local/provider.ts";
 
 export function makeProvider(cfg: AgentConfig): Provider {
   // Own-property lookup: a plain-object index signature also resolves "constructor", "toString"
@@ -15,6 +16,8 @@ export function makeProvider(cfg: AgentConfig): Provider {
   if (!entry) {
     throw new Error(`unknown provider '${cfg.provider}' (known: ${providerKeys().join(", ")})`);
   }
+  // Models niti runs itself: no key, and the address is only known once the runtime loads it.
+  if (entry.client === "local") return new LocalProvider(cfg.model, cfg.id, cfg.reasoning, cfg.maxOutput);
   let apiKey = resolveApiKey(cfg.provider); // typed auth store → keychain → env
   if (!apiKey && entry.keyOptional) apiKey = "local"; // Ollama/LM Studio/custom need no real key
   if (!apiKey) {

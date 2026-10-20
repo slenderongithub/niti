@@ -3,7 +3,7 @@ import { GENERATED_CATALOG, GENERATED_CONTEXT, GENERATED_MODELS } from "./catalo
 // Provider catalog — the single source of provider metadata (client, baseURL, env var, models).
 // Anthropic and Google use native clients; everything else speaks the OpenAI chat API via baseURL,
 // which is how opencode/models.dev cover dozens of providers with one client.
-type ClientKind = "anthropic" | "gemini" | "openai" | "copilot";
+type ClientKind = "anthropic" | "gemini" | "openai" | "copilot" | "local";
 
 export type Category = "byok" | "local" | "login";
 
@@ -58,6 +58,11 @@ const MODEL_CONTEXT: Record<string, number> = {
 // Windows learned at runtime (see probeOllamaContext), keyed "provider/model". They win over every
 // table below because they describe the server actually running, not the model in general.
 const LEARNED_CONTEXT = new Map<string, number>();
+
+// The local runtime knows the exact per-slot window it launched a model with (src/local/runtime.ts).
+export function learnContext(provider: string, model: string, n: number): void {
+  if (n > 0) LEARNED_CONTEXT.set(`${provider}/${model}`, n);
+}
 
 // Windows from the live model registry (see live-catalog.ts), keyed "provider/model". Fresher than
 // the build-time GENERATED_CONTEXT, and they cover the hand-maintained providers it doesn't.
@@ -200,6 +205,17 @@ const MANUAL_CATALOG: Record<string, CatalogEntry> = {
     baseURL: "https://api.cerebras.ai/v1",
     envVar: "CEREBRAS_API_KEY",
     models: ["llama-3.3-70b", "llama-3.1-8b"],
+  },
+  // Models niti downloads and runs itself (src/local/): no key, no server to install. The model id
+  // is "<huggingface repo>:<quant>"; the runtime picks the address when it loads the model.
+  local: {
+    label: "On this Mac",
+    client: "local",
+    envVar: "NITI_LOCAL_API_KEY",
+    keyOptional: true,
+    category: "local",
+    context: 16_384,
+    models: [], // what is installed — GET /models?provider=local asks the store
   },
   ollama: {
     label: "Ollama (local)",

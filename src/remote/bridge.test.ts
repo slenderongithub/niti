@@ -109,6 +109,9 @@ test("pair by typing the Mac's code on the phone, then drive the Mac from it", a
   expect((await s.request("POST", "/commands/auto")).status).toBe(403);
   expect((await s.request("POST", "/commands/remote", { args: "logout" })).status).toBe(403);
   expect((await s.request("POST", "/complete", { provider: "x", model: "y", prompt: "z" })).status).toBe(403);
+  // Local models are managed at the Mac: no downloads, deletes or catalogue from a phone.
+  expect((await s.request("POST", "/local/download", { repo: "a/b", quant: "Q4_K_M" })).status).toBe(403);
+  expect((await s.request("GET", "/local/models")).status).toBe(403);
   expect((await s.request("POST", "/commands/status")).status).toBe(200);
   expect((await s.request("POST", "/commands/%zz")).status).toBe(403); // malformed, and not on the list
 

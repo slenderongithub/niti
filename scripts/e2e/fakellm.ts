@@ -51,11 +51,15 @@ Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname.endsWith("/models")) return Response.json({ data: [{ id: "fake" }] });
+    // What llama-server answers, for scripts/e2e/fakellama.ts standing in for the local runtime.
+    if (url.pathname === "/health") return Response.json({ status: "ok" });
+    if (url.pathname === "/props") return Response.json({ default_generation_settings: { n_ctx: 16384 }, chat_template: "{% if tools %}<tool_call>{{ tools }}</tool_call>{% endif %}" });
     if (!url.pathname.endsWith("/chat/completions")) return new Response("nope", { status: 404 });
     const body = await req.json();
     if (JSON.stringify(body.messages ?? []).includes("SLOW")) await new Promise((r) => setTimeout(r, 1500));
     const r = reply(body);
     if (JSON.stringify(body.messages ?? []).includes("STEER-MARKER")) log.push("SAW-STEER");
+    if (body.id_slot !== undefined) log.push(`LOCAL slot=${body.id_slot} temp=${body.temperature} max=${body.max_tokens}`);
     log.push(JSON.stringify({ stream: !!body.stream, tool: r.tool?.name, text: r.text?.slice(0, 40) }));
     const usage = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 };
     if (!body.stream) {

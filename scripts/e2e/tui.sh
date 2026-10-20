@@ -2,7 +2,7 @@
 # Boot a core (fake model) in a temp project and run the live TUI test against it.
 NITI=${0:A:h:h:h}; SP=${0:A:h}
 LLM=$((49100 + RANDOM % 300)); P=$(mktemp -d); P=${P:A}; S=$(mktemp -d)
-export NITI_AUTH_FILE=$S/auth.json NITI_TRUST_FILE=$S/trust.json NITI_REMOTE_FILE=$S/remote.json NITI_TRUST=1 NITI_OFFLINE=1 NITI_MODELS_FILE=$S/models.json NITI_VERSION_FILE=$S/version.json
+export NITI_AUTH_FILE=$S/auth.json NITI_TRUST_FILE=$S/trust.json NITI_REMOTE_FILE=$S/remote.json NITI_TRUST=1 NITI_OFFLINE=1 NITI_MODELS_FILE=$S/models.json NITI_VERSION_FILE=$S/version.json NITI_LOCAL_MODELS_DIR=$S/local-models
 bun $SP/fakellm.ts $LLM $S >/dev/null 2>&1 & LPID=$!
 mkdir -p $P/.niti $P/src; echo 'export const a = 1;' > $P/src/a.ts
 for id in backend frontend; do

@@ -20,6 +20,8 @@ import type { AgentConfig } from "../agent/agent.ts";
 import { makeProvider } from "../providers/factory.ts";
 import { summarizeError, scrubSecrets } from "../providers/provider.ts";
 import { awakeMode } from "../awake.ts";
+import { localApi } from "../local/routes.ts";
+import { listInstalled } from "../local/store.ts";
 
 export interface ServerHandle {
   url: string;
@@ -61,6 +63,7 @@ export function startServer(
     theme?: string;
     prefs?: Partial<Record<PrefKey, boolean>>; // Config-tab flags from agents.yaml
     makeProvider?: typeof makeProvider;
+    localFetch?: typeof fetch; // the Hub, for /local/* (tests serve a fixture)
   } = {},
 ): ServerHandle {
   const token = opts.token ?? crypto.randomUUID();
@@ -110,6 +113,16 @@ export function startServer(
   };
 
   const servePalettes = (): Response => json(palettes);
+
+  // /local/*: the model marketplace, downloads and the local runtime. Progress events are live-only
+  // while bytes arrive; the terminal state of a download is replayed so a reconnecting client sees it.
+  const local = localApi(
+    {
+      download: (d) => engine.hub.publish({ kind: "local_download", download: d }, d.state !== "downloading" && d.state !== "verifying"),
+      runtime: (r) => engine.hub.publish({ kind: "local_runtime", runtime: r }),
+    },
+    opts.localFetch,
+  );
 
   // buildFileGraph walks the project and reads every source file to extract imports — synchronously,
   // on the event loop. The graph page polls this, so a large repo stalled every other route
@@ -387,6 +400,9 @@ export function startServer(
         return json(await commands.run(engine, name, args ?? "", { origin }));
       }
 
+      const localRes = await local.handle(p, method, u, () => readBody(req));
+      if (localRes) return localRes;
+
       if (p === "/graph" && method === "GET") {
         try {
           return json(fileGraph(engine.root));
@@ -490,6 +506,8 @@ export function startServer(
       }
       if (p === "/models" && method === "GET") {
         const prov = u.searchParams.get("provider") ?? "";
+        // Models niti downloaded itself, most recently used first.
+        if (prov === "local") return json({ provider: prov, models: listInstalled().map((m) => m.id) });
         // Ollama and LM Studio: what is installed right now, not a list of names that might be.
         const local = await localModels(prov);
         return json({ provider: prov, models: local ?? CATALOG[prov]?.models ?? [] });

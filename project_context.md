@@ -112,6 +112,21 @@ in one disappears from the others (the core answers by id; a second answer gets 
     reboot or a dead watchdog: if it is still off, it asks for admin once and turns it back on.
 12. **LSP and MCP** side by side in the tool list; a missing server is a message, never a crash.
     `watch.ts` reports edits made outside niti.
+13. **Local models** (`local/*`, provider `local`). niti downloads GGUF models from the Hugging Face
+    Hub and runs them itself with llama.cpp's `llama-server`, bundled beside `niti-core` (no Ollama or
+    LM Studio). `catalog.ts` reads the Hub live (one list request with `expand[]=gguf` carries
+    parameters, architecture, context and chat template; cached 15 min); a model can call tools when
+    its chat template renders `tools`. `fit.ts` says Runs well / Tight / Won't fit from the Mac's
+    memory and the GPU working-set cap (about ⅔ of memory up to 36 GB, ¾ above), and `bestQuant` picks
+    the download (Q4_K_M unless there's room to step up or a need to step down). `downloads.ts`
+    resumes with Range requests, verifies each file's sha256, and writes the manifest last, so only
+    whole models count as installed; it also saves the authors' `generation_config.json` sampling.
+    `runtime.ts` starts one server per model on first use (127.0.0.1, a free port, `--jinja`,
+    `--reasoning-format deepseek`, f16 KV cache because a quantized one hurts tool calls), one
+    full-context slot per agent using it (`-np N --no-kv-unified`) so each agent's prompt prefix stays
+    cached, learns the real per-slot context from `/props`, and unloads after 15 idle minutes or when
+    the core exits. `provider.ts` sends the model's sampling (never greedy), the agent's `id_slot`,
+    the thinking switch and an 8k output cap on every request. The model id is `<repo>:<quant>`.
 
 **Where things are**
 
@@ -131,6 +146,7 @@ in one disappears from the others (the core answers by id; a second answer gets 
 | `commands/registry.ts` | Slash commands, shared by every front end; project commands from `.niti/commands/*.md` |
 | `server/*` | The HTTP + SSE API (`server.ts`), the event hub with replay (`events.ts`), the headless core and its handshake line (`main.ts`) |
 | `remote/*` | Remote control: the wire protocol, this Mac's identity, the bridge to the relay |
+| `local/*` | Local models: the Hub catalogue, fit, downloads, the installed store, the `llama-server` runtime, the `local` provider, `/local/*` routes |
 | `graph/filegraph.ts` | The project's import graph; its `IGNORE` set also bounds the project map every agent sees |
 
 ## Data on disk
@@ -153,6 +169,10 @@ in one disappears from the others (the core answers by id; a second answer gets 
   remote.json        this Mac's remote identity: signing key, account, allowed phones (0600)
   trusted.json       folders you've trusted, with a snapshot of each agents.yaml
   version.json       the last niti version the TUI ran, so an update can say what's new
+~/Library/Application Support/niti/models/      (NITI_LOCAL_MODELS_DIR; ~/.local/share/niti/models elsewhere)
+  <owner>__<repo>/   a downloaded model's .gguf files (.part while downloading) and one
+                     manifest.<quant>.json per installed quant
+  llama-server.log   the local runtime's log
 ```
 
 `.niti/agents.yaml`:
@@ -192,10 +212,14 @@ Local only (127.0.0.1), a fresh bearer token per launch, handed over in the core
   `GET /worktree`, `GET /worktree/hunks`, `POST /worktree/merge|discard`, `GET /checkpoints`.
 - **Setup**: `GET /providers`, `GET /models`, `GET/POST/DELETE /auth`, `POST /auto`,
   `POST /settings`, `POST /theme`, `GET /stats`, `GET /sessions`, `POST /complete`, `POST /embed`.
+- **Local models** (never on the phone bridge): `GET /local/device`, `GET /local/catalog?tab=recommended|all&q&sort&tools&fits&size`,
+  `GET /local/catalog/model?repo=`, `GET /local/models` (installed + active downloads),
+  `DELETE /local/models?id=`, `POST /local/download {repo, quant}`, `POST /local/download/cancel {id}`,
+  `POST /local/unload {model}`. `GET /models?provider=local` lists installed model ids.
 
 Events (`server/events.ts`, kind): `agent_event`, `agent_message`, `orchestration`, `approval_request`,
 `usage`, `turn_summary`, `lock`, `session`, `session_reset`, `goal`, `awake`, `remote`, `theme`,
-`resync`. The Go TUI decodes all of them into one flat struct, so a field name shared with another
+`local_download` (progress live-only, the end replayed), `local_runtime`, `resync`. The Go TUI decodes all of them into one flat struct, so a field name shared with another
 event must keep that event's type: nest new data rather than adding top-level fields.
 
 Slash commands (`commands/registry.ts`): `/goal /cancel /awake /remote /auto /manual /rewind /branch
@@ -235,7 +259,10 @@ Slash commands (`commands/registry.ts`): `/goal /cancel /awake /remote /auto /ma
 
 Everything runs against the repo's scripted model (`scripts/e2e/fakellm.ts`): no network, no cost.
 Test cores never touch your real files: every harness sets the isolation env (`NITI_AUTH_FILE`,
-`NITI_TRUST_FILE`, `NITI_REMOTE_FILE`…) in `scripts/e2e/*` and `niti-app/scripts/fixture.ts`.
+`NITI_TRUST_FILE`, `NITI_REMOTE_FILE`, `NITI_LOCAL_MODELS_DIR`…) in `scripts/e2e/*` and
+`niti-app/scripts/fixture.ts`. Local models are tested without a model or a GPU:
+`scripts/e2e/fakellama.ts` stands in for `llama-server` (`NITI_LLAMA_SERVER`), and the Hub is a
+fixture (`NITI_HF_URL`, or an injected fetch).
 
 | What | Command |
 |---|---|

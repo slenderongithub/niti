@@ -4,6 +4,8 @@ import type { OrchestrationEvent } from "../orchestrator/scheduler.ts";
 import type { AgentUsage, RateLimitSnapshot } from "../usage.ts";
 import type { GoalStatus } from "../goal.ts";
 import type { RemoteState } from "../remote/bridge.ts";
+import type { DownloadProgress } from "../local/downloads.ts";
+import type { RuntimeStatus } from "../local/runtime.ts";
 
 // The single event contract the Go TUI and web dashboard both consume over SSE. A discriminated
 // union with a monotonic `seq` + `time` on every event, so a late-joining client can replay from
@@ -43,6 +45,10 @@ export type ServerEventBody =
       cost: number;
       costKnown: boolean;
     }
+  // Local models: a download's progress (live-only while bytes arrive; its end is replayed), and the
+  // runtime loading, serving or unloading a model.
+  | { kind: "local_download"; download: DownloadProgress }
+  | { kind: "local_runtime"; runtime: RuntimeStatus }
   // Sent to one reconnecting client (never published) when the events it asked to replay have
   // already left the ring buffer — its view is incomplete, and it should say so rather than
   // present a partial history as the whole one.

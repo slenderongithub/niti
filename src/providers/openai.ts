@@ -65,6 +65,9 @@ interface OpenAIOptions {
 
 export class OpenAIProvider implements Provider {
   private client: OpenAI;
+  // Extra request fields for runtimes with their own knobs (llama-server: sampling, id_slot,
+  // chat_template_kwargs). Set by the caller per call; sent verbatim.
+  extraBody?: Record<string, unknown>;
   private lastRateLimit?: RateLimit; // captured at the fetch layer → works for streaming too
 
   // Whether to send OpenAI's `stream_options`. True for api.openai.com and for hosted
@@ -143,6 +146,7 @@ export class OpenAIProvider implements Provider {
       ...(maxOutput ? (vendor === "openai" ? { max_completion_tokens: maxOutput } : { max_tokens: maxOutput }) : {}),
       // OpenRouter reports cached and reasoning tokens (and the real cost) only when asked.
       ...(vendor === "openrouter" ? { usage: { include: true } } : {}),
+      ...this.extraBody,
       ...(tools.length
         ? {
             tools: tools.map((t) => ({
@@ -182,6 +186,9 @@ export class OpenAIProvider implements Provider {
     const acc: Record<number, { id?: string; name?: string; args: string }> = {};
     for await (const chunk of stream) {
       if (chunk.usage) usage = mapUsage(chunk.usage);
+      // llama-server reports its token counts as `timings` on the final chunk, whether or not it
+      // honours stream_options — without them compaction would never know how full the window is.
+      else if (!usage && (chunk as { timings?: Timings }).timings) usage = usageFromTimings((chunk as { timings?: Timings }).timings!);
       if (chunk.choices[0]?.finish_reason === "length") truncated = true;
       const d = chunk.choices[0]?.delta as (OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta & ReasoningFields) | undefined;
       reasoning += d?.reasoning_content ?? d?.reasoning ?? "";
@@ -205,6 +212,22 @@ export class OpenAIProvider implements Provider {
     const raw = captureReasoning(tag, reasoning, details);
     return { text, toolCalls, usage, rateLimit: this.lastRateLimit, truncated, ...(raw ? { raw } : {}) };
   }
+}
+
+// llama.cpp's per-request counters: prompt_n tokens evaluated, cache_n reused from the slot's cache.
+interface Timings {
+  prompt_n?: number;
+  predicted_n?: number;
+  cache_n?: number;
+}
+
+export function usageFromTimings(t: Timings) {
+  return {
+    inputTokens: (t.prompt_n ?? 0) + (t.cache_n ?? 0),
+    outputTokens: t.predicted_n ?? 0,
+    cacheReadTokens: t.cache_n ?? undefined,
+    reasoningTokens: undefined,
+  };
 }
 
 // Non-standard fields OpenAI-compatible vendors add to a message or a stream delta.

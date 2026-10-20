@@ -7,8 +7,9 @@ test("every catalog entry is well-formed", () => {
     // process.env[name] works with any string key (bracket access, not a shell `export`), so
     // real providers like "302ai" whose env var starts with a digit are still valid here.
     expect(e.envVar, `${key} envVar`).toMatch(/^[A-Z0-9_]+$/);
-    if (key !== "custom") expect(e.models.length, `${key} models`).toBeGreaterThan(0); // custom prompts for the id
-    expect(["anthropic", "gemini", "openai", "copilot"]).toContain(e.client);
+    // custom prompts for the id; local lists what is installed (GET /models?provider=local)
+    if (key !== "custom" && key !== "local") expect(e.models.length, `${key} models`).toBeGreaterThan(0);
+    expect(["anthropic", "gemini", "openai", "copilot", "local"]).toContain(e.client);
     // OpenAI-compatible providers must carry a baseURL to route correctly — except "openai"
     // itself (default URL) and "custom" (URL comes from the agent config).
     if (e.client === "openai" && key !== "openai" && key !== "custom") {
@@ -21,6 +22,7 @@ test("local providers are categorized and need no key; byok excludes them", () =
   const local = providersByCategory("local");
   expect(local).toContain("ollama");
   expect(local).toContain("lmstudio");
+  expect(local).toContain("local");
   for (const k of local) expect(CATALOG[k]!.keyOptional, `${k} keyOptional`).toBe(true);
 
   const byok = providersByCategory("byok");
