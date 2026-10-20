@@ -34,7 +34,9 @@ The published package (`@slenderbuilds/niti` on npm) ships per-platform binaries
 3. **Session.** A title bar (with the goal, awake and remote chips), the agents' transcripts (all
    side by side, or one), the Agents panel, the Files panel (the project tree marked M edited, A
    created, · read; enter views a file, `e` opens it in `$EDITOR`), the task board and connected
-   LSP/MCP servers, the prompt, and a footer of the keys in force.
+   LSP/MCP servers, the prompt, and a footer of the keys in force. After an update the session opens
+   on what's new: "Updated to 0.4.10. Got 3 features, 5 bug fixes, and 1 other change." and the list.
+   An approval nobody answers is denied after `approvalTimeout` (5 minutes), with a countdown.
 
 **Keys**
 
@@ -89,6 +91,7 @@ internal/session/    the live view: transcript, tool feed, diffs, approvals, age
 internal/theme/      palettes and avatars
 internal/trust/      the trust prompt
 internal/ui/         shared list, panel and layout widgets
+internal/whatsnew/   what changed since the last version run (changelog.json, drafted by bun run bump)
 ```
 
 ## Check it

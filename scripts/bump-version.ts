@@ -8,6 +8,7 @@
 // build-release.ts, so it is not a fourth place; bun.lock is refreshed below.) The release workflow
 // re-checks all three.
 import { readFileSync, writeFileSync } from "node:fs";
+import { classify } from "./changelog.ts";
 
 const next = process.argv[2];
 if (!next || !/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(next)) {
@@ -30,6 +31,21 @@ writeFileSync(goFile, bumped);
 // CI on the very next push — which is what kept CI red after the 0.3.3 bump.
 if (Bun.spawnSync(["bun", "install"], { stdout: "inherit", stderr: "inherit" }).exitCode !== 0) {
   throw new Error("bun install failed — bun.lock was not refreshed");
+}
+
+// What's new: the TUI tells a user who updated what this release carries (tui/internal/whatsnew).
+// Drafted from the CLI's commits since the last v* tag, sorted by their wording — edit the entry
+// before committing; it's what users read.
+const logFile = "tui/internal/whatsnew/changelog.json";
+const releases: { version: string; features: string[]; fixes: string[]; other: string[] }[] = JSON.parse(readFileSync(logFile, "utf8"));
+if (!releases.some((r) => r.version === next)) {
+  const last = Bun.spawnSync(["git", "describe", "--tags", "--abbrev=0", "--match", "v*"]).stdout.toString().trim();
+  const range = last ? [`${last}..HEAD`] : [];
+  const subjects = Bun.spawnSync(["git", "log", "--no-merges", "--format=%s", ...range, "--", "src", "tui", "web", "bin", "scripts", "package.json"])
+    .stdout.toString().split("\n").map((l) => l.trim()).filter((l) => l && !/^Bump version/i.test(l));
+  releases.unshift({ version: next, ...classify(subjects) });
+  writeFileSync(logFile, JSON.stringify(releases, null, 2) + "\n");
+  console.log(`${logFile}: drafted ${next} from ${subjects.length} commits — edit it before committing`);
 }
 
 console.log(`version → ${next} (package.json, its optionalDependencies, ${goFile}, bun.lock)`);

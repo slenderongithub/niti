@@ -1,0 +1,49 @@
+[
+  {
+    "version": "0.4.9",
+    "features": [
+      "Pair a phone by typing the Mac's code on it: no email codes, no compare-and-allow",
+      "The built-in relay is niti-relay on Cloudflare"
+    ],
+    "fixes": [
+      "/remote on <email> uses the built-in relay, not the one saved from last time"
+    ],
+    "other": []
+  },
+  {
+    "version": "0.4.8",
+    "features": [
+      "Remote control: drive this Mac's niti from a phone, end-to-end encrypted",
+      "/goal: keep working toward an objective, round after round",
+      "/awake: keep the Mac awake while agents work",
+      "Interrupt one agent without stopping the run (x in the Agents panel)",
+      "Hashline edits, opt-in per agent (editFormat: hashline)",
+      "Review gate: a skeptical reviewer that comments rather than rewrites",
+      "Agents are told their turn budget",
+      "Test and build output is condensed before it enters the history",
+      "Model lists keep themselves current from models.dev"
+    ],
+    "fixes": [
+      "Startup no longer crashes on databases an older build downgraded",
+      "/awake off restores lid-closed sleep an earlier /awake left off",
+      "The core exits when the TUI that started it is gone",
+      "Sandbox and trust gaps closed; scheduler and agent-loop bugs fixed",
+      "OpenAI-compatible providers get reasoning back between tool calls"
+    ],
+    "other": [
+      "Current OpenAI models, prices and context windows",
+      "Safer $EDITOR launch and clearer trust wording",
+      "The planner keeps a chain of dependent steps on one agent"
+    ]
+  },
+  {
+    "version": "0.4.7",
+    "features": [
+      "Agent avatars in the TUI welcome and the web dashboard"
+    ],
+    "fixes": [
+      "An approval answer lands on the request that was shown, not whichever is first"
+    ],
+    "other": []
+  }
+]

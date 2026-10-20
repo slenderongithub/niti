@@ -152,6 +152,7 @@ in one disappears from the others (the core answers by id; a second answer gets 
   auth.json          provider keys (0600; the OS keychain when available)
   remote.json        this Mac's remote identity: signing key, account, allowed phones (0600)
   trusted.json       folders you've trusted, with a snapshot of each agents.yaml
+  version.json       the last niti version the TUI ran, so an update can say what's new
 ```
 
 `.niti/agents.yaml`:
@@ -256,7 +257,8 @@ platform packages (`niti-darwin-arm64`, `niti-darwin-x64`, `niti-linux-x64`, `ni
 `niti-win32-x64`), each carrying both binaries and the dashboard.
 
 ```sh
-bun run bump 0.4.9                   # package.json, its platform pins, the TUI's Version, bun.lock
+bun run bump 0.4.9                   # package.json, its platform pins, the TUI's Version, bun.lock,
+                                     # and a drafted what's-new entry: edit tui/internal/whatsnew/changelog.json
 git commit -am "Bump version to 0.4.9"
 bun run build:release                # all five platforms into npm/
 npm login

@@ -257,6 +257,13 @@ func (m Model) Init() tea.Cmd {
 // subcommand names. Unknown names leave the session untouched.
 // WithVerbose starts the session with tool-call collapsing off (`niti --verbose`); it is the same
 // switch as the Config tab's "Collapse tool calls" row.
+// WithWhatsNew opens the session on what changed since the last version this user ran
+// (whatsnew.Check); esc closes it like any command's output.
+func (m Model) WithWhatsNew(text string) Model {
+	m.show("What's new", text)
+	return m
+}
+
 func (m Model) WithVerbose(on bool) Model {
 	m.verbose = on
 	for _, st := range m.agents {

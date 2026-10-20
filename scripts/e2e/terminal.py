@@ -20,7 +20,7 @@ import atexit, signal
 atexit.register(fake.kill)
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
 time.sleep(0.6)
-env = dict(os.environ, TERM="xterm-256color", NITI_AUTH_FILE=os.path.join(state, "auth.json"), NITI_TRUST_FILE=os.path.join(state, "trust.json"), NITI_REMOTE_FILE=os.path.join(state, "remote.json"), NITI_NO_MOUSE="1", NITI_OFFLINE="1", NITI_MODELS_FILE=os.path.join(state, "models.json"))
+env = dict(os.environ, TERM="xterm-256color", NITI_AUTH_FILE=os.path.join(state, "auth.json"), NITI_TRUST_FILE=os.path.join(state, "trust.json"), NITI_REMOTE_FILE=os.path.join(state, "remote.json"), NITI_NO_MOUSE="1", NITI_OFFLINE="1", NITI_MODELS_FILE=os.path.join(state, "models.json"), NITI_VERSION_FILE=os.path.join(state, "version.json"))
 env.pop("NITI_TRUST", None)
 pid, fd = pty.fork()
 if pid == 0:

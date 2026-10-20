@@ -30,7 +30,7 @@ writeFileSync(
 mkdirSync(join(P, ".niti/commands"));
 writeFileSync(join(P, ".niti/commands/hi.md"), "---\nname: hi\ndescription: greet the user\n---\nhello $ARGUMENTS\n");
 const llm = Bun.spawn(["bun", join(HERE, "fakellm.ts"), String(LLM), state], { stdout: "ignore", stderr: "inherit" });
-const env = { ...process.env, NITI_TRUST: "1", NITI_AUTH_FILE: join(state, "auth.json"), NITI_TRUST_FILE: join(state, "trust.json"), NITI_REMOTE_FILE: join(state, "remote.json"), NITI_OFFLINE: "1", NITI_MODELS_FILE: join(state, "models.json") };
+const env = { ...process.env, NITI_TRUST: "1", NITI_AUTH_FILE: join(state, "auth.json"), NITI_TRUST_FILE: join(state, "trust.json"), NITI_REMOTE_FILE: join(state, "remote.json"), NITI_OFFLINE: "1", NITI_MODELS_FILE: join(state, "models.json"), NITI_VERSION_FILE: join(state, "version.json") };
 const core = Bun.spawn(["bun", "run", join(NITI, "src/cli.ts"), "serve"], { cwd: P, env, stdout: "pipe", stderr: Bun.file(join(state, "core.log")) });
 const reader = core.stdout.getReader();
 let first = "";

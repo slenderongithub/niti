@@ -24,6 +24,7 @@ import (
 	"github.com/niti/tui/internal/theme"
 	"github.com/niti/tui/internal/trust"
 	"github.com/niti/tui/internal/ui"
+	"github.com/niti/tui/internal/whatsnew"
 	"github.com/niti/tui/internal/wizard"
 )
 
@@ -520,6 +521,9 @@ func main() {
 	m := session.New(c.client, sess, events, cancel)
 	verbose, rest := parseArgs(os.Args[1:])
 	m = m.WithVerbose(verbose).WithTabGlow()
+	if news := whatsnew.Check(ui.Version); news != "" {
+		m = m.WithWhatsNew(news)
+	}
 	if len(rest) > 0 {
 		m = m.OpenSettings(rest[0]) // niti status | config | settings | usage | stats
 	}
