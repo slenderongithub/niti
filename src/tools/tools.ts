@@ -90,7 +90,8 @@ export const SHELL_TIMEOUT_MS = 120_000;
 // A command that starts a long-running server: npm start / run dev, a node, bun or python server
 // file, python -m http.server, flask run, uvicorn, npx serve and the like.
 export function startsServer(command: string, args: string[] = []): boolean {
-  const line = [command, ...args].join(" ").trim();
+  // Past any `env` and NAME=value settings in front: "env PORT=3999 node server.js" starts a server.
+  const line = [command, ...args].join(" ").trim().replace(/^(env\s+)?([A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/, "");
   return (
     /^(npm|pnpm|yarn|bun)\s+(start|run\s+(start|dev|serve|preview))\b/.test(line) ||
     /^(node|bun|deno|nodemon)\s+(run\s+)?\S*(server|app|index|main)\.(m?js|cjs|ts)\s*$/.test(line) ||

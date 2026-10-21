@@ -406,7 +406,7 @@ test("local: a forced reply that says it's done is finish; a server started in t
   const r = await new Agent({ ...localCfg, allowedTools: ["write_file"] }, p, new Bus(), { root }).runDetailed("Write notes.txt");
   expect(r.outcome).toBe("done");
   const { startsServer } = await import("../tools/tools.ts");
-  for (const c of ["npm start", "node server.js", "python3 -m http.server 8000", "python app.py", "npx serve ."]) expect(startsServer(c)).toBe(true);
+  for (const c of ["npm start", "node server.js", "python3 -m http.server 8000", "python app.py", "npx serve .", "env PORT=3999 node server.js", "env NODE_ENV=production PORT=1 npm start"]) expect(startsServer(c)).toBe(true);
   for (const c of ["npm test", "node -e 1", "python3 -c 'print(1)'", "node build.js"]) expect(startsServer(c)).toBe(false);
 });
 
