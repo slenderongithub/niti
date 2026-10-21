@@ -235,4 +235,60 @@ export const TASKS: Task[] = [
       return null;
     },
   },
+  // What a local model failed at outright before the action protocol: deleting, running, styling.
+  {
+    name: "delete-the-dead-module",
+    tests: "edit",
+    suite: "local",
+    files: {
+      "package.json": PKG,
+      "src/index.ts": "import { greet } from './greet.ts';\nconsole.log(greet('world'));\n",
+      "src/greet.ts": "export const greet = (n: string) => `hello ${n}`;\n",
+      "src/legacy-greet.ts": "// unused since the rewrite\nexport const oldGreet = (n: string) => 'hi ' + n;\n",
+    },
+    prompt: "src/legacy-greet.ts isn't used anywhere any more. Delete it.",
+    check: (read) => {
+      if (read("src/legacy-greet.ts") !== undefined) return "src/legacy-greet.ts still exists";
+      if (!(read("src/greet.ts") ?? "").includes("hello")) return "src/greet.ts was changed or removed";
+      if (!(read("src/index.ts") ?? "").includes("greet('world')")) return "src/index.ts was changed";
+      return null;
+    },
+  },
+  {
+    name: "run-the-generator",
+    tests: "multistep",
+    suite: "local",
+    files: {
+      "package.json": PKG,
+      "gen.js": "const fs = require('fs');\nconst rows = [1, 2, 3].map((n) => `item ${n}: ${n * n}`);\nfs.writeFileSync('squares.txt', rows.join('\\n') + '\\n');\n",
+    },
+    prompt: "Run gen.js with node, and tell me what squares.txt says. Don't write squares.txt yourself.",
+    check: (read) => {
+      const t = read("squares.txt");
+      if (t === undefined) return "squares.txt was never generated (gen.js wasn't run)";
+      if (!t.includes("item 3: 9")) return "squares.txt doesn't hold what gen.js writes";
+      if (read("gen.js")?.includes("item ${n}") !== true) return "gen.js was changed";
+      return null;
+    },
+  },
+  {
+    name: "style-a-landing-page",
+    tests: "multistep",
+    suite: "local",
+    files: { "package.json": PKG },
+    prompt: "Make a stunning landing page for Bean There, a small coffee roaster: index.html and styles.css.",
+    check: (read) => {
+      const html = read("index.html") ?? "";
+      const css = read("styles.css") ?? "";
+      if (!html) return "no index.html";
+      if (!/href=["']styles\.css["']/.test(html)) return "index.html doesn't link styles.css";
+      if (!/bean there/i.test(html)) return "the page never names Bean There";
+      if (/lorem ipsum|123-456-7890|example\.com/i.test(html)) return "placeholder copy left in";
+      if ((css.match(/\{/g) ?? []).length < 15) return "styles.css is barely styled";
+      if (!/@media/.test(css)) return "no media query";
+      if (!/:hover/.test(css)) return "no hover states";
+      if (!/fonts\.googleapis|@font-face/.test(html + css) && /font-family\s*:\s*(arial|helvetica|sans-serif)/i.test(css)) return "default fonts only";
+      return null;
+    },
+  },
 ];
