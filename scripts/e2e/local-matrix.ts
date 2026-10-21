@@ -8,7 +8,7 @@
 //   4. chat-only models never get a task;
 //   5. two models that don't fit in memory together are never loaded at once.
 // No network, no model, no cost. Default: each persona leads once and works once, per engine (24
-// runs, plus all-chat-only). --full: every lead × every worker (288). --only=<lead>,<worker>.
+// runs, plus all-chat-only). --full: every lead × every worker (450). --only=<lead>,<worker>.
 //   bun scripts/e2e/local-matrix.ts [--full] [--only=fence,lazy] [--engine=gguf|mlx] [--jobs=4]
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";

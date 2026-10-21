@@ -1053,6 +1053,15 @@ func (m *Model) applyAgentEvent(ae api.AgentEvent) {
 	if ae.Payload == "" {
 		return
 	}
+	// niti's acceptance checks on a local agent's work: the verdict, then each failing check with
+	// what to fix (the desktop app's checklist card).
+	if ae.Protocol == "checks" && len(ae.Checks) > 0 {
+		for _, l := range checkLines(ae.Checks) {
+			st.push(l)
+		}
+		st.activity = truncate(strings.TrimLeft(checkLines(ae.Checks)[0], "▸⚠ "), 46)
+		return
+	}
 	line := humanize(ae.Type, ae.Payload)
 	if line == "" {
 		return

@@ -419,7 +419,7 @@ coffee-shop goal with a two-agent team of them. It checks:
 - chat-only models get no task;
 - never two models loaded that don't fit together (`NITI_GPU_BUDGET`, 10 GB).
 By default each persona leads once and works once per engine (in `run.sh`). `--full` runs every
-lead × worker on both engines (288 runs, about 2 minutes); `--only=<lead>,<worker>` runs one pair.
+lead × worker on both engines (450 runs, about 4 minutes); `--only=<lead>,<worker>` runs one pair.
 
 | What | Command |
 |---|---|

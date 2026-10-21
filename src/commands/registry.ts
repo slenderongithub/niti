@@ -236,7 +236,7 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: "models",
-    description: "Models that run on this Mac: /models [search <q> | get <repo>[:<quant>] | list | found | add <id> | rm <id>]",
+    description: "Models that run on this Mac: /models [search <q> | get <repo>[:<quant>] | list | found | add <id> | check <id> | doctor <id> | rm <id>]",
     async run(engine, args, ctx) {
       // Gigabytes of downloads and deletes are decided at the Mac (the bridge doesn't forward this
       // command either; this is the second lock).
@@ -257,7 +257,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         return { ok: true, message: `downloading ${d.id}${d.total ? ` (${(d.total / 1e9).toFixed(1)} GB)` : ""} in the background — /models list shows it once it's installed; use it with /model <agent> local/${d.id}` };
       }
       const lines: string[] = [];
-      const code = await modelsCommand(parts, (s) => lines.push(s.replaceAll("niti-core models", "/models")));
+      const code = await modelsCommand(parts, (s) => lines.push(s.replaceAll("niti-core models", "/models")), fetch, true);
       return { ok: code === 0, message: lines.join("\n") };
     },
   },

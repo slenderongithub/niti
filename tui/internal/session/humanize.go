@@ -2,8 +2,11 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/niti/tui/internal/api"
 )
 
 // The server publishes tool telemetry as machine text — `read_file {"path":"a.html"}` for a call,
@@ -77,6 +80,36 @@ func humanize(kind, payload string) string {
 		return "· " + payload
 	}
 	return "  " + payload
+}
+
+// checkLines renders an acceptance-check result: a summary line, then one line per failing check
+// (✖ must fix, ⚠ worth fixing) with the first line of what to do.
+func checkLines(checks []api.AcceptCheck) []string {
+	passed := 0
+	for _, c := range checks {
+		if c.Ok {
+			passed++
+		}
+	}
+	if passed == len(checks) {
+		return []string{fmt.Sprintf("▸ niti checked the work — all %d checks pass", len(checks))}
+	}
+	out := []string{fmt.Sprintf("⚠ niti checked the work — not done yet (%d/%d pass)", passed, len(checks))}
+	for _, c := range checks {
+		if c.Ok {
+			continue
+		}
+		mark := "⚠"
+		if c.Grade == "must" {
+			mark = "✖"
+		}
+		detail, _, _ := strings.Cut(c.Detail, "\n")
+		if detail == "" {
+			detail = c.Name
+		}
+		out = append(out, "  "+mark+" "+detail)
+	}
+	return out
 }
 
 func describeCall(name, args string) string {

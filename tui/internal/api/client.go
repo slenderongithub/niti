@@ -91,6 +91,19 @@ type AgentEvent struct {
 	Removed    int      `json:"removed"`
 	More       int      `json:"more"`
 	Todos      []Todo   `json:"todos"`
+
+	// A harness intervention on a local agent (src/events/bus.ts): "rejected_turn", "salvaged",
+	// "checks", "check_failed", "model_swap", "plan_fallback", "probe". Checks rides with "checks".
+	Protocol string        `json:"protocol"`
+	Checks   []AcceptCheck `json:"checks"`
+}
+
+// AcceptCheck is one acceptance check niti ran on a local agent's work (src/agent/accept.ts).
+type AcceptCheck struct {
+	Name   string `json:"name"`
+	Ok     bool   `json:"ok"`
+	Detail string `json:"detail"`
+	Grade  string `json:"grade"` // "must" | "quality"
 }
 
 // Hunk is one numbered piece of a file change: K is "+", "-" or " ", O/N the old/new line numbers.

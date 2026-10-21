@@ -72,7 +72,13 @@ be added in place (`niti-core models found`, then `add`), with no second downloa
 `niti-core models` (below) or the desktop app's Models page. Local agents use the harness's local
 profile (`profile: local|standard` on an agent overrides it): short guidance, fewer tools, earlier
 compaction, and a guard against repeated calls. Their shell has no internet unless you approve the
-command. New teams get the `web` tools:
+command. niti checks each local model once, before its first task (`/models check <id>` runs it again,
+`/models doctor <id>` adds the engines' recent errors; `/models list` shows ready, partly ready or chat
+only). Every turn of a local task is one tool call, and niti checks the work before a task counts as done:
+the transcript shows `⚠ niti checked the work — not done yet` with each failing check (`✖` must fix, `⚠`
+worth fixing), which goes back to the agent to fix. A chat-only model answers and reviews but never
+gets work that changes files. Models that don't fit in memory together take turns, and the transcript
+says when one waits. New teams get the `web` tools:
 - `web_fetch` reads a page;
 - `lookup` checks npm, PyPI, crates.io, Go, GitHub, Stack Overflow and Wikipedia;
 - `web_search` runs once a free Tavily key is saved (`niti-core auth login tavily`).

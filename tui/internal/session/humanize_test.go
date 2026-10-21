@@ -3,6 +3,8 @@ package session
 import (
 	"strings"
 	"testing"
+
+	"github.com/niti/tui/internal/api"
 )
 
 func TestHumanize(t *testing.T) {
@@ -47,5 +49,20 @@ func TestHumanizePlan(t *testing.T) {
 	// The call itself reads as an action, not as raw JSON.
 	if got := humanize("tool_call", `todo {"items":[{"text":"a"}]}`); got != "⏺ Plan" {
 		t.Errorf("todo call = %q", got)
+	}
+}
+
+func TestCheckLines(t *testing.T) {
+	got := checkLines([]api.AcceptCheck{
+		{Name: "index.html: linked files exist", Ok: true, Grade: "must"},
+		{Name: "its own fonts", Ok: false, Grade: "quality", Detail: "The page uses Arial — the default look.\nLoad a font pair."},
+		{Name: "the server starts", Ok: false, Grade: "must", Detail: "`npm start` exited (code 1)"},
+	})
+	want := []string{"⚠ niti checked the work — not done yet (1/3 pass)", "  ⚠ The page uses Arial — the default look.", "  ✖ `npm start` exited (code 1)"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q", got)
+	}
+	if all := checkLines([]api.AcceptCheck{{Name: "x", Ok: true}}); all[0] != "▸ niti checked the work — all 1 checks pass" {
+		t.Fatalf("got %q", all)
 	}
 }

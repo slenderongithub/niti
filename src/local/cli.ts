@@ -18,7 +18,9 @@ function row(m: CatalogModel): string {
   return `  ${m.repo}${m.format === "mlx" ? "  [MLX]" : ""}\n      ${params(m.params)} · ${m.pick ? `${m.pick.quant} ${size(q?.size)} · ${TIER[m.pick.fit.tier]}` : "no GGUF quants"} · ${tags} · ${m.downloads.toLocaleString("en-US")} downloads/mo${m.installed.length ? " · installed" : ""}`;
 }
 
-export async function modelsCommand(args: string[], out: (s: string) => void = console.log, fetchImpl: typeof fetch = fetch): Promise<number> {
+// `inEngine`: run from a session's /models, where the runtime is the one its agents are using — a
+// check must not unload their models when it's done.
+export async function modelsCommand(args: string[], out: (s: string) => void = console.log, fetchImpl: typeof fetch = fetch, inEngine = false): Promise<number> {
   const dev = device();
   const [sub = "recommended", ...rest] = args;
   switch (sub) {
@@ -65,7 +67,9 @@ export async function modelsCommand(args: string[], out: (s: string) => void = c
     case "list": {
       const ms = listInstalled();
       if (!ms.length) return (out("No models installed. See: niti-core models (or niti-core models found)"), 0);
-      for (const m of ms) out(`  ${m.id}  ${(m.format ?? "gguf").toUpperCase()} · ${size(m.bytes)} · ${params(m.params)}${m.tools ? " · tools" : m.tools === false ? " · chat only" : ""}${m.path ? ` · from ${m.source ?? m.path}` : ""}${m.lastUsed ? ` · used ${new Date(m.lastUsed).toLocaleDateString()}` : ""}`);
+      const ready = (m: (typeof ms)[number]) => (m.probe ? ` · ${{ ready: "ready", partial: "partly ready", "chat-only": "chat only" }[m.probe.verdict]}` : m.tools ? " · tools (not checked yet)" : m.tools === false ? " · chat only" : "");
+      for (const m of ms) out(`  ${m.id}  ${(m.format ?? "gguf").toUpperCase()} · ${size(m.bytes)} · ${params(m.params)}${ready(m)}${m.path ? ` · from ${m.source ?? m.path}` : ""}${m.lastUsed ? ` · used ${new Date(m.lastUsed).toLocaleDateString()}` : ""}`);
+      if (ms.some((m) => !m.probe)) out("\nniti checks each model once before its first agent task; to see it now: niti-core models check <id>");
       return 0;
     }
     case "check":
@@ -82,10 +86,10 @@ export async function modelsCommand(args: string[], out: (s: string) => void = c
         try {
           r = await probeModel(id, { template: templateOf(m) });
         } catch (err) {
-          localRuntime().stopAll();
+          if (!inEngine) localRuntime().stopAll();
           return (out(`error: the check couldn't run: ${(err as Error).message}`), 1);
         }
-        localRuntime().stopAll();
+        if (!inEngine) localRuntime().stopAll();
       }
       const label = { ready: "Ready for agent work", partial: "Partly ready", "chat-only": "Chat only" }[r.verdict];
       out(`${label} — ${id} on ${r.engine}`);
