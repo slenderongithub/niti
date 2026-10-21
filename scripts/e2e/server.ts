@@ -328,7 +328,10 @@ try {
   const mlxRun = JSON.stringify(events.slice(mlxMark).filter((e) => e.kind === "agent_event" && e.event?.agentId === "backend"));
   check("the MLX agent called a tool and read the result", mlxRun.includes("RESULT<<") && mlxRun.includes("b = 2"), mlxRun.slice(-400));
   const mlxLog = join(found, "fakellm.log");
-  check("requests named the served model and asked for usage", existsSync(mlxLog) && readFileSync(mlxLog, "utf8").includes("MLX model=default_model") && readFileSync(mlxLog, "utf8").includes("usage=true"));
+  // Local agent turns don't stream (a call written as text would stream into the chat), so usage
+  // comes back in the reply body; what matters is that it was counted.
+  const mlxUsage = events.slice(mlxMark).filter((e) => e.kind === "usage").flatMap((e) => e.agents ?? []).find((a: any) => a.agentId === "backend");
+  check("requests named the served model, and their usage was counted", existsSync(mlxLog) && readFileSync(mlxLog, "utf8").includes("MLX model=default_model") && (mlxUsage?.usage?.inputTokens ?? 0) > 0, JSON.stringify(mlxUsage));
   check("unload the MLX model", (await post("/local/unload", { model: mlxId })).status === 200);
   check("removing it from niti leaves LM Studio's files", (await fetch(hs.url + `/local/models?id=${encodeURIComponent(mlxId)}`, { method: "DELETE", headers: H })).status === 200 && existsSync(join(found, "model.safetensors")));
   check("unload", (await post("/local/unload", { model: id })).status === 200);
