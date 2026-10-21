@@ -53,7 +53,9 @@ It wears the desktop app's design language, redrawn for a phone, and must keep d
   braille Spinner and the `niti.` wordmark.
 - **Patterns** (`src/components/items.tsx`, `avatar.tsx`): the agents rail (avatars that blink and
   bob, model in mono, context bars, the lead's ★), transcript rows (tool one-liners with a check or a
-  spinner, shell and diff blocks, notes by tone, your messages as bubbles), lowercase status words.
+  spinner, shell and diff blocks, notes by tone, your messages as bubbles, the card niti's acceptance
+  checks on a local agent's work make: failures with what to fix, what passed folded), lowercase
+  status words.
 - **Phone rules**: every control reaches 44pt; motion stops under Reduce Motion (one shared clock,
   `src/lib/ticker.ts`); haptics and Face ID are native. Nothing else is: iOS draws its own title bar,
   alerts, action sheets, part-height sheets and switches in Liquid Glass, which ignores niti's colours,

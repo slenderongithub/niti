@@ -1,12 +1,12 @@
 import { memo, useEffect, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { BookOpen, Brain, Check, ChevronRight, CornerDownRight, FilePen, FilePlus2, FileSearch, FileText, FolderTree, ListChecks, ScanSearch, Search, Stethoscope, Terminal, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react-native";
+import { BookOpen, Brain, Check, ChevronRight, CircleAlert, CircleCheck, CircleX, ShieldCheck, CornerDownRight, FilePen, FilePlus2, FileSearch, FileText, FolderTree, ListChecks, ScanSearch, Search, Stethoscope, Terminal, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react-native";
 import type { Item, RenderItem } from "../../../niti-app/src/renderer/src/lib/reducer";
-import type { Todo } from "../../../niti-app/src/renderer/src/lib/types";
+import type { AcceptCheck, Todo } from "../../../niti-app/src/renderer/src/lib/types";
 import { fmtDur, groupLabel, PAST_VERB } from "../../../niti-app/src/renderer/src/lib/humanize";
 import { toRows } from "../../../niti-app/src/renderer/src/lib/diff";
 import { alpha, radius, space, type, useTheme } from "@/lib/theme";
-import { Spinner, Text } from "./ui";
+import { Card, CardContent, CardHeader, Spinner, Text } from "./ui";
 
 // An agent's transcript, row for row as the desktop app draws it (features/session/items.tsx): tool
 // calls as quiet one-liners with a check or a spinner, shell output and diffs in bordered blocks,
@@ -291,6 +291,8 @@ export const ItemView = memo(function ItemView({ item }: { item: RenderItem }) {
       return <DiffBlock item={item} />;
     case "note":
       return <NoteRow item={item} />;
+    case "checks":
+      return <ChecksCard checks={item.checks} />;
     case "plan-done":
       return (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space(2), paddingVertical: 3 }}>
@@ -302,6 +304,64 @@ export const ItemView = memo(function ItemView({ item }: { item: RenderItem }) {
       );
   }
 });
+
+// niti's acceptance checks on a local agent's work, as the desktop's card shows them: failures first,
+// each with what to fix; what passed folded behind a 44pt toggle.
+function ChecksCard({ checks }: { checks: AcceptCheck[] }) {
+  const t = useTheme();
+  const [open, setOpen] = useState(false);
+  const failing = checks.filter((c) => !c.ok).sort((a, b) => (a.grade === b.grade ? 0 : a.grade === "must" ? -1 : 1));
+  const passed = checks.filter((c) => c.ok);
+  const ok = failing.length === 0;
+  return (
+    <Card style={{ marginVertical: space(1.5) }}>
+      <CardHeader
+        icon={<ShieldCheck color={ok ? t.success : t.warning} size={16} style={{ marginTop: 2 }} />}
+        title={ok ? "niti checked the work — all clear" : "niti checked the work — not done yet"}
+        action={
+          <Text mono size={type.xs} tone="mutedForeground">
+            {`${passed.length}/${checks.length} pass`}
+          </Text>
+        }
+      />
+      <CardContent style={{ paddingTop: space(2) }}>
+        {failing.map((c) => {
+          const Icon = c.grade === "must" ? CircleX : CircleAlert;
+          return (
+            <View key={c.name} style={{ flexDirection: "row", gap: space(2) }}>
+              <Icon color={c.grade === "must" ? t.destructive : t.warning} size={15} style={{ marginTop: 2 }} />
+              <View style={{ flex: 1 }}>
+                <Text size={type.sm} weight="medium">
+                  {c.name}
+                </Text>
+                {c.detail ? (
+                  <Text selectable size={type.sm} tone="mutedForeground">
+                    {c.detail}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+          );
+        })}
+        {passed.length > 0 && !ok && (
+          <Pressable accessibilityRole="button" accessibilityLabel={open ? "Hide the checks that passed" : "Show the checks that passed"} onPress={() => setOpen(!open)} style={{ minHeight: 44, flexDirection: "row", alignItems: "center", gap: space(1) }}>
+            <ChevronRight color={t.mutedForeground} size={14} style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }} />
+            <Text size={type.sm} tone="mutedForeground">{`${passed.length} passed`}</Text>
+          </Pressable>
+        )}
+        {(open || ok) &&
+          passed.map((c) => (
+            <View key={c.name} style={{ flexDirection: "row", alignItems: "center", gap: space(2) }}>
+              <CircleCheck color={t.success} size={15} />
+              <Text size={type.sm} tone="mutedForeground" style={{ flex: 1 }}>
+                {c.name}
+              </Text>
+            </View>
+          ))}
+      </CardContent>
+    </Card>
+  );
+}
 
 // The agent's own checklist, as the app shows it above the transcript.
 export function TodoList({ todos, color }: { todos: Todo[]; color: string }) {
