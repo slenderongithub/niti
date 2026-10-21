@@ -1639,7 +1639,7 @@ export class Agent {
       // Shell syntax in a program's arguments is passed to it literally: a small model's
       // `mkdir public && ls` made directories named "&&" and "ls".
       const op = args.find((a) => SHELL_OPERATORS.has(a) || /^\$\(|^`/.test(a));
-      if (op && !(op === ";" && cmd === "find")) return refuse(`error: shell runs one program with its arguments, not a shell line — "${op}" would reach ${cmd} as a literal argument. Make one call per command (and read output in full; there are no pipes or redirects).`, `shell: "${op}" isn't shell syntax here`);
+      if (op && !(op === ";" && cmd === "find")) return refuse(`error: shell runs one program with its arguments, not a shell line — "${op}" would reach ${cmd} as a literal argument. Make one call per command (and read output in full; there are no pipes or redirects). To check your work, call finish: niti then checks the pages, starts the server and tries its routes, and tells you what's wrong.`, `shell: "${op}" isn't shell syntax here`);
       // Removing or moving a teammate's file is taking it away from them.
       if (/^(rm|mv|unlink|trash)$/.test(cmd) || (cmd === "git" && args[0] === "rm") || (cmd === "find" && args.includes("-delete"))) {
         const theirs = args.map((a) => teammateFile(ctx.task ?? "", a)).find(Boolean);
