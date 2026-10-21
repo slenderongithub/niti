@@ -24,6 +24,7 @@ export const PERSONAS = [
   "chatty", // never calls a tool, even when forced: chat only
   "needsforce", // describes the call in prose unless the engine makes it call (Qwen2.5-Coder on MLX)
   "badjson", // writes calls as JSON with the file's quotes unescaped and its lines as real newlines
+  "overreach", // writes every file of the request, its teammates' too (Qwen2.5-Coder as backend)
 ] as const;
 export type Persona = (typeof PERSONAS)[number];
 
@@ -111,7 +112,7 @@ function own(task: string): string {
   const i = task.indexOf("\n\nYour part: ");
   if (i >= 0) return task.slice(i + 13);
   const j = task.indexOf("\n\n(Part of the request: ");
-  return j >= 0 ? task.slice(0, j) : task;
+  return (j >= 0 ? task.slice(0, j) : task).replace(/\n\nTeammates' files: .*$/m, "");
 }
 
 function filesFor(task: string): string[] {
@@ -138,7 +139,7 @@ function nextAction(msgs: any[], persona: Persona, tools: string[]): Action {
   }
   // Since niti last checked the work, write again what it named, then finish again.
   const lastCheck = msgs.map((m, i) => (m.role === "user" && textOf(m).includes("niti checked the work") ? i : -1)).filter((i) => i >= 0).at(-1);
-  const plan = filesFor(task);
+  const plan = persona === "overreach" && !task.includes("Create a file named") ? [...FRONT, ...BACK] : filesFor(task);
   if (lastCheck !== undefined) {
     const said = textOf(msgs[lastCheck]);
     const named = plan.filter((f) => said.includes(f));
@@ -242,7 +243,7 @@ export function zooReply(persona: Persona, body: any): Reply {
       return { text: continuePrefill(prefill, action) };
     }
   }
-  const firstTurn = !msgs.some((m) => m.role === "assistant" && !String(textOf(m)).startsWith("(reply withheld"));
+  const firstTurn = !msgs.some((m) => m.role === "assistant");
   const r = dress(action, persona, firstTurn);
   return r.text !== undefined ? { text: wrap(r.text) } : r;
 }

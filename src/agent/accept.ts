@@ -35,11 +35,12 @@ export interface AcceptInput {
 
 // A split task's own part: "<line>\n\n(Part of the request: …)" or "<goal>\n\nYour part: …" (planner.ts).
 // The whole request decides the look and the name; only the own part decides who builds the server.
+// The teammates' files line (what this task must not write) is no part of its own.
 export function ownPart(task: string): string {
   const i = task.indexOf("\n\nYour part: ");
   if (i >= 0) return task.slice(i + 13);
   const j = task.indexOf("\n\n(Part of the request: ");
-  return j >= 0 ? task.slice(0, j) : task;
+  return (j >= 0 ? task.slice(0, j) : task).replace(/\n\nTeammates' files: .*$/m, "");
 }
 
 // The integration task the local planner adds (planner.ts withIntegration) checks the whole project.

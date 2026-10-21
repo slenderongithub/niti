@@ -104,13 +104,21 @@ in one disappears from the others (the core answers by id; a second answer gets 
    - anything else is asked again with the call forced.
    A turn that still isn't an action (or a `finish` before any work, or a second checklist instead of
    work) is refused: a stub replaces it in the history, the chat never shows it, and three in a row
-   fail the task. Silence after real work counts as `finish`. Thinking is on for a task's first turn
+   fail the task. Nothing of a refused reply stays in the history, not even a placeholder (models
+   copied it back). Silence after real work counts as `finish`, and so does "I'm done" (also after
+   a call opener the model abandoned). A local agent's shell gives a server command (`startsServer`:
+   npm start, node server.js, python -m http.server…) 15 s and then stops it, saying niti checks
+   servers at `finish`. Local tasks get 60 turns by default (`Profile.maxTurns`; cloud 30). Thinking is on for a task's first turn
    and right after a refusal only. A chat-only model (`probe.verdict`) runs without the protocol.
    A local lead plans in stages (`makeLocalPlan`), with plain-line asks recorded and sampled at 0.2:
    - it says what the message is in one line (`work`, `question: …`, `chat: …`; `parseRoute`);
    - it writes one line per ready teammate, `<id>: <task naming its files>` (`parsePlanLines`);
-   - niti builds the graph: the parts in parallel, each carrying the whole request, then an
-     integration task on the lead that checks the seams (linked files, routes, run steps).
+   - niti builds the graph: the parts in parallel, each carrying the whole request and a
+     `Teammates' files:` line naming the files the others' lines name, then an integration task on
+     the lead that checks the seams (linked files, routes, run steps). A local agent's write to a
+     teammate's file is refused (`teammateFile`); the integration task may touch anything. When the
+     request asks for deployment and no line has it, the README and start script go with the
+     server's line (else the lead's).
    If the lines don't come, `rolePlan` splits the goal by role (UI, server and deployment, tests,
    docs) from the goal's own words. A cloud lead's failed plan falls back to the same split. The
    lead plans unless its model couldn't split work in its check and a teammate's could. Chat-only
@@ -400,7 +408,8 @@ The personas:
 - `lazy`: ships Arial first and fixes it when the checks say so;
 - `chatty`: never calls a tool, even forced;
 - `needsforce`: describes the call in prose unless the engine makes it call (Qwen2.5-Coder on MLX);
-- `badjson`: writes calls as JSON with a file's quotes unescaped and real newlines.
+- `badjson`: writes calls as JSON with a file's quotes unescaped and real newlines;
+- `overreach`: writes every file of the request, its teammates' too.
 The fake MLX engine, like the real one, answers a started reply afresh instead of continuing it.
 Forced turns behave as on the real engines. `scripts/e2e/local-matrix.ts` runs a real core on the
 coffee-shop goal with a two-agent team of them. It checks:

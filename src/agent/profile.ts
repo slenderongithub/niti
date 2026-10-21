@@ -35,6 +35,8 @@ export interface Profile {
   // then withheld from the history. Small models answer "implement X" with prose, paste files into
   // the chat, and say "done" after a stub; this is the format that leaves them no room to.
   actionProtocol: boolean;
+  // Turns a task may take when agents.yaml sets none. A local model makes one call a turn.
+  maxTurns: number;
 }
 
 export const STANDARD: Profile = {
@@ -53,6 +55,7 @@ export const STANDARD: Profile = {
   jsonAsks: false,
   shellNetwork: true,
   actionProtocol: false,
+  maxTurns: 30,
 };
 
 // Short, imperative, one idea per line: the same conventions as TOOL_GUIDANCE (stay in the project,
@@ -64,6 +67,8 @@ Working habits:
 - Stay inside the project. Use paths relative to it. Never use '..' or an absolute path unless the user named that path.
 - Every reply is exactly one tool call. Do the work, don't describe it: to create a file, call 'write_file' with its complete content. Never paste a file into your reply.
 - Find before you read: 'grep' finds where something is, 'glob' finds a file by name. Don't guess paths.
+- Work on your task's files; don't explore .niti or beyond what the task needs.
+- Don't start servers: niti starts and checks yours when you call finish.
 - Read a file before you change it. To change part of a file use 'edit', copying oldString exactly from what 'read_file' showed, without the line numbers. Use 'write_file' only for a new file.
 - Make one tool call at a time and look at its result before the next.
 - After changing code, run the project's tests or checks with 'shell' before you say you are done.
@@ -89,6 +94,7 @@ export const LOCAL: Profile = {
   jsonAsks: true,
   shellNetwork: false,
   actionProtocol: true,
+  maxTurns: 60,
 };
 
 // An explicit `profile:` wins. Otherwise the models served on this Mac — niti's own runtime, Ollama,

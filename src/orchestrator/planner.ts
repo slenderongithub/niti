@@ -257,6 +257,8 @@ export function parseRoute(text: string, goal: string): { kind: "work" } | { kin
 const GOAL_UI = /\b(html|css|style|styling|page|pages|site|website|landing|ui|frontend|front-end|app|component|design|layout|screen|dashboard|portfolio)\b/i;
 const GOAL_SERVER = /\b(api|server|endpoint|route|database|db|backend|back-end|auth|full[- ]?stack|end[- ]to[- ]end|login|form submissions?|orders?)\b/i;
 const GOAL_DEPLOY = /\b(deploy|deployment|deployable|production|host|hosting|ship|launch|live|end[- ]to[- ]end)\b/i;
+// A file name in a planned line ("create index.html and styles.css").
+const FILE_NAME = /(?:^|[\s`*"'(])((?:[\w.-]+\/)*[\w-]+\.(?:html?|css|scss|js|mjs|cjs|jsx|ts|tsx|json|py|md|ya?ml|toml|sql))(?=$|[\s`*"'):,.;])/;
 const kindOf = (r: RoleInfo): number => ROLE_WORDS.findIndex(([role]) => role.test(`${r.role} ${r.id}`));
 
 export function rolePlan(goal: string, roles: RoleInfo[], leadId: string): TaskNode[] {
@@ -355,10 +357,20 @@ async function makeLocalPlan(lead: PlannerAgent, goal: string, roles: RoleInfo[]
       correction = `no line started with a teammate id (${ready.map((r) => r.id).join(", ")})`;
       continue;
     }
-    // Each part carries the whole request: the shop's name, the look it should have, what "done" means.
-    const tasks: TaskNode[] = ready
-      .filter((r) => lines[r.id])
-      .map((r, i) => ({ id: `t${i + 1}`, description: `${lines[r.id]}\n\n(Part of the request: ${goal})`, status: "pending", role: r.id, assignedTo: r.id, dependsOn: [], handoffTo: [] }));
+    const owners = ready.filter((r) => lines[r.id]);
+    // Deployment asked for and nobody's line has it: it goes with the server, else the lead.
+    if (GOAL_DEPLOY.test(goal) && !owners.some((r) => /readme|deploy/i.test(lines[r.id]!))) {
+      const who = owners.find((r) => /server|api|backend|package\.json/i.test(lines[r.id]!)) ?? owners.find((r) => r.id === leadId) ?? owners[0];
+      if (who) lines[who.id] += ". Also make it deployable: a package.json with a start script, and a README.md with how to run and deploy it";
+    }
+    // Each part carries the whole request (the shop's name, the look it should have, what "done"
+    // means) and says which files are the teammates' — writes to those are refused (agent.ts).
+    const filesOf = (line: string) => [...new Set([...line.matchAll(new RegExp(FILE_NAME.source, "gi"))].map((m) => m[1]!))];
+    const tasks: TaskNode[] = owners.map((r, i) => {
+      const others = owners.filter((o) => o !== r).map((o) => ({ id: o.id, files: filesOf(lines[o.id]!).filter((f) => !filesOf(lines[r.id]!).includes(f)) })).filter((o) => o.files.length);
+      const lane = others.length ? `\n\nTeammates' files: ${others.map((o) => `${o.id} owns ${o.files.join(", ")}`).join("; ")}` : "";
+      return { id: `t${i + 1}`, description: `${lines[r.id]}${lane}\n\n(Part of the request: ${goal})`, status: "pending", role: r.id, assignedTo: r.id, dependsOn: [], handoffTo: [] };
+    });
     return { goal, tasks: withIntegration(tasks, leadId, goal) };
   }
   return { goal, tasks: rolePlan(goal, roles, leadId), fallback: `${lead.config.id} couldn't split the work (${correction}) — split by role instead` };

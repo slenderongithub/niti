@@ -398,3 +398,14 @@ test("a call whose JSON a small model broke — unescaped quotes, real newlines 
   // Prose that merely mentions a call shape is not one.
   expect(extractTextToolCalls('I would call {"name": "write_file" with the "path" set.', ["write_file"], params)).toBeUndefined();
 });
+
+test("local: a forced reply that says it's done is finish; a server started in the shell is stopped with a note", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const p = scripted([() => ({ text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "notes.txt", content: "x" } }] }), () => ({ text: '<tool_call>\n{"name": "I\'m done.', toolCalls: [] })], seen);
+  const r = await new Agent({ ...localCfg, allowedTools: ["write_file"] }, p, new Bus(), { root }).runDetailed("Write notes.txt");
+  expect(r.outcome).toBe("done");
+  const { startsServer } = await import("../tools/tools.ts");
+  for (const c of ["npm start", "node server.js", "python3 -m http.server 8000", "python app.py", "npx serve ."]) expect(startsServer(c)).toBe(true);
+  for (const c of ["npm test", "node -e 1", "python3 -c 'print(1)'", "node build.js"]) expect(startsServer(c)).toBe(false);
+});

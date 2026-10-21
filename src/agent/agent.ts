@@ -25,7 +25,7 @@ import { condenseForModel, shellCommandLine } from "../tools/condense.ts";
 import { compactTurns, shouldAutoCompact, NOTES_BOARD_MARKER, promptTokens, resultBudgetChars, truncateMiddle, maskObservations } from "./context.ts";
 import { profileFor, type Profile } from "./profile.ts";
 import { checkArgs, extractTextToolCalls, salvageFiles, unknownToolMessage } from "./toolcalls.ts";
-import { LocalProvider } from "../local/provider.ts";
+import { LocalProvider, type TurnOptions } from "../local/provider.ts";
 import { getInstalled } from "../local/store.ts";
 import { createHash } from "node:crypto";
 import { defaultSettings, type RuntimeSettings } from "../settings.ts";
@@ -33,6 +33,20 @@ import { runChecks, checkSurface, enforcerFiles, taskEditsCheckFile, failureMess
 import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 import { acceptMessage, acceptWork, isIntegration } from "./accept.ts";
 import { withBriefs } from "./briefs.ts";
+
+// The teammate who owns `path` in a split task, from its "Teammates' files:" line (planner.ts), if
+// it isn't this task's to write. The integration task may touch anything.
+export function teammateFile(task: string, path: string): { owner: string; path: string } | undefined {
+  if (isIntegration(task)) return undefined;
+  const line = /^Teammates' files: (.+)$/m.exec(task)?.[1];
+  if (!line) return undefined;
+  const p = path.replace(/^\.\//, "");
+  for (const part of line.split(/;\s*/)) {
+    const m = /^([\w-]+) owns (.+)$/.exec(part.trim());
+    if (m && m[2]!.split(/,\s*/).includes(p)) return { owner: m[1]!, path: p };
+  }
+  return undefined;
+}
 
 // Sent back to a model whose turn wasn't an action (the local action protocol). Concrete, because
 // "use your tools" is what it already failed to act on.
@@ -56,7 +70,8 @@ const CUT_OFF =
 // it). 12 was chosen when the only tools were read/write/edit/shell and the prompt told agents not
 // to explore; with search tools and a verification pass, 12 turns is spent before the work starts,
 // and "turn cap reached without a final answer" became the most common way a real task failed.
-const MAX_TURNS = 30;
+// (The default now lives on the profile: 30 for cloud models, 60 for local ones, which make one
+// call a turn.)
 // injectNotes()'s marker: identifies (and replaces) a previously-injected notes-board turn, so the
 // board never accumulates duplicate copies of itself across a conversation.
 // Same replace-in-place trick as the notes board: the checklist is re-injected near the end of
@@ -462,7 +477,10 @@ export class Agent {
   private sandbox: boolean;
   private shouldStop?: () => boolean;
   private abortSignal?: () => AbortSignal | undefined;
-  private maxTurns: number;
+  private turnsSet?: number; // maxTurns from agents.yaml, else the profile's
+  private get maxTurns(): number {
+    return this.turnsSet ?? this.profile.maxTurns;
+  }
   private verify: Check[];
   // Rebuilt when the root moves (worktree mode repoints it mid-session) — resolving a package
   // script to the file it runs is root-relative, so a stale surface would protect the wrong tree.
@@ -497,7 +515,7 @@ export class Agent {
     deps: AgentDeps = {},
   ) {
     this.root = deps.root ?? process.cwd();
-    this.maxTurns = deps.maxTurns && deps.maxTurns > 0 ? deps.maxTurns : MAX_TURNS;
+    this.turnsSet = deps.maxTurns && deps.maxTurns > 0 ? deps.maxTurns : undefined;
     this.verify = deps.verify ?? [];
     this.approve = deps.approve;
     this.mcp = deps.mcp;
@@ -663,7 +681,7 @@ export class Agent {
                 this.bus.publish({ agentId: id, type: "error", payload: error, time: Date.now() });
                 return { outcome: "failed", text: finalText, error };
               }
-              this.push(turns, { role: "assistant", text: "(reply withheld by niti: it was not a tool call)", toolCalls: [] }, sessionId, reply.usage);
+              // Nothing of the refused reply stays: not even a placeholder, which models copied back.
               this.push(turns, { role: "user", text: actNudge(rejected, premature, todoAgain) }, sessionId);
               continue;
             }
@@ -898,24 +916,33 @@ export class Agent {
     const probe = this.localProbe();
     const mlx = getInstalled(this.config.model)?.format === "mlx";
     const thinking = probe?.thinking === "none" ? undefined : think ? undefined : false;
-    const forced = { ...(mlx ? { prefill: probe?.prefill ?? '<tool_call>\n{"name": "' } : { toolChoice: "required" as const }), thinking: false };
+    const opener = mlx ? (probe?.prefill ?? '<tool_call>\n{"name": "') : undefined;
+    const forced: TurnOptions = { ...(opener ? { prefill: opener } : { toolChoice: "required" as const }), thinking: false };
     const mustForce = !!provider && probe?.toolMode === "forced";
     if (provider) provider.next = mustForce ? forced : { thinking };
-    let reply = await this.send(turns, tools, onDelta);
-    if (reply.toolCalls.length > 0 || !reply.text) return reply;
+    const first = this.settleLocal(await this.send(turns, tools, onDelta), mustForce ? forced.prefill : undefined);
+    if (first.toolCalls.length > 0 || !first.text || mustForce || !provider) return first;
+    this.bus.publish({ agentId: this.config.id, type: "thought", protocol: "rejected_turn", payload: "replied without a tool call — asking again with the call required", time: Date.now() });
+    provider.next = forced;
+    return this.settleLocal(await this.send(turns, tools, onDelta), forced.prefill);
+  }
 
+  // A local reply with no call, made into the call it meant when that's clear: files pasted into it
+  // are written, and "done" (also "I'm done", "the task is complete" — what a forced model says when
+  // it wanted to stop, after the call opener niti started for it) is finish.
+  private settleLocal(reply: ProviderReply, prefill?: string): ProviderReply {
+    if (reply.toolCalls.length > 0 || !reply.text) return reply;
     const salvaged = salvageFiles(reply.text);
     if (salvaged.length > 0) {
       this.bus.publish({ agentId: this.config.id, type: "warning", protocol: "salvaged", payload: `saved ${salvaged.map((c) => c.input.path).join(", ")} from the reply (the model pasted ${salvaged.length > 1 ? "them" : "it"} instead of writing ${salvaged.length > 1 ? "them" : "it"})`, time: Date.now() });
       return { ...reply, text: "", toolCalls: salvaged, raw: undefined };
     }
-    if (/^\W*(done|finished|complete[d]?|task complete[d]?)\b[\s\S]{0,400}$/i.test(reply.text.trim())) {
-      return { ...reply, toolCalls: [{ id: `finish-${crypto.randomUUID().slice(0, 8)}`, name: "finish", input: { summary: reply.text.replace(/^\W*(done|finished|complete[d]?|task complete[d]?)\W*/i, "").trim() || "Done." } }], text: "", raw: undefined };
+    // What it said after any call opener (niti's, or one it started itself and abandoned).
+    const said = (prefill && reply.text.startsWith(prefill) ? reply.text.slice(prefill.length) : reply.text).replace(/^\s*(<tool_call>\s*)?(\[TOOL_CALLS\]\[?)?\{\s*"name"\s*:\s*"/, "").trim();
+    const done = /^\W*(?:(?:i'?m|i am|i have|i've|the task is|task|all|everything is|it'?s|we'?re)\s+)?(done|finished|complete[d]?)\b\W*/i.exec(said);
+    if (done && said.length <= 400) {
+      return { ...reply, toolCalls: [{ id: `finish-${crypto.randomUUID().slice(0, 8)}`, name: "finish", input: { summary: said.slice(done[0].length).replace(/["}\]\s]+$/, "").trim() || "Done." } }], text: "", raw: undefined };
     }
-    if (mustForce || !provider) return reply;
-    this.bus.publish({ agentId: this.config.id, type: "thought", protocol: "rejected_turn", payload: "replied without a tool call — asking again with the call required", time: Date.now() });
-    provider.next = forced;
-    reply = await this.send(turns, tools, onDelta);
     return reply;
   }
 
@@ -1581,6 +1608,10 @@ export class Agent {
       // allowedTools gate below, which says exactly that.
       return refuse(unknownToolMessage(call.name, offered.map((t) => t.name)), `${call.name}: not a tool this agent has`);
     }
+    // A split task's teammates own their files (planner.ts names them): a local agent writing them
+    // undid the other's work, twice over, on a real run.
+    const lane = ctx.protocol && (call.name === "write_file" || call.name === "edit") ? teammateFile(ctx.task ?? "", String(call.input.path ?? "")) : undefined;
+    if (lane) return refuse(`error: ${lane.path} is ${lane.owner}'s part of this request — don't write it. Do your own part; if you need something from ${lane.owner}, use send_message.`, `${lane.path} belongs to ${lane.owner}`);
     try {
       canonicalizeShellCall(call);
     } catch (err) {
@@ -1753,7 +1784,7 @@ export class Agent {
             }
             this.onWrite?.(writeRel!); // the watcher keys on the *relative* path fs.watch reports
           }
-          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, network: this.profile.shellNetwork || approved, hashline: this.config.editFormat === "hashline", signal: this.signal() }); // allowOutside / network: only ever past a human's yes
+          output = await runTool(sandboxCall, allowed, this.root, { onOutput: this.streamOutput(call), allowOutside: outside && !!this.approve, sandbox: this.sandbox, network: this.profile.shellNetwork || approved, ...(this.profile.actionProtocol ? { serverMs: 15_000 } : {}), hashline: this.config.editFormat === "hashline", signal: this.signal() }); // allowOutside / network: only ever past a human's yes
           // Only once the write actually landed. runTool throws on a failed write (a missing
           // directory, an `edit` whose oldString didn't match), and checkpointing before it meant
           // every failed attempt pushed an undo entry for a change that never happened — /undo

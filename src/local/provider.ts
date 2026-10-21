@@ -57,6 +57,8 @@ export const stripTemplateTokens = (t: string): string => TEMPLATE_TOKENS.reduce
 // reads as a tool call wins; failing both, the joined text.
 export function joinPrefill(prefill: string, rest: string, toolNames: string[]): string {
   const joined = prefill + rest;
+  // A reply that opens a call of its own was started afresh.
+  if (/^\s*(<tool_call>|\[TOOL_CALLS\]|\{)/.test(rest) && extractTextToolCalls(rest, toolNames)) return rest;
   if (extractTextToolCalls(joined, toolNames)) return joined;
   if (extractTextToolCalls(rest, toolNames)) return rest;
   return joined;

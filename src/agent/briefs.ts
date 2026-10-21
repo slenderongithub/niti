@@ -35,7 +35,7 @@ export const BRIEFS: Brief[] = [
     when: /\b(server|api|endpoint|endpoints|backend|back-end|express|route|routes)\b/i,
     text: `Build the server so it runs as-is (niti starts it to check):
 - Node: server.js with built-in modules only (http, fs, path) unless the task names a framework, so there is nothing to install. Listen on process.env.PORT || 3000.
-- Serve the site too: index.html at /, and styles.css, script.js and images with the right content-type.
+- Serve the site too: index.html at /, and styles.css, script.js and images with the right content-type. If a teammate makes the pages, serve their files; don't write them.
 - JSON routes under /api/ returning real data that fits the request. The page must fetch exactly these paths.
 - package.json with "scripts": { "start": "node server.js" }.
 - Unknown paths get a 404; a bad request gets an error reply, never a crash.`,

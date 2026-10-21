@@ -194,3 +194,18 @@ test("a team with no model that can change files is told so, instead of getting 
   expect(plan.tasks).toEqual([]);
   expect(plan.reply).toContain("None of this team's models can change files");
 });
+
+test("a split plan names each teammate's files, and deployment lands with the server when nobody planned it", async () => {
+  const goal = "a coffee shop landing page for Bean There, end-to-end deployment ready";
+  const plan = await makePlan(localLead(["work", "frontend: create index.html, styles.css and script.js\nbackend: create server.js with the menu API"]) as never, goal, team);
+  const [front, back] = plan.tasks;
+  expect(front!.description).toContain("Teammates' files: backend owns server.js");
+  expect(back!.description).toContain("Teammates' files: frontend owns index.html, styles.css, script.js");
+  expect(back!.description).toContain("README.md with how to run and deploy it");
+  const { teammateFile } = await import("../agent/agent.ts");
+  expect(teammateFile(back!.description, "./index.html")).toEqual({ owner: "frontend", path: "index.html" });
+  expect(teammateFile(back!.description, "server.js")).toBeUndefined();
+  expect(teammateFile(plan.tasks[2]!.description, "index.html")).toBeUndefined(); // integration may fix anything
+  const { ownPart } = await import("../agent/accept.ts");
+  expect(ownPart(front!.description)).toBe("create index.html, styles.css and script.js");
+});

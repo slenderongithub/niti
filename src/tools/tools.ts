@@ -86,6 +86,18 @@ export function leavesProject(root: string, p: string): boolean {
 // ponytail: fixed ceilings, not per-agent configurable — move to agents.yaml if a real project
 // needs a longer build than this.
 export const SHELL_TIMEOUT_MS = 120_000;
+
+// A command that starts a long-running server: npm start / run dev, a node, bun or python server
+// file, python -m http.server, flask run, uvicorn, npx serve and the like.
+export function startsServer(command: string, args: string[] = []): boolean {
+  const line = [command, ...args].join(" ").trim();
+  return (
+    /^(npm|pnpm|yarn|bun)\s+(start|run\s+(start|dev|serve|preview))\b/.test(line) ||
+    /^(node|bun|deno|nodemon)\s+(run\s+)?\S*(server|app|index|main)\.(m?js|cjs|ts)\s*$/.test(line) ||
+    /^python3?\s+(-m\s+(http\.server|flask\s+run|uvicorn)|\S*(app|server|main|manage)\.py(\s+runserver)?)\b/.test(line) ||
+    /^(flask\s+run|uvicorn|gunicorn|npx\s+(serve|http-server|vite|live-server)|serve|http-server)\b/.test(line)
+  );
+}
 const SHELL_MAX_OUTPUT = 100_000;
 
 // What a spawned command is allowed to inherit. An allowlist, not a denylist, because the thing
@@ -485,7 +497,7 @@ export async function runTool(
   call: ToolCall,
   allowed: string[],
   root: string = process.cwd(),
-  hooks: { onOutput?: (chunk: string) => void; allowOutside?: boolean; sandbox?: boolean; network?: boolean; hashline?: boolean; signal?: AbortSignal } = {}, // shell output as it arrives; a human-approved path outside the project; the user's cancel
+  hooks: { onOutput?: (chunk: string) => void; allowOutside?: boolean; sandbox?: boolean; network?: boolean; hashline?: boolean; signal?: AbortSignal; serverMs?: number } = {}, // shell output as it arrives; a human-approved path outside the project; the user's cancel
 ): Promise<string> {
   if (!allowed.includes(call.tool)) {
     throw new Error(`tool '${call.tool}' not allowed for this agent`);
@@ -532,7 +544,11 @@ export async function runTool(
       if (!call.command.trim()) {
         return "error: shell was called with an empty command. Give the program to run in `command` (for example command: \"npm\", args: [\"run\", \"typecheck\"]).";
       }
-      const r = await shell(root, call.command, call.args, { onOutput: hooks.onOutput, sandbox: hooks.sandbox, network: hooks.network, signal: hooks.signal });
+      // A server never exits: run in the foreground it held the agent's turn until the shell timed out.
+      // With `serverMs` (local agents), one gets that long to start and show its first output.
+      const server = hooks.serverMs !== undefined && startsServer(call.command, call.args);
+      const r = await shell(root, call.command, call.args, { onOutput: hooks.onOutput, sandbox: hooks.sandbox, network: hooks.network, signal: hooks.signal, ...(server ? { timeoutMs: hooks.serverMs } : {}) });
+      if (server && r.code === -1) return `${r.stdout}${r.stderr.replace(/\n\[timed out after [\d.]+s\]/, "")}\n[niti: this starts a server, which keeps running, so niti stopped it after ${hooks.serverMs! / 1000} s. Don't start servers yourself: when you call finish, niti starts yours, checks it answers, and tells you what's wrong.]`;
       return `exit ${r.code}\n${r.stdout}${r.stderr}`;
     }
   }
