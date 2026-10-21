@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FitBadge, FormatBadge, Monogram, quantLabel } from "@/features/models/parts";
+import { FitBadge, FormatBadge, Monogram, quantLabel, ReadinessBadge } from "@/features/models/parts";
 import { modelName } from "@/features/models/use-models";
 import { fmtBytes, fmtParams } from "@/lib/format";
 import type { CatalogModel, DownloadProgress, FoundModel, InstalledModel, LocalDevice } from "@/lib/types";
@@ -99,12 +99,13 @@ export function LocalPicker({ value, onPick }: { value?: string; onPick: (id: st
                     <span className="flex items-center gap-1.5">
                       <span className="truncate text-[13px] font-medium">{modelName(m.id)}</span>
                       {m.format === "mlx" && <FormatBadge format="mlx" />}
+                      <ReadinessBadge probe={m.probe} />
                     </span>
                     <span className="block truncate font-mono text-[11px] text-muted-foreground">
                       {quantLabel(m.quant, m.repo)} · {fmtBytes(m.bytes)} · {fmtParams(m.params)}{m.path ? ` · ${m.source ?? "added"}` : ""}
                     </span>
                   </span>
-                  {m.tools ? <Wrench className="size-3.5 text-primary" aria-label="calls tools" /> : <span className="text-[10.5px] text-warning">chat only</span>}
+                  {!m.probe && (m.tools ? <Wrench className="size-3.5 text-primary" aria-label="calls tools" /> : <span className="text-[10.5px] text-warning">chat only</span>)}
                   {m.id === value && <Check className="size-4 text-primary" aria-hidden />}
                 </button>
               ))

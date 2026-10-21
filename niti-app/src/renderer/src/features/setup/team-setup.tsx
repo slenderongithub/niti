@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowLeft, ArrowRight, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, Users, Zap, RefreshCw, Crown, Cloud, Cpu } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, Users, Zap, RefreshCw, Crown, Cloud, Cpu, Hourglass, MessageSquare } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { LocalPicker } from "./local-picker";
 import { toast } from "sonner";
@@ -18,10 +18,11 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { WindowChrome } from "@/features/launch/window-chrome";
 import { agentColor } from "@/lib/identity";
 import { PixelAvatar } from "@/components/pixel-avatar";
-import { basename } from "@/lib/format";
+import { basename, fmtBytes } from "@/lib/format";
+import { modelName } from "@/features/models/use-models";
 import { cn } from "@/lib/utils";
 import { useApp } from "@/store/app";
-import type { AgentConfig, Providers } from "@/lib/types";
+import type { AgentConfig, InstalledModel, Providers, TeamFit } from "@/lib/types";
 import { buildAgent, ROLE_SUGGESTIONS, teamHint, MAX_AGENTS } from "./team";
 
 // Team setup on every open, like the TUI's picker (tui/internal/wizard/picker.go): keep the team in
@@ -399,6 +400,7 @@ export function TeamSetup() {
                             </div>
                           </div>
                         ))}
+                        <LocalTeamNote team={team} lead={size > 1 ? lead : 0} />
                         <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                           {auto ? <Zap className="size-3.5" /> : <ShieldCheck className="size-3.5" />}
                           {auto ? "Auto-approve" : "Manual approvals"}
@@ -720,5 +722,48 @@ function IdentityStep({ index, size, draft, onDone }: { index: number; size: num
         </div>
       </form>
     </StepBody>
+  );
+}
+
+// What a team on local models should know before it starts: models that don't fit in memory together
+// take turns (the core loads one beside another only if both fit), a chat-only model gets answers and
+// reviews but no work that changes files, and a lead whose model couldn't split work in its check
+// hands the planning to a teammate.
+function LocalTeamNote({ team, lead }: { team: Draft[]; lead: number }) {
+  const api = useApp((s) => s.api);
+  const [fit, setFit] = useState<TeamFit | null>(null);
+  const [installed, setInstalled] = useState<InstalledModel[]>([]);
+  const local = team.filter((d) => d.provider === "local").map((d) => d.model);
+  const key = local.join("|");
+  useEffect(() => {
+    if (!api || !local.length) return;
+    void api.teamFit(local).then(setFit).catch(() => setFit(null));
+    void api.installedModels().then((r) => setInstalled(r.models)).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, key]);
+  if (!local.length) return null;
+  const probeOf = (id: string) => installed.find((m) => m.id === id)?.probe;
+  const name = (d: Draft, i: number) => d.role || `Engineer ${i + 1}`;
+  const chatOnly = team.map((d, i) => ({ d, i })).filter(({ d }) => d.provider === "local" && probeOf(d.model)?.verdict === "chat-only");
+  const leadDraft = team[lead];
+  const leadCantPlan = leadDraft?.provider === "local" && probeOf(leadDraft.model)?.planMode === "none";
+  const distinct = [...new Set(local)];
+  const lines: { icon: typeof Hourglass; text: string }[] = [];
+  if (fit && !fit.together && distinct.length > 1)
+    lines.push({ icon: Hourglass, text: `${distinct.map(modelName).join(" and ")} take turns: together they need ${fmtBytes(fit.need)}, and this Mac gives models ${fmtBytes(fit.budget)}. One runs while the other waits.` });
+  for (const { d, i } of chatOnly) lines.push({ icon: MessageSquare, text: `${name(d, i)} runs ${modelName(d.model)}, which is chat only: it answers and reviews, but isn't given work that changes files.` });
+  if (leadCantPlan) lines.push({ icon: Users, text: `${modelName(leadDraft!.model)} couldn't split work in niti's check, so a teammate makes the plan.` });
+  const unchecked = distinct.filter((id) => installed.length && !probeOf(id));
+  if (unchecked.length) lines.push({ icon: ShieldCheck, text: `niti checks ${unchecked.map(modelName).join(" and ")} once before the first task (about a minute each).` });
+  if (!lines.length) return null;
+  return (
+    <div className="mt-1 space-y-1.5 rounded-lg border bg-muted/40 px-3 py-2.5 text-[12px] text-muted-foreground">
+      {lines.map((l) => (
+        <div key={l.text} className="flex gap-2">
+          <l.icon className="mt-[1px] size-3.5 shrink-0" aria-hidden />
+          <span>{l.text}</span>
+        </div>
+      ))}
+    </div>
   );
 }

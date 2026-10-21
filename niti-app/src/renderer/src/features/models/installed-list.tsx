@@ -1,7 +1,7 @@
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Brain, Cpu, FolderOpen, HardDrive, Loader2, Plus, Power, Search, Trash2, Wrench, Zap } from "lucide-react";
+import { Brain, Cpu, FolderOpen, HardDrive, Hourglass, Loader2, Plus, Power, Search, ShieldCheck, Trash2, Wrench, Zap } from "lucide-react";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { fmtAgo, fmtBytes, fmtParams } from "@/lib/format";
 import type { InstalledModel } from "@/lib/types";
 import { useApp } from "@/store/app";
-import { DownloadBar, EngineInstallBar, FormatBadge, Monogram, quantLabel } from "./parts";
+import { DownloadBar, EngineInstallBar, FormatBadge, Monogram, quantLabel, ReadinessBadge } from "./parts";
 import { isActive, modelName, useFound, useModelActions } from "./use-models";
 
 // What's on this Mac: each model with its size on disk and when an agent last used it, whether it
@@ -20,7 +20,23 @@ export function InstalledList({ models, onOpen, onRemoved }: { models: Installed
   const runtime = useApp((s) => s.session.local.runtime);
   const api = useApp((s) => s.api);
   const { cancel, remove } = useModelActions();
+  const [checking, setChecking] = useState<string | null>(null);
   const active = Object.values(downloads).filter(isActive);
+  // niti's one-time check, run again on request (after an update, or to see what it finds).
+  const check = async (m: InstalledModel) => {
+    if (!api) return;
+    setChecking(m.id);
+    try {
+      const { probe } = await api.checkModel(m.id);
+      const label = { ready: "Ready for agent work", partial: "Partly ready", "chat-only": "Chat only" }[probe.verdict];
+      toast(`${modelName(m.id)}: ${label}`, { description: probe.notes.join(" · ") });
+      onRemoved(); // reload the list with the new result
+    } catch (e) {
+      toast.error(`Couldn't check ${modelName(m.id)}`, { description: (e as Error).message });
+    } finally {
+      setChecking(null);
+    }
+  };
   const total = models.reduce((n, m) => n + m.bytes, 0);
 
   return (
@@ -71,6 +87,7 @@ export function InstalledList({ models, onOpen, onRemoved }: { models: Installed
                     <span className="truncate text-[13.5px] font-medium">{modelName(m.id)}</span>
                     <span className="font-mono text-[11px] text-muted-foreground">{quantLabel(m.quant, m.repo)}</span>
                     {m.format === "mlx" && <FormatBadge format="mlx" />}
+                    <ReadinessBadge probe={m.probe} checking={checking === m.id || r?.state === "checking"} />
                     {m.path && (
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -79,6 +96,16 @@ export function InstalledList({ models, onOpen, onRemoved }: { models: Installed
                           </Badge>
                         </TooltipTrigger>
                         <TooltipContent className="max-w-80 break-all">Used where it is: {m.path}</TooltipContent>
+                      </Tooltip>
+                    )}
+                    {r?.state === "waiting" && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10.5px] text-muted-foreground">
+                            <Hourglass className="size-3" aria-hidden /> Waiting for memory
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-72">It doesn't fit beside {r.waitingFor?.map(modelName).join(", ")}; it loads as soon as that is idle. The models take turns.</TooltipContent>
                       </Tooltip>
                     )}
                     {loaded && (
@@ -105,6 +132,14 @@ export function InstalledList({ models, onOpen, onRemoved }: { models: Installed
                     {m.thinking && <Brain className="size-3.5 text-info" aria-label="Thinks before answering" />}
                   </div>
                 </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" aria-label={`Check ${modelName(m.id)} again`} disabled={checking !== null} onClick={() => void check(m)}>
+                      {checking === m.id ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-64">{m.probe ? "Check again: whether it calls tools and can split work (about a minute)" : "Check it now: niti tests every model once before its first agent task"}</TooltipContent>
+                </Tooltip>
                 {loaded && (
                   <Tooltip>
                     <TooltipTrigger asChild>

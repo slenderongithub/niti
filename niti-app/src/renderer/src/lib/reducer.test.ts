@@ -210,3 +210,17 @@ test("remote control: the snapshot seeds it, events move it, /clear keeps it", (
   expect(s.remote?.link).toBe("connecting");
   expect(fromSession(info()).remote).toBeNull();
 });
+
+test("niti's acceptance checks on a local agent's work become a checklist item, and its activity says what's left", () => {
+  let s = fromSession(info());
+  const checks = [
+    { name: "index.html: linked files exist", ok: true, grade: "must" as const },
+    { name: "its own fonts", ok: false, grade: "quality" as const, detail: "The page uses Arial" },
+  ];
+  s = applyEvents(s, [ae({ type: "warning", protocol: "checks", checks, payload: "checked the work: 1 of 2 checks fail" })]);
+  expect(items(s).at(-1)).toMatchObject({ kind: "checks", checks });
+  expect(s.agents.dev!.activity).toBe("1 check to fix");
+  // A protocol warning without a checklist (a refused turn, a model swap) is still a note.
+  s = applyEvents(s, [ae({ type: "warning", protocol: "rejected_turn", payload: "replied without a tool call — asking again" })]);
+  expect(items(s).at(-1)).toMatchObject({ kind: "note", tone: "warning" });
+});

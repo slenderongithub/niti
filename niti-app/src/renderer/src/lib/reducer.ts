@@ -1,6 +1,7 @@
 import { describeCall, noteFor, parseCall, truncate, type NoteTone } from "./humanize";
 import { agentAvatar, agentColor, type AgentStatus } from "./identity";
 import type {
+  AcceptCheck,
   AgentConfig,
   AgentEvent,
   AgentMessage,
@@ -72,7 +73,8 @@ export type Item =
       time: number;
     }
   | { id: number; kind: "note"; tone: NoteTone; text: string; keyError?: boolean; time: number }
-  | { id: number; kind: "plan-done"; steps: number };
+  | { id: number; kind: "plan-done"; steps: number }
+  | { id: number; kind: "checks"; checks: AcceptCheck[]; time: number };
 
 export interface AgentView {
   id: string;
@@ -454,6 +456,14 @@ function applyAgentEvent(d: Draft, ae: AgentEvent) {
     return;
   }
   closeStreaming(a);
+  // niti's acceptance checks on a local agent's work: a checklist card, not a line of text.
+  if (ae.protocol === "checks" && ae.checks?.length) {
+    a.items.push({ id: d.id(), kind: "checks", checks: ae.checks, time: ae.time });
+    const failing = ae.checks.filter((c) => !c.ok).length;
+    a.activity = failing ? `${failing} check${failing > 1 ? "s" : ""} to fix` : "checks pass";
+    a.items = capItems(a.items);
+    return;
+  }
   const n = noteFor(ae.type, ae.payload);
   if (!n) return;
   a.items.push({ id: d.id(), kind: "note", ...n, time: ae.time });

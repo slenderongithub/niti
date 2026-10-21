@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fmtBytes, fmtEta } from "@/lib/format";
-import type { DownloadProgress, Fit, FitTier, ModelFormat, RuntimeStatus } from "@/lib/types";
+import type { DownloadProgress, Fit, FitTier, ModelFormat, ModelProbe, RuntimeStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { isActive } from "./use-models";
 
@@ -163,6 +163,47 @@ export function Monogram({ name, className }: { name: string; className?: string
 }
 
 // GGUF runs on llama.cpp; MLX on Apple's own framework, often a little faster on Apple Silicon.
+// What niti's one-time check found (src/local/probe.ts): whether the model can do agent work. Before
+// the check has run, nothing is claimed.
+const READY: Record<ModelProbe["verdict"], { label: string; icon: typeof CircleCheck; tone: string; explain: string }> = {
+  ready: { label: "Ready", icon: CircleCheck, tone: "border-success/30 bg-success/10 text-success", explain: "Passed niti's check: it calls tools and can split work for a team." },
+  partial: { label: "Partly ready", icon: CircleAlert, tone: "border-warning/30 bg-warning/10 text-warning", explain: "Builds, with help: niti steers it more closely." },
+  "chat-only": { label: "Chat only", icon: CircleSlash, tone: "border-border bg-muted text-muted-foreground", explain: "Never called a tool in niti's check: good for questions and reviews, never given work that changes files." },
+};
+
+export function ReadinessBadge({ probe, checking, className }: { probe?: ModelProbe; checking?: boolean; className?: string }) {
+  if (checking) {
+    return (
+      <Badge variant="outline" className={cn("h-5 gap-1 px-1.5 text-[10.5px] font-medium text-muted-foreground", className)}>
+        <Loader2 className="size-3 animate-spin" aria-hidden />
+        Checking
+      </Badge>
+    );
+  }
+  if (!probe) return null;
+  const r = READY[probe.verdict];
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge variant="outline" className={cn("h-5 gap-1 px-1.5 text-[10.5px] font-medium", r.tone, className)}>
+          <r.icon className="size-3" aria-hidden />
+          {r.label}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-72">
+        {r.explain}
+        {probe.notes.length > 0 && (
+          <ul className="mt-1 list-disc pl-4">
+            {probe.notes.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        )}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function FormatBadge({ format, className }: { format?: ModelFormat; className?: string }) {
   if (format !== "mlx") {
     return (

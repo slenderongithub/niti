@@ -13,8 +13,10 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
   - **Installed:** size on disk, when an agent last used it, loaded or not, unload and delete. **Found on this Mac** lists models another app already downloaded (LM Studio's folder, the Hugging Face cache); Add uses them where they are, with no second download, and removing one never touches its files. The MLX engine's status, install progress and removal are here too.
 
   Each model shows Runs well / Tight / Won't fit, tools and thinking support, licence, downloads, likes, parameters and context. Its sheet lists every quantization with its exact size and fit, and the model card. Downloads resume, verify their checksum, and keep going in the background. A local agent's shell has no internet unless you approve the command.
+
+  niti checks each downloaded model once, before its first agent task. It tests whether the model calls tools, how niti has to drive it, and whether it can split work for a team. Installed models and the setup picker show the result: **Ready**, **Partly ready** or **Chat only**. The sheet's "niti's check" section has the details and Check again. A chat-only model answers and reviews but never gets work that changes files. A model waiting for memory says so.
 - **Web.** Agents with the `web` tool read pages (`web_fetch`) and look things up in npm, PyPI, crates.io, Go, GitHub, Stack Overflow and Wikipedia (`lookup`) with no account. Settings → Web search adds a free Tavily key for `web_search` (1,000 searches a month, no card). Every web call asks you first, even with auto-approve on.
-- **One prompt to the whole team.** The lead plans each goal into tasks across every agent. During a run you can steer one agent, let the app pick which one, or broadcast to everyone working.
+- **One prompt to the whole team.** The lead plans each goal into tasks across every agent. Launching a team on local models notes what to expect: models that don't fit in memory together take turns, chat-only teammates, and a teammate planning for a lead whose model can't. During a run you can steer one agent, let the app pick which one, or broadcast to everyone working.
 - **Session.** Every agent side by side, or one focused, each with its own avatar character (they blink). Shows:
   - streaming markdown
   - live tool calls
@@ -22,6 +24,7 @@ It runs the same engine as the terminal app (`niti-core serve`). It also shares 
   - shell results
   - pinned checklists
   - the run summary, with next-step suggestions
+  - for a local agent, a card for niti's checks on its work: what fails, with what to fix, and what passed
 - **Composer.** Build/Plan modes, `/commands`, `@file` mentions, `!shell`, history, Esc to stop. Mid-run, tick "Interrupt it now" to stop one agent and have it carry on from your message.
 - **Goals.** `/goal <objective>` keeps the team working round after round until a judge says it's done or a budget runs out. The status bar shows the round; while it runs, what you type is a note to the next round, and you're notified once when it ends.
 - **Remote control.** `/remote on <email>` shows a code to type into the niti app on your phone; then the status bar shows the link and how many phones are watching. `/remote pair` adds another phone.

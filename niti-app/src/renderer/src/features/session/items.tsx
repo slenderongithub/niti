@@ -1,6 +1,10 @@
 import { memo, useEffect, useState } from "react";
 import { motion } from "motion/react";
 import {
+  CircleAlert,
+  CircleCheck,
+  CircleX,
+  ShieldCheck,
   BookOpen,
   Brain,
   Check,
@@ -23,11 +27,12 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/spinner";
 import { fmtDur, groupLabel, PAST_VERB } from "@/lib/humanize";
 import type { Item, RenderItem } from "@/lib/reducer";
-import type { Todo } from "@/lib/types";
+import type { AcceptCheck, Todo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useUI } from "@/store/ui";
 import { DiffRows } from "./diff-view";
@@ -241,6 +246,8 @@ export const ItemView = memo(function ItemView({ item, onFixKey }: { item: Rende
       return <DiffBlock item={item} />;
     case "note":
       return <NoteRow item={item} onFixKey={onFixKey} />;
+    case "checks":
+      return <ChecksCard checks={item.checks} />;
     case "plan-done":
       return (
         <div className="flex items-center gap-2 py-[3px] text-[12.5px] text-success">
@@ -252,6 +259,57 @@ export const ItemView = memo(function ItemView({ item, onFixKey }: { item: Rende
       );
   }
 });
+
+// niti's acceptance checks on a local agent's work (src/agent/accept.ts): what fails first, each with
+// what to fix; what passed folded away. A must-fix fails the task if it stays; a quality gap is shown.
+function ChecksCard({ checks }: { checks: AcceptCheck[] }) {
+  const failing = checks.filter((c) => !c.ok).sort((a, b) => (a.grade === b.grade ? 0 : a.grade === "must" ? -1 : 1));
+  const passed = checks.filter((c) => c.ok);
+  const [open, setOpen] = useState(false);
+  const ok = failing.length === 0;
+  return (
+    <Card className="my-1.5 gap-2 rounded-lg py-2.5 shadow-none">
+      <CardHeader className="flex items-center gap-2 px-3">
+        <ShieldCheck className={cn("size-3.5 shrink-0", ok ? "text-success" : "text-warning")} aria-hidden />
+        <CardTitle className="text-[12.5px] font-medium">{ok ? "niti checked the work — all clear" : "niti checked the work — not done yet"}</CardTitle>
+        <span className="ml-auto font-mono text-[11px] text-muted-foreground tabular">
+          {passed.length}/{checks.length} pass
+        </span>
+      </CardHeader>
+      <CardContent className="space-y-1 px-3">
+        {failing.map((c) => (
+          <div key={c.name} className="flex gap-2 text-[12.5px]">
+            {c.grade === "must" ? <CircleX className="mt-[2px] size-3.5 shrink-0 text-destructive" aria-label="must fix" /> : <CircleAlert className="mt-[2px] size-3.5 shrink-0 text-warning" aria-label="worth fixing" />}
+            <div className="min-w-0">
+              <div className="font-medium">{c.name}</div>
+              {c.detail && <div className="selectable whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{c.detail}</div>}
+            </div>
+          </div>
+        ))}
+        {passed.length > 0 && (
+          <Collapsible open={open || ok} onOpenChange={setOpen}>
+            {!ok && (
+              <CollapsibleTrigger asChild>
+                <Button variant="link" size="xs" className="h-auto gap-1 p-0 text-[12px] text-muted-foreground">
+                  <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
+                  {passed.length} passed
+                </Button>
+              </CollapsibleTrigger>
+            )}
+            <CollapsibleContent className="space-y-0.5 pt-0.5">
+              {passed.map((c) => (
+                <div key={c.name} className="flex items-center gap-2 text-[12px] text-muted-foreground">
+                  <CircleCheck className="size-3.5 shrink-0 text-success" aria-hidden />
+                  <span className="truncate">{c.name}</span>
+                </div>
+              ))}
+            </CollapsibleContent>
+          </Collapsible>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 // The agent's own checklist, pinned while steps remain (live.go:367-380): ☑ done, ◼ doing, ☐ next.
 export function TodoList({ todos, color }: { todos: Todo[]; color: string }) {

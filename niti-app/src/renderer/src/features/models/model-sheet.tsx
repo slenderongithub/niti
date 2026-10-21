@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowDownToLine, Clock3, ExternalLink, Heart, Layers, Lock, ScanText, Sparkles, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { ArrowDownToLine, Clock3, ExternalLink, Heart, Layers, Loader2, Lock, ScanText, ShieldCheck, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -8,9 +9,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Markdown } from "@/features/session/markdown";
 import { fmtAgo, fmtBytes, fmtCount, fmtParams } from "@/lib/format";
-import type { CatalogModel, ModelDetail } from "@/lib/types";
+import type { CatalogModel, InstalledModel, ModelDetail } from "@/lib/types";
+import { useApp } from "@/store/app";
 import { cn } from "@/lib/utils";
-import { CapabilityBadges, DownloadAction, FitBadge, FormatBadge, Monogram, quantLabel } from "./parts";
+import { CapabilityBadges, DownloadAction, FitBadge, FormatBadge, Monogram, quantLabel, ReadinessBadge } from "./parts";
 import { useDownload, useModelActions, useModelDetail } from "./use-models";
 
 // Everything about one model, from the repo itself: every quantization with its exact size and how
@@ -59,6 +61,7 @@ export function ModelSheet({ repo, preview, onClose }: { repo: string | null; pr
             <ScrollArea className="min-h-0 flex-1">
               <div className="flex flex-col gap-6 px-6 py-5">
                 <QuantPicker m={m} detail={detail} />
+                <CheckSection repo={m.repo} />
                 {m.gated && <p className="rounded-lg border border-warning/30 bg-warning/8 px-3 py-2.5 text-[12.5px] text-warning">Its authors ask you to accept their terms on huggingface.co before downloading, which niti can't do for you. Search for the model's name to find an open upload of the same weights.</p>}
                 <section aria-labelledby="model-card-h">
                   <div className="mb-2 flex items-center justify-between">
@@ -182,6 +185,74 @@ function QuantPicker({ m, detail }: { m: CatalogModel | ModelDetail; detail: Mod
         </div>
       </div>
       {download?.state === "error" && <p className="text-[12px] text-destructive">{download.error}</p>}
+    </section>
+  );
+}
+
+// What niti's one-time check found for the copies of this model on this Mac (src/local/probe.ts), and
+// a way to run it again.
+const TOOL_MODE = { native: "on its own", forced: "when niti makes it", text: "as text niti reads", none: "never" } as const;
+function CheckSection({ repo }: { repo: string }) {
+  const api = useApp((s) => s.api);
+  const [mine, setMine] = useState<InstalledModel[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = useCallback(() => {
+    void api?.installedModels().then((r) => setMine(r.models.filter((x) => x.repo === repo))).catch(() => {});
+  }, [api, repo]);
+  useEffect(load, [load]);
+  if (!mine.length) return null;
+  const run = async (id: string) => {
+    setBusy(id);
+    try {
+      await api!.checkModel(id);
+      load();
+    } catch (e) {
+      toast.error("The check couldn't run", { description: (e as Error).message });
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <section aria-labelledby="check-h" className="flex flex-col gap-2">
+      <h3 id="check-h" className="text-[13px] font-semibold">niti's check</h3>
+      {mine.map((x) => (
+        <div key={x.id} className="rounded-xl border bg-card/60 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[12px]">{quantLabel(x.quant, x.repo)}</span>
+            <ReadinessBadge probe={x.probe} checking={busy === x.id} />
+            <Button size="xs" variant="outline" className="ml-auto gap-1" disabled={busy !== null} onClick={() => void run(x.id)}>
+              {busy === x.id ? <Loader2 className="animate-spin" /> : <ShieldCheck />} {x.probe ? "Check again" : "Check now"}
+            </Button>
+          </div>
+          {x.probe ? (
+            <>
+              <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[12.5px] text-muted-foreground">
+                {x.probe.notes.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+              <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[12px]">
+                <dt className="text-muted-foreground">Calls tools</dt>
+                <dd>{TOOL_MODE[x.probe.toolMode]}{x.probe.textFormat ? ` (${x.probe.textFormat})` : ""}</dd>
+                <dt className="text-muted-foreground">Splits work for a team</dt>
+                <dd>{x.probe.planMode === "none" ? "no — niti splits by role" : "yes"}</dd>
+                <dt className="text-muted-foreground">Thinks before answering</dt>
+                <dd>{x.probe.thinking === "none" ? "no" : "yes"}</dd>
+                {x.probe.tokensPerSec ? (
+                  <>
+                    <dt className="text-muted-foreground">Speed</dt>
+                    <dd className="tabular">about {x.probe.tokensPerSec} tokens/s</dd>
+                  </>
+                ) : null}
+                <dt className="text-muted-foreground">Checked</dt>
+                <dd>{fmtAgo(x.probe.checkedAt)} on {x.probe.engine}</dd>
+              </dl>
+            </>
+          ) : (
+            <p className="mt-2 text-[12.5px] text-muted-foreground">Not checked yet. niti tests it once (about a minute) before its first agent task, to learn how to drive it.</p>
+          )}
+        </div>
+      ))}
     </section>
   );
 }

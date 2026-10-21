@@ -148,6 +148,18 @@ export interface AgentEvent {
   removed?: number;
   more?: number;
   todos?: Todo[];
+  // A harness intervention on a local agent (src/events/bus.ts): a refused turn, a file saved out of
+  // a reply, the acceptance checks, a model swap, a plan that fell back, a model check.
+  protocol?: "rejected_turn" | "salvaged" | "checks" | "check_failed" | "model_swap" | "plan_fallback" | "probe";
+  checks?: AcceptCheck[]; // protocol "checks"
+}
+
+// One acceptance check niti ran on a local agent's work (src/agent/accept.ts).
+export interface AcceptCheck {
+  name: string;
+  ok: boolean;
+  detail?: string;
+  grade: "must" | "quality";
 }
 
 export type MessageKind = "handoff" | "question" | "answer" | "artifact" | "review" | "broadcast" | "note";
@@ -381,6 +393,31 @@ export interface InstalledModel {
   installedAt: number;
   lastUsed?: number;
   toolFormat?: "native" | "generic" | "none";
+  probe?: ModelProbe;
+}
+
+// What niti's one-time check found out about a local model (src/local/probe.ts).
+export interface ModelProbe {
+  version: number;
+  checkedAt: number;
+  engine: "llama.cpp" | "mlx";
+  toolMode: "native" | "forced" | "text" | "none";
+  textFormat?: string;
+  prefill?: string;
+  planMode: "lines" | "json" | "none";
+  stops: string[];
+  thinking: "separate" | "inline" | "none";
+  tokensPerSec?: number;
+  verdict: "ready" | "partial" | "chat-only";
+  notes: string[];
+}
+
+// Whether a team's local models fit in memory together (POST /local/team-fit).
+export interface TeamFit {
+  together: boolean;
+  need: number;
+  budget: number;
+  models: { id: string; need: number }[];
 }
 export type DownloadState = "queued" | "downloading" | "verifying" | "done" | "error" | "cancelled";
 export interface DownloadProgress {
@@ -395,7 +432,11 @@ export interface DownloadProgress {
 }
 export interface RuntimeStatus {
   model: string; // a model id, or "engine:mlx" for the MLX engine's install
-  state: "installing" | "loading" | "ready" | "stopped" | "error";
+  // "waiting": doesn't fit in memory beside the models in use, loads when they're idle (waitingFor);
+  // "checking": the one-time model check is running.
+  state: "installing" | "waiting" | "loading" | "checking" | "ready" | "stopped" | "error";
+  waitingFor?: string[];
+  reason?: "swap" | "idle";
   engine?: "llama.cpp" | "mlx";
   stage?: "python" | "packages";
   received?: number;

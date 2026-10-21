@@ -14,6 +14,8 @@ import type {
   CatalogResult,
   ModelDetail,
   InstalledModel,
+  ModelProbe,
+  TeamFit,
   DownloadProgress,
   LocalDevice,
   FoundModel,
@@ -129,6 +131,8 @@ export class Api {
   unloadModel = (model: string) => this.post<{ ok: boolean }>("/local/unload", { model });
   foundModels = () => this.req<{ models: FoundModel[] }>("GET", "/local/discover", undefined, 45_000);
   addFoundModel = (id: string) => this.post<{ model: InstalledModel }>("/local/import", { id });
+  checkModel = (id: string) => this.post<{ probe: ModelProbe }>("/local/models/check", { id });
+  teamFit = (models: string[]) => this.post<TeamFit>("/local/team-fit", { models });
   installMlx = () => this.post<{ ok: boolean }>("/local/engine/mlx");
   removeMlx = () => this.req<{ ok: boolean }>("DELETE", "/local/engine/mlx");
   // Web search (Tavily). Saving tests the key with one search first.
