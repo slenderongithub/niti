@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { profileFor, capInstructions, LOCAL, STANDARD, LOCAL_GUIDANCE } from "./profile.ts";
@@ -408,4 +408,20 @@ test("local: a forced reply that says it's done is finish; a server started in t
   const { startsServer } = await import("../tools/tools.ts");
   for (const c of ["npm start", "node server.js", "python3 -m http.server 8000", "python app.py", "npx serve ."]) expect(startsServer(c)).toBe(true);
   for (const c of ["npm test", "node -e 1", "python3 -c 'print(1)'", "node build.js"]) expect(startsServer(c)).toBe(false);
+});
+
+test("local: shell syntax as arguments, and deleting a teammate's file, are refused with what to do", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  writeFileSync(join(root, "index.html"), "<h1>theirs</h1>");
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const sh = (command: string, args: string[]) => () => ({ text: "", toolCalls: [{ id: command + args.join(), name: "shell", input: { command, args } }] });
+  const p = scripted([sh("mkdir", ["-p", "public", "&&", "ls"]), sh("rm", ["index.html"]), sh("find", [".", "-name", "*.tmp", "-exec", "echo", "{}", ";"]), () => ({ text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "server.js", content: "x" } }] }), () => finishCall()], seen);
+  const task = "create server.js\n\nTeammates' files: frontend owns index.html\n\n(Part of the request: a site)";
+  await new Agent({ ...localCfg, allowedTools: ["shell", "write_file"] }, p, new Bus(), { root }).runDetailed(task);
+  const results = seen.turns.flatMap((t) => t.filter((x) => x.role === "tool").flatMap((x) => (x as Extract<Turn, { role: "tool" }>).results.map((r) => r.output)));
+  expect(results.some((o) => o.includes('"&&" would reach mkdir as a literal argument'))).toBe(true);
+  expect(results.some((o) => o.includes("index.html is frontend's part of this request — don't delete"))).toBe(true);
+  expect(readFileSync(join(root, "index.html"), "utf8")).toBe("<h1>theirs</h1>");
+  expect(existsSync(join(root, "&&"))).toBe(false);
+  expect(results.some((o) => o.startsWith("exit 0"))).toBe(true); // find … -exec … ";" ran: there ";" is find's own
 });

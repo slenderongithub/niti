@@ -34,6 +34,8 @@ import { parseTodos, renderTodos, todoAck, type TodoItem } from "./todo.ts";
 import { acceptMessage, acceptWork, isIntegration } from "./accept.ts";
 import { withBriefs } from "./briefs.ts";
 
+const SHELL_OPERATORS = new Set(["&&", "||", "|", ";", ">", ">>", "<", "&", "2>&1", "2>/dev/null", ">/dev/null", "1>&2", "|&"]);
+
 // The teammate who owns `path` in a split task, from its "Teammates' files:" line (planner.ts), if
 // it isn't this task's to write. The integration task may touch anything.
 export function teammateFile(task: string, path: string): { owner: string; path: string } | undefined {
@@ -41,9 +43,12 @@ export function teammateFile(task: string, path: string): { owner: string; path:
   const line = /^Teammates' files: (.+)$/m.exec(task)?.[1];
   if (!line) return undefined;
   const p = path.replace(/^\.\//, "");
+  const base = p.split("/").pop()!;
   for (const part of line.split(/;\s*/)) {
     const m = /^([\w-]+) owns (.+)$/.exec(part.trim());
-    if (m && m[2]!.split(/,\s*/).includes(p)) return { owner: m[1]!, path: p };
+    // A file named without a folder is that file wherever it would go: a backend copying the page
+    // into public/ is writing the frontend's page all the same.
+    if (m && m[2]!.split(/,\s*/).some((f) => f === p || (!f.includes("/") && f === base))) return { owner: m[1]!, path: p };
   }
   return undefined;
 }
@@ -1611,11 +1616,25 @@ export class Agent {
     // A split task's teammates own their files (planner.ts names them): a local agent writing them
     // undid the other's work, twice over, on a real run.
     const lane = ctx.protocol && (call.name === "write_file" || call.name === "edit") ? teammateFile(ctx.task ?? "", String(call.input.path ?? "")) : undefined;
-    if (lane) return refuse(`error: ${lane.path} is ${lane.owner}'s part of this request — don't write it. Do your own part; if you need something from ${lane.owner}, use send_message.`, `${lane.path} belongs to ${lane.owner}`);
+    if (lane) return refuse(`error: ${lane.path} is ${lane.owner}'s part of this request — don't write it (or a copy of it elsewhere). Do your own part: if your code needs their file, use it where they put it (serve it from there, link it as it is); if you need something from ${lane.owner}, use send_message.`, `${lane.path} belongs to ${lane.owner}`);
     try {
       canonicalizeShellCall(call);
     } catch (err) {
       return `error: ${err instanceof Error ? err.message : err}`;
+    }
+    if (ctx.protocol && call.name === "shell") {
+      const cmd = String(call.input.command ?? "");
+      const args = (call.input.args as string[] | undefined) ?? [];
+      // Shell syntax in a program's arguments is passed to it literally: a small model's
+      // `mkdir public && ls` made directories named "&&" and "ls".
+      const op = args.find((a) => SHELL_OPERATORS.has(a) || /^\$\(|^`/.test(a));
+      if (op && !(op === ";" && cmd === "find")) return refuse(`error: shell runs one program with its arguments, not a shell line — "${op}" would reach ${cmd} as a literal argument. Make one call per command (and read output in full; there are no pipes or redirects).`, `shell: "${op}" isn't shell syntax here`);
+      // Removing or moving a teammate's file is taking it away from them.
+      if (/^(rm|mv|unlink|trash)$/.test(cmd) || (cmd === "git" && args[0] === "rm") || (cmd === "find" && args.includes("-delete"))) {
+        const theirs = args.map((a) => teammateFile(ctx.task ?? "", a)).find(Boolean);
+        if (theirs) return refuse(`error: ${theirs.path} is ${theirs.owner}'s part of this request — don't delete or move it. If it's wrong, tell ${theirs.owner} with send_message.`, `${theirs.path} belongs to ${theirs.owner}`);
+        if (cmd === "find" && /Teammates' files:/.test(ctx.task ?? "")) return refuse("error: find -delete can remove teammates' files; delete your own files by name with rm.", "find -delete refused in a split task");
+      }
     }
     this.bus.publish({ agentId: id, type: "tool_call", payload: `${call.name} ${JSON.stringify(call.input)}`.slice(0, 180), time: Date.now(), callId: call.id, phase: "start", tool: call.name });
 

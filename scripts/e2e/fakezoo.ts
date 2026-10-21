@@ -25,6 +25,7 @@ export const PERSONAS = [
   "needsforce", // describes the call in prose unless the engine makes it call (Qwen2.5-Coder on MLX)
   "badjson", // writes calls as JSON with the file's quotes unescaped and its lines as real newlines
   "overreach", // writes every file of the request, its teammates' too (Qwen2.5-Coder as backend)
+  "wanderer", // explores with shell syntax as arguments, then deletes its teammate's page as a "stub" (Ornith)
 ] as const;
 export type Persona = (typeof PERSONAS)[number];
 
@@ -136,6 +137,12 @@ function nextAction(msgs: any[], persona: Persona, tools: string[]): Action {
   // It writes its checklist, then wants to write it again — for as long as niti offers the tool.
   if (persona === "todo" && tools.includes("todo") && !calls.some((c) => c.name === "write_file")) {
     return { name: "todo", args: { items: filesFor(task).map((f) => ({ text: `write ${f}`, status: "pending" })) } };
+  }
+  // Explores first (with shell syntax niti refuses), then tries to remove a teammate's page.
+  if (persona === "wanderer" && !calls.some((c) => c.name === "write_file")) {
+    if (!calls.some((c) => c.name === "shell")) return { name: "shell", args: { command: "ls", args: ["-la", "&&", "pwd"] } };
+    const theirs = /Teammates' files: \w+ owns ([\w.]+)/.exec(task)?.[1];
+    if (theirs && !calls.some((c) => c.name === "shell" && (c.args.command === "rm"))) return { name: "shell", args: { command: "rm", args: [theirs] } };
   }
   // Since niti last checked the work, write again what it named, then finish again.
   const lastCheck = msgs.map((m, i) => (m.role === "user" && textOf(m).includes("niti checked the work") ? i : -1)).filter((i) => i >= 0).at(-1);

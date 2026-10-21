@@ -323,7 +323,8 @@ const linesPrompt = (goal: string, ready: RoleInfo[], history: Exchange[], unfin
   `- Write one line per teammate, exactly in the form  <id>: <their task>\n` +
   `- Each task names the files to create or change and what goes in them, e.g. "frontend: create index.html (hero, menu, contact) and styles.css (palette, fonts, responsive layout)".\n` +
   `- Give each teammate the part that matches their role. Write "<id>: -" for a teammate with nothing to do.\n` +
-  `- Only what the user asked for: no research, review or testing tasks unless asked. If they want it deployment-ready, someone writes the server, a package.json start script and a README with run steps.\n\n` +
+  `- Only what the user asked for: no research, review or testing tasks unless asked. If they want it deployment-ready, someone writes the server, a package.json start script and a README with run steps.\n` +
+  `- A website's pages go in the project's root folder (index.html, styles.css, script.js), and a server serves them from there.\n\n` +
   historyBlock(history) +
   boardBlock(unfinished) +
   `User's request: ${goal}\n\n` +

@@ -205,6 +205,7 @@ test("a split plan names each teammate's files, and deployment lands with the se
   const { teammateFile } = await import("../agent/agent.ts");
   expect(teammateFile(back!.description, "./index.html")).toEqual({ owner: "frontend", path: "index.html" });
   expect(teammateFile(back!.description, "server.js")).toBeUndefined();
+  expect(teammateFile(back!.description, "public/index.html")).toEqual({ owner: "frontend", path: "public/index.html" }); // a copy is theirs too
   expect(teammateFile(plan.tasks[2]!.description, "index.html")).toBeUndefined(); // integration may fix anything
   const { ownPart } = await import("../agent/accept.ts");
   expect(ownPart(front!.description)).toBe("create index.html, styles.css and script.js");
