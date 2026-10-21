@@ -56,7 +56,8 @@ const SKIP_DIRS = new Set(["node_modules", ".git", ".niti", "dist", "build", ".n
 
 const PLACEHOLDERS: [RegExp, string][] = [
   [/lorem ipsum/i, "Lorem ipsum"],
-  [/\b(your|company|business|brand|shop|store) name\b/i, "a 'Your/Company Name' placeholder"],
+  // A stand-in for the business's name — not a form's "Your name" label.
+  [/\b(your (company|business|brand|shop|store)|company|business|brand) name\b/i, "a 'Company Name' placeholder"],
   [/\byour (company|business|brand|logo)\b/i, "'Your Company'"],
   [/\b(menu |product |item |service |feature )?item \d\b|\b(product|service|feature|dish|drink) \d\b/i, "numbered stand-ins (Item 1, Product 2…)"],
   [/\b123[-. ]456[-. ]7890\b|\(?555\)?[-. ]?555[-. ]?\d{4}/, "a fake phone number"],

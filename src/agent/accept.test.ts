@@ -117,3 +117,11 @@ test("briefs: a task gets the ones its own part calls for, and a project can rew
   expect(withBriefs("restyle the landing page", root)).toContain("Use our brand kit");
   expect(withBriefs("restyle the landing page", root)).not.toContain("Google Fonts");
 });
+
+test("a contact form's 'Your name' label is real copy, not a placeholder", async () => {
+  const root = project({ "index.html": page('<h1>Bean There</h1><form><label>Your name <input name="name" placeholder="Jane"></label><label>Your email <input type="email"></label></form>'), "styles.css": RICH_CSS });
+  const r = await acceptWork(root, { task: TASK, written: ["index.html", "styles.css"] });
+  expect(r.checks.find((c) => c.name.includes("no placeholders"))!.ok).toBe(true);
+  const stand = project({ "index.html": page("<h1>Bean There</h1><footer>© Your Company Name</footer>"), "styles.css": RICH_CSS });
+  expect((await acceptWork(stand, { task: TASK, written: ["index.html"] })).checks.find((c) => c.name.includes("no placeholders"))!.ok).toBe(false);
+});
