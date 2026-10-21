@@ -436,3 +436,20 @@ test("local: reading niti's own folder, and a shell assignment as a command, are
   expect(results.some((o) => o.includes(".niti is niti's own folder"))).toBe(true);
   expect(results.some((o) => o.includes('"PORT=3999" isn\'t a program') && o.includes("niti starts it, with PORT set"))).toBe(true);
 });
+
+test("local: an agent that wrote its files and then only verifies is finished by niti's checks", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const css = ":root{--a:#3b2416;--b:#f6efe6;--c:#c8743a}\nbody{font-family:'Inter',sans-serif}\n" + Array.from({ length: 26 }, (_, i) => `.s${i}{padding:${i}px}`).join("\n") + "\na:hover{color:var(--c)}\n@media (max-width:700px){.s1{padding:0}}";
+  const html = `<!doctype html><html lang="en"><head><title>Bean There</title><meta name="viewport" content="width=device-width"><style>${css}</style></head><body><h1>Bean There</h1></body></html>`;
+  let n = 0;
+  const p = scripted([() => (n++ === 0 ? { text: "", toolCalls: [{ id: "w", name: "write_file", input: { path: "index.html", content: html } }] } : { text: "", toolCalls: [{ id: `r${n}`, name: "read_file", input: { path: "index.html", offset: n } }] })], seen);
+  const bus = new Bus();
+  const checks: string[] = [];
+  bus.subscribe((e) => e.protocol === "checks" && checks.push(String(e.payload)));
+  const r = await new Agent({ ...localCfg, allowedTools: ["read_file", "write_file"] }, p, bus, { root }).runDetailed("make a stunning landing page for Bean There");
+  expect(r.outcome).toBe("done");
+  expect(seen.tools.length).toBe(9); // the write, then 8 turns of reading, then niti's checks pass
+  expect(checks[0]).toContain("niti checks the work instead of waiting for finish");
+  expect(checks[1]).toContain("all");
+});

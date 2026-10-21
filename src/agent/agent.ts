@@ -96,6 +96,7 @@ const MAX_FORKS_PER_RUN = 4;
 // re-asserting the same fix, and the honest outcome is a failing task a human can see, not a loop.
 const MAX_VERIFY_ROUNDS = 2;
 const MAX_ACCEPT_ROUNDS = 3;
+const IDLE_CHECK_TURNS = 8;
 const WARN_RATIO = 0.85; // heads-up when input tokens pass this fraction of the context window
 // The context thresholds (warn, compact) and result caps come from the agent's profile
 // (src/agent/profile.ts): 0.85 / 0.95 / 60k chars for cloud models, earlier and smaller locally.
@@ -613,6 +614,30 @@ export class Agent {
     let acted = false;
     let rejected = 0; // turns in a row that weren't an action (the local protocol)
     let acceptRounds = 0; // times the acceptance checks sent the work back
+    // Turns since a local agent last wrote a file. A small model that has written its files often
+    // goes on verifying them by hand until it runs out of turns (a real 9B run spent 50 turns that
+    // way, twice): after IDLE_CHECK_TURNS of that, niti runs the checks itself — see checkFor below.
+    let sinceWrite = 0;
+    // niti's acceptance checks run on the agent's behalf. "done": they pass (must-fixes, at least);
+    // "sent": the failures went back as the next turn; "none": nothing to check, or out of rounds.
+    const checkFor = async (final: boolean): Promise<"done" | "sent" | "none"> => {
+      const a = await acceptWork(this.root, { task, written: [...(ctx.written ?? [])], sandbox: this.sandbox, signal: this.signal() });
+      if (!a.checks.length) return final ? "done" : "none";
+      const failing = a.checks.filter((c) => !c.ok);
+      this.bus.publish({ agentId: id, type: failing.length ? "warning" : "thought", protocol: "checks", checks: a.checks.map((c) => ({ name: c.name, ok: c.ok, detail: c.detail, grade: c.grade })), payload: failing.length ? `checked the work: ${failing.length} of ${a.checks.length} checks fail — ${failing.map((c) => c.name).join("; ")}` : `checked the work: all ${a.checks.length} checks pass`, time: Date.now() });
+      if (failing.every((c) => c.grade !== "must") && (failing.length === 0 || final)) return "done";
+      if (final || acceptRounds >= MAX_ACCEPT_ROUNDS) return "none";
+      acceptRounds++;
+      this.push(turns, { role: "user", text: acceptMessage(a) }, sessionId);
+      return "sent";
+    };
+    const doneByChecks = (): RunResult => {
+      finalText ||= "Done — niti's checks pass.";
+      this.bus.publish({ agentId: id, type: "message", payload: finalText, time: Date.now() });
+      if (sessionId) this.store?.setStatus(sessionId, "done");
+      this.bus.publish({ agentId: id, type: "done", payload: "", time: Date.now() });
+      return { outcome: "done", text: finalText, error: "" };
+    };
     this.inFlightCount++;
     try {
       for (let i = 0; i < this.maxTurns; i++) {
@@ -798,6 +823,7 @@ export class Agent {
             return { outcome: "done", text: finalText, error: "" };
           }
           ctx.resultBudget = this.resultBudgetFor(reply, context, compacted);
+          const writtenBefore = ctx.written?.size ?? 0;
           if (reply.toolCalls.some((c) => c.name !== "todo" && c.name !== "finish")) acted = true;
           let results = await this.execCalls(reply.toolCalls, allowed, ctx);
           // Interrupted while its tools ran (a shell killed, an approval refused): the calls still
@@ -812,7 +838,19 @@ export class Agent {
             this.bus.publish({ agentId: id, type: "warning", payload: "interrupted by the operator", time: Date.now() });
             continue; // not a stall: the operator stopped it
           }
+          if (protocol && ctx.wrote) {
+            sinceWrite = (ctx.written?.size ?? 0) > writtenBefore || reply.toolCalls.some((c) => c.name === "edit" || c.name === "write_file") ? 0 : sinceWrite + 1;
+            if (sinceWrite >= IDLE_CHECK_TURNS && this.pendingInbox() === 0) {
+              sinceWrite = 0;
+              this.bus.publish({ agentId: id, type: "thought", protocol: "checks", payload: `${IDLE_CHECK_TURNS} turns without a change — niti checks the work instead of waiting for finish`, time: Date.now() });
+              const r = await checkFor(false);
+              if (r === "done") return doneByChecks();
+              if (r === "sent") continue;
+            }
+          }
           const verdict = stall.observe(reply.toolCalls, results, (c) => this.changesFiles(c));
+          // A local agent stuck after writing its files may well be done: the checks decide.
+          if (verdict === "stop" && protocol && ctx.wrote && (await checkFor(true)) === "done") return doneByChecks();
           if (verdict === "stop") {
             error = stall.kind === "recurring"
               ? `stalled: the same failure returned after ${stall.recurCount} separate fixes — ${stall.detail}`
@@ -822,6 +860,7 @@ export class Agent {
             return { outcome: "exhausted", text: finalText, error };
           }
           const looping = repeat?.observe(reply.toolCalls) ?? "ok";
+          if (looping === "stop" && protocol && ctx.wrote && (await checkFor(true)) === "done") return doneByChecks();
           if (looping === "stop") {
             error = `looping: called ${repeat!.name} with the same arguments ${repeat!.count} times, even after being told to change course`;
             if (sessionId) this.store?.setStatus(sessionId, "exhausted");
@@ -842,6 +881,8 @@ export class Agent {
           this.bus.publish({ agentId: id, type: "warning", payload: "interrupted by the operator", time: Date.now() });
         }
       }
+      // Out of turns with its files written: whether it's done is the checks' call, not the turn count's.
+      if (protocol && ctx.wrote && (await checkFor(true)) === "done") return doneByChecks();
       // Falling out of the maxTurns loop means the agent never finished. Reporting "done" here
       // marked the task complete, released its dependents, and fed the review gate whatever text
       // happened to be lying around — the failure was invisible to everything downstream.

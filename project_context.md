@@ -142,7 +142,11 @@ in one disappears from the others (the core answers by id; a second answer gets 
    A split task's server and deploy checks follow its own part (`ownPart`); the look and the name
    follow the whole request. Failures go back as the next turn, naming file and fix, three times.
    After that, a must failure leaves the task `unverified`, and quality failures are shown with the
-   finished task. Each run of the checks is published as `protocol: "checks"` with the list.
+   finished task. Each run of the checks is published as `protocol: "checks"` with the list. A local
+   agent that has written files and then goes 8 turns without changing one (verifying by hand, as a
+   real 9B model did for 50 turns) gets the checks run for it: passing, the task is done; failing,
+   the failures are its next turn. The same applies when it runs out of turns or a stall or repeat
+   guard would stop it.
    **Briefs** (`agent/briefs.ts`): a local task's first message carries the quality briefs its own
    part calls for. They are `web-page` (palette as variables, a Google Fonts pair, hero, spacing
    scale, responsive grid, hover and focus states, real copy), `server-api` (built-in modules,
