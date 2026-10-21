@@ -425,3 +425,14 @@ test("local: shell syntax as arguments, and deleting a teammate's file, are refu
   expect(existsSync(join(root, "&&"))).toBe(false);
   expect(results.some((o) => o.startsWith("exit 0"))).toBe(true); // find … -exec … ";" ran: there ";" is find's own
 });
+
+test("local: reading niti's own folder, and a shell assignment as a command, are refused with what to do", async () => {
+  const root = mkdtempSync(join(tmpdir(), "niti-profile-"));
+  const seen = { tools: [] as string[][], formats: [] as (string | undefined)[], turns: [] as Turn[][] };
+  const call = (name: string, input: Record<string, unknown>) => () => ({ text: "", toolCalls: [{ id: name + JSON.stringify(input), name, input }] });
+  const p = scripted([call("read_file", { path: ".niti/session.json" }), call("shell", { command: "PORT=3999", args: ["node", "server.js"] }), call("write_file", { path: "notes.txt", content: "x" }), () => finishCall()], seen);
+  await new Agent({ ...localCfg, allowedTools: ["read_file", "shell", "write_file"] }, p, new Bus(), { root }).runDetailed("Write notes.txt");
+  const results = seen.turns.flatMap((t) => t.filter((x) => x.role === "tool").flatMap((x) => (x as Extract<Turn, { role: "tool" }>).results.map((r) => r.output)));
+  expect(results.some((o) => o.includes(".niti is niti's own folder"))).toBe(true);
+  expect(results.some((o) => o.includes('"PORT=3999" isn\'t a program') && o.includes("niti starts it, with PORT set"))).toBe(true);
+});

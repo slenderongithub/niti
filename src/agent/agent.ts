@@ -11,7 +11,7 @@ import type { SessionStore, SessionKind } from "../store/session-store.ts";
 import { toParts } from "../store/session-store.ts";
 import type { AuditLog } from "../store/audit-log.ts";
 import { resolve as resolvePermission, normalizePath, projectRelative, DEFAULT_RULES, SAFE_SHELL_RULES, type PermissionRules } from "../permissions.ts";
-import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, safePath, leavesProject, editDiff, writeFileDiff, applyAnchoredEdit, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS, BUILTIN_TOOLS } from "../tools/tools.ts";
+import { runTool, toolSpecs, toSandboxCall, canonicalizeShellCall, startsServer, safePath, leavesProject, editDiff, writeFileDiff, applyAnchoredEdit, snippetDiff, diffHunks, summarizeResult, expandTools, WRITE_TOOLS, READ_ONLY_TOOLS, BUILTIN_TOOLS } from "../tools/tools.ts";
 import { lspToolSpecs, runLspTool, LSP_TOOLS } from "../tools/lsp-tools.ts";
 import { webToolSpecs, runWebTool, webSearchConfigured, WEB_TOOLS } from "../tools/web.ts";
 import { AUTO_RULES } from "../permissions.ts";
@@ -1622,9 +1622,20 @@ export class Agent {
     } catch (err) {
       return `error: ${err instanceof Error ? err.message : err}`;
     }
+    // niti's own folder holds the session, the team and the plan — nothing a local agent's task
+    // needs, and reading it cost one real run a dozen turns.
+    if (ctx.protocol && ["read_file", "grep", "glob"].includes(call.name)) {
+      const where = String(call.input.path ?? call.input.pattern ?? "");
+      if (/(^|\/)\.niti(\/|$)/.test(where)) return refuse("error: .niti is niti's own folder, not part of the project — your task already says what you need. Work on the project's files.", ".niti is niti's own folder");
+    }
     if (ctx.protocol && call.name === "shell") {
       const cmd = String(call.input.command ?? "");
       const args = (call.input.args as string[] | undefined) ?? [];
+      // "PORT=3000 node server.js": a shell assignment, which isn't a program.
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(cmd)) return refuse(`error: "${cmd}" isn't a program — shell runs one program with its arguments, without shell assignments. ${startsServer(args[0] ?? "", args.slice(1)) ? "And don't start the server yourself: niti starts it, with PORT set, and checks it when you call finish." : "Pass settings as the program's arguments, or put them in a config file."}`, `shell: ${cmd} isn't a program`);
+      if (cmd === "find" || cmd === "ls" || cmd === "cat") {
+        if (args.some((a) => /(^|\/)\.niti(\/|$)/.test(a))) return refuse("error: .niti is niti's own folder, not part of the project — your task already says what you need.", ".niti is niti's own folder");
+      }
       // Shell syntax in a program's arguments is passed to it literally: a small model's
       // `mkdir public && ls` made directories named "&&" and "ls".
       const op = args.find((a) => SHELL_OPERATORS.has(a) || /^\$\(|^`/.test(a));

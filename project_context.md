@@ -110,7 +110,8 @@ in one disappears from the others (the core answers by id; a second answer gets 
    npm start, node server.js, python -m http.server…) 15 s and then stops it, saying niti checks
    servers at `finish`. A local agent's shell call with shell syntax as arguments (`&&`, `|`, `>`,
    `$(…)`; `;` after find -exec excepted) is refused with how to do it: those reached the program
-   literally and made directories named `&&`. Local tasks get 60 turns by default (`Profile.maxTurns`; cloud 30). Thinking is on for a task's first turn
+   literally and made directories named `&&`. So is a shell assignment as the program
+   (`PORT=3999 node server.js`), and reading `.niti` (niti's own folder). Local tasks get 60 turns by default (`Profile.maxTurns`; cloud 30). Thinking is on for a task's first turn
    and right after a refusal only. A chat-only model (`probe.verdict`) runs without the protocol.
    A local lead plans in stages (`makeLocalPlan`), with plain-line asks recorded and sampled at 0.2:
    - it says what the message is in one line (`work`, `question: …`, `chat: …`; `parseRoute`);
